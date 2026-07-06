@@ -5,3 +5,4 @@
 .vscode/ipch
 **/ipch
 .idea/
+data/config.json

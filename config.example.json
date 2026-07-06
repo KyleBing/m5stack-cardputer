@@ -1,0 +1,13 @@
+{
+  "wifi": {
+    "ssid": "your-ssid",
+    "password": "your-password"
+  },
+  "devices": [
+    {
+      "name": "living-room-light",
+      "ip": "192.168.1.50",
+      "token": "0123456789abcdef0123456789abcdef"
+    }
+  ]
+}

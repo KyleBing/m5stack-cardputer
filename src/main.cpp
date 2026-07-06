@@ -1,4 +1,5 @@
 #include "M5Cardputer.h"
+#include "app_config.h"
 #include "app_logo.h"
 #include "app_header.h"
 #include <BLEDevice.h>
@@ -483,6 +484,13 @@ void drawInfoApp() {
     M5Cardputer.Display.printf("flash: %d MB\n", ESP.getFlashChipSize() / (1024 * 1024));
     M5Cardputer.Display.printf("heap: %d KB\n", ESP.getFreeHeap() / 1024);
     M5Cardputer.Display.printf("sdk: %s\n", ESP.getSdkVersion());
+
+    const AppConfig& cfg = getAppConfig();
+    if (cfg.loaded) {
+        M5Cardputer.Display.printf("cfg: %d dev\n", cfg.device_count);
+    } else {
+        M5Cardputer.Display.println("cfg: none");
+    }
 }
 
 // ===== MIC =====
@@ -1040,6 +1048,16 @@ void enterApp(const AppState state) {
 void setup() {
     const auto cfg = M5.config();
     M5Cardputer.begin(cfg);
+    Serial.begin(115200);
+    if (initAppConfigFs()) {
+        if (loadAppConfig()) {
+            Serial.printf("config: %d mijia device(s)\n", getAppConfig().device_count);
+        } else {
+            Serial.println("config: /config.json missing or invalid");
+        }
+    } else {
+        Serial.println("config: LittleFS mount failed");
+    }
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.setBrightness(30);
     showMenu();
