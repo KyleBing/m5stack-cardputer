@@ -55,8 +55,11 @@ bool loadAppConfig() {
             }
             MijiaDevice& entry = g_config.devices[g_config.device_count];
             copyField(entry.name, sizeof(entry.name), device["name"]);
+            copyField(entry.id, sizeof(entry.id), device["id"]);
+            copyField(entry.mac, sizeof(entry.mac), device["mac"]);
             copyField(entry.ip, sizeof(entry.ip), device["ip"]);
             copyField(entry.token, sizeof(entry.token), device["token"]);
+            copyField(entry.model, sizeof(entry.model), device["model"]);
             g_config.device_count++;
         }
     }
@@ -67,4 +70,39 @@ bool loadAppConfig() {
 
 const AppConfig& getAppConfig() {
     return g_config;
+}
+
+bool saveAppConfigJson(const char* json) {
+    if (json == nullptr) {
+        return false;
+    }
+
+    JsonDocument doc;
+    const DeserializationError err = deserializeJson(doc, json);
+    if (err) {
+        return false;
+    }
+
+    File file = LittleFS.open(CONFIG_PATH, "w");
+    if (!file) {
+        return false;
+    }
+    serializeJsonPretty(doc, file);
+    file.close();
+    return loadAppConfig();
+}
+
+bool readAppConfigRaw(String& out) {
+    out = "";
+    if (!LittleFS.exists(CONFIG_PATH)) {
+        return false;
+    }
+
+    File file = LittleFS.open(CONFIG_PATH, "r");
+    if (!file) {
+        return false;
+    }
+    out = file.readString();
+    file.close();
+    return true;
 }

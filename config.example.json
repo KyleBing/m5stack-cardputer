@@ -6,8 +6,11 @@
   "devices": [
     {
       "name": "living-room-light",
+      "id": "123456789",
+      "mac": "AA:BB:CC:DD:EE:FF",
       "ip": "192.168.1.50",
-      "token": "0123456789abcdef0123456789abcdef"
+      "token": "0123456789abcdef0123456789abcdef",
+      "model": "yeelink.light.lamp2"
     }
   ]
 }

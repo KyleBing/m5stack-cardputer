@@ -2,6 +2,8 @@
 #include "app_config.h"
 #include "app_logo.h"
 #include "app_header.h"
+#include "app_web.h"
+#include "miio_client.h"
 #include <BLEDevice.h>
 #include <WiFi.h>
 #include <esp_chip_info.h>
@@ -39,6 +41,8 @@ enum class AppState {
     DISP,
     CIRCLE,
     SLEEP,
+    MIJIA,
+    WEB,
 };
 
 struct MenuItem {
@@ -65,6 +69,8 @@ static const MenuItem MENU_ITEMS[] = {
     {'n', "InI2", "InI2", AppState::IN_I2C},
     {'e', "ExI2", "ExI2", AppState::EX_I2C},
     {'w', "WiFi", "WiFi", AppState::WIFI},
+    {'j', "Mij", "Mijia", AppState::MIJIA},
+    {'u', "Web", "Config Web", AppState::WEB},
     {'b', "BLE", "BLE", AppState::BLE},
     {'d', "Disp", "Display", AppState::DISP},
     {'c', "Circ", "Circle", AppState::CIRCLE},
@@ -79,6 +85,10 @@ static bool micHeaderReady = false;
 static bool bmiScreenReady = false;
 static int bmiPrevDotX[2] = {-1, -1};
 static int bmiPrevDotY[2] = {-1, -1};
+static int mijiaDeviceIdx = 0;
+static bool mijiaPowerKnown = false;
+static bool mijiaPowerOn = false;
+static char mijiaStatus[48] = "ready";
 
 void enterApp(const AppState state);
 
@@ -185,6 +195,7 @@ void drawMenuPage() {
 
 // 绘制主菜单（header + 可翻页菜单区）
 void showMenu() {
+    stopConfigWebServer();
     currentState = AppState::MENU;
     const int pageCount = getMenuPageCount();
     if (menuPage >= pageCount) {
@@ -468,6 +479,28 @@ void drawBmiApp() {
 
 // ===== INFO =====
 
+static constexpr int INFO_LINE_H = 10;
+static constexpr uint16_t INFO_LABEL_COLOR = CYAN;
+static constexpr uint16_t INFO_VALUE_COLOR = WHITE;
+
+// ASCII 小字：label / value 分色
+void drawInfoLine(const int x, int& y, const char* label, const char* value) {
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(label);
+    M5Cardputer.Display.print(": ");
+    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
+    M5Cardputer.Display.println(value);
+    y += INFO_LINE_H;
+}
+
+void drawInfoLineInt(const int x, int& y, const char* label, const int value) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", value);
+    drawInfoLine(x, y, label, buf);
+}
+
 // 绘制板级 Info 页面
 void drawInfoApp() {
     const esp_chip_info_t chipInfo = []() {
@@ -477,19 +510,31 @@ void drawInfoApp() {
     }();
 
     beginAppScreen("Info");
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-    M5Cardputer.Display.printf("model: %s\n", ESP.getChipModel());
-    M5Cardputer.Display.printf("cores: %d\n", chipInfo.cores);
-    M5Cardputer.Display.printf("freq: %d MHz\n", ESP.getCpuFreqMHz());
-    M5Cardputer.Display.printf("flash: %d MB\n", ESP.getFlashChipSize() / (1024 * 1024));
-    M5Cardputer.Display.printf("heap: %d KB\n", ESP.getFreeHeap() / 1024);
-    M5Cardputer.Display.printf("sdk: %s\n", ESP.getSdkVersion());
+    M5Cardputer.Display.setTextSize(1);
+
+    int y = APP_CONTENT_Y;
+    char buf[32];
+
+    drawInfoLine(APP_CONTENT_X, y, "model", ESP.getChipModel());
+    drawInfoLineInt(APP_CONTENT_X, y, "cores", chipInfo.cores);
+    snprintf(buf, sizeof(buf), "%d MHz", ESP.getCpuFreqMHz());
+    drawInfoLine(APP_CONTENT_X, y, "freq", buf);
+    snprintf(buf, sizeof(buf), "%d MB", ESP.getFlashChipSize() / (1024 * 1024));
+    drawInfoLine(APP_CONTENT_X, y, "flash", buf);
+    snprintf(buf, sizeof(buf), "%d KB", ESP.getFreeHeap() / 1024);
+    drawInfoLine(APP_CONTENT_X, y, "heap", buf);
+    drawInfoLine(APP_CONTENT_X, y, "sdk", ESP.getSdkVersion());
 
     const AppConfig& cfg = getAppConfig();
     if (cfg.loaded) {
-        M5Cardputer.Display.printf("cfg: %d dev\n", cfg.device_count);
+        snprintf(buf, sizeof(buf), "%d", cfg.device_count);
+        drawInfoLine(APP_CONTENT_X, y, "cfg", buf);
+        if (cfg.device_count > 0) {
+            drawInfoLine(APP_CONTENT_X, y, "dev0", cfg.devices[0].name);
+            drawInfoLine(APP_CONTENT_X, y, "ip0", cfg.devices[0].ip);
+        }
     } else {
-        M5Cardputer.Display.println("cfg: none");
+        drawInfoLine(APP_CONTENT_X, y, "cfg", "none");
     }
 }
 
@@ -846,6 +891,226 @@ void drawI2cScanApp(m5::I2C_Class& bus, const char* title) {
 // ===== EX I2C =====
 // 使用 drawI2cScanApp(M5Cardputer.Ex_I2C, "EX I2C")
 
+// ===== MIJIA =====
+
+void drawMijiaApp();
+
+// 使用 config 连接 WiFi
+bool ensureConfigWifi() {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
+        return false;
+    }
+
+    if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid) {
+        return true;
+    }
+
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
+
+    const uint32_t deadline = millis() + 12000;
+    while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(millis() - deadline) < 0) {
+        delay(200);
+    }
+    return WiFi.status() == WL_CONNECTED;
+}
+
+const MijiaDevice* getCurrentMijiaDevice() {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.device_count == 0) {
+        return nullptr;
+    }
+    if (mijiaDeviceIdx < 0) {
+        mijiaDeviceIdx = 0;
+    }
+    if (mijiaDeviceIdx >= cfg.device_count) {
+        mijiaDeviceIdx = cfg.device_count - 1;
+    }
+    return &cfg.devices[mijiaDeviceIdx];
+}
+
+// 查询当前设备 power 状态
+void refreshMijiaPower() {
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev == nullptr) {
+        strncpy(mijiaStatus, "no device", sizeof(mijiaStatus));
+        mijiaPowerKnown = false;
+        return;
+    }
+
+    if (!ensureConfigWifi()) {
+        strncpy(mijiaStatus, "wifi fail", sizeof(mijiaStatus));
+        mijiaPowerKnown = false;
+        return;
+    }
+
+    strncpy(mijiaStatus, "query...", sizeof(mijiaStatus));
+    drawMijiaApp();
+
+    bool power = false;
+    const MiioResult result = miioGetPower(dev->ip, dev->token, power);
+    if (result.ok) {
+        mijiaPowerKnown = true;
+        mijiaPowerOn = power;
+        strncpy(mijiaStatus, result.message, sizeof(mijiaStatus));
+    } else {
+        mijiaPowerKnown = false;
+        strncpy(mijiaStatus, result.message, sizeof(mijiaStatus));
+    }
+}
+
+// 设置当前设备开关
+void setMijiaPower(const bool on) {
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev == nullptr) {
+        strncpy(mijiaStatus, "no device", sizeof(mijiaStatus));
+        return;
+    }
+
+    if (!ensureConfigWifi()) {
+        strncpy(mijiaStatus, "wifi fail", sizeof(mijiaStatus));
+        return;
+    }
+
+    strncpy(mijiaStatus, on ? "turn on..." : "turn off...", sizeof(mijiaStatus));
+    drawMijiaApp();
+
+    const MiioResult result = miioSetPower(dev->ip, dev->token, on);
+    if (result.ok) {
+        mijiaPowerKnown = true;
+        mijiaPowerOn = on;
+    }
+    strncpy(mijiaStatus, result.message, sizeof(mijiaStatus));
+}
+
+void drawMijiaApp() {
+    beginAppScreen("Mijia");
+    M5Cardputer.Display.setTextSize(1);
+
+    int y = APP_CONTENT_Y;
+    const AppConfig& cfg = getAppConfig();
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+
+    if (!cfg.loaded || dev == nullptr) {
+        drawInfoLine(APP_CONTENT_X, y, "cfg", "none");
+        drawInfoLine(APP_CONTENT_X, y, "hint", "press u web");
+        return;
+    }
+
+    char buf[40];
+    snprintf(buf, sizeof(buf), "%s [%d/%d]", dev->name, mijiaDeviceIdx + 1, cfg.device_count);
+    drawInfoLine(APP_CONTENT_X, y, "dev", buf);
+    drawInfoLine(APP_CONTENT_X, y, "ip", dev->ip);
+    drawInfoLine(APP_CONTENT_X, y, "model", dev->model);
+
+    if (WiFi.status() == WL_CONNECTED) {
+        drawInfoLine(APP_CONTENT_X, y, "wifi", WiFi.SSID().c_str());
+    } else {
+        drawInfoLine(APP_CONTENT_X, y, "wifi", "offline");
+    }
+
+    if (mijiaPowerKnown) {
+        drawInfoLine(APP_CONTENT_X, y, "power", mijiaPowerOn ? "ON" : "OFF");
+    } else {
+        drawInfoLine(APP_CONTENT_X, y, "power", "?");
+    }
+
+    drawInfoLine(APP_CONTENT_X, y, "status", mijiaStatus);
+
+    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("o on f off t toggle");
+    y += INFO_LINE_H;
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("r refresh , . switch");
+}
+
+void enterMijiaApp() {
+    mijiaDeviceIdx = 0;
+    mijiaPowerKnown = false;
+    strncpy(mijiaStatus, "connecting", sizeof(mijiaStatus));
+    drawMijiaApp();
+    refreshMijiaPower();
+    drawMijiaApp();
+}
+
+void handleMijiaApp(const String& key) {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.device_count == 0) {
+        return;
+    }
+
+    if (key == "o") {
+        setMijiaPower(true);
+    } else if (key == "f") {
+        setMijiaPower(false);
+    } else if (key == "t") {
+        setMijiaPower(!mijiaPowerOn);
+    } else if (key == "r") {
+        refreshMijiaPower();
+    } else if (key == "," || key == ";") {
+        mijiaDeviceIdx = (mijiaDeviceIdx - 1 + cfg.device_count) % cfg.device_count;
+        mijiaPowerKnown = false;
+        refreshMijiaPower();
+    } else if (key == "." || key == "/") {
+        mijiaDeviceIdx = (mijiaDeviceIdx + 1) % cfg.device_count;
+        mijiaPowerKnown = false;
+        refreshMijiaPower();
+    } else {
+        return;
+    }
+    drawMijiaApp();
+}
+
+// ===== WEB CONFIG =====
+
+void drawWebApp() {
+    beginAppScreen("Web");
+    M5Cardputer.Display.setTextSize(1);
+
+    int y = APP_CONTENT_Y;
+    if (!isConfigWebServerRunning()) {
+        drawInfoLine(APP_CONTENT_X, y, "status", "offline");
+        drawInfoLine(APP_CONTENT_X, y, "hint", "re-enter u");
+        return;
+    }
+
+    drawInfoLine(APP_CONTENT_X, y, "ap", getConfigWebApSsid());
+    drawInfoLine(APP_CONTENT_X, y, "pass", getConfigWebApPass());
+    drawInfoLine(APP_CONTENT_X, y, "url", getConfigWebUrl());
+    drawInfoLine(APP_CONTENT_X, y, "state", getConfigWebStatus());
+
+    const AppConfig& cfg = getAppConfig();
+    if (cfg.loaded) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", cfg.device_count);
+        drawInfoLine(APP_CONTENT_X, y, "cfg", buf);
+    } else {
+        drawInfoLine(APP_CONTENT_X, y, "cfg", "none");
+    }
+
+    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("phone connect AP");
+    y += INFO_LINE_H;
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("open url in browser");
+}
+
+void enterWebApp() {
+    if (startConfigWebServer()) {
+        drawWebApp();
+    } else {
+        beginAppScreen("Web");
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+        M5Cardputer.Display.setTextColor(RED, BLACK);
+        M5Cardputer.Display.println("AP start failed");
+    }
+}
+
 // ===== WIFI =====
 
 // WiFi 状态
@@ -1040,6 +1305,12 @@ void enterApp(const AppState state) {
         case AppState::SETTINGS:
             drawSettingsApp();
             break;
+        case AppState::MIJIA:
+            enterMijiaApp();
+            break;
+        case AppState::WEB:
+            enterWebApp();
+            break;
         default:
             break;
     }
@@ -1136,6 +1407,10 @@ void loop() {
         }
     }
 
+    if (currentState == AppState::WEB) {
+        handleConfigWebServer();
+    }
+
     if (M5Cardputer.Keyboard.isChange()) {
         switch (currentState) {
             case AppState::MENU:
@@ -1172,6 +1447,11 @@ void loop() {
             case AppState::CIRCLE:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleCircleApp(getPressedKey());
+                }
+                break;
+            case AppState::MIJIA:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleMijiaApp(getPressedKey());
                 }
                 break;
             default:
