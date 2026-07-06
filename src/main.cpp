@@ -3,11 +3,14 @@
 #include "app_logo.h"
 #include "app_header.h"
 #include "app_web.h"
+#include "app_wifi.h"
 #include "miio_client.h"
+#include "mijia_control.h"
 #include <BLEDevice.h>
 #include <WiFi.h>
 #include <esp_chip_info.h>
 #include <esp_system.h>
+#include <time.h>
 
 
 
@@ -30,7 +33,6 @@ enum class AppState {
     INFO,
     MIC,
     SETTINGS,
-    BTNA,
     POWER,
     SPEAKER,
     RTC,
@@ -59,9 +61,8 @@ static const MenuItem MENU_ITEMS[] = {
     {'k', "Key", "Keyboard", AppState::KEYBOARD},
     {'g', "BMI", "BMI", AppState::BMI},
     {'i', "Info", "Info", AppState::INFO},
-    {'m', "Mic", "Mic", AppState::MIC},
+    {'r', "Mic", "Mic", AppState::MIC},
     {'o', "Set", "Settings", AppState::SETTINGS},
-    {'a', "BtnA", "BtnA", AppState::BTNA},
     {'p', "Pwr", "Power", AppState::POWER},
     {'l', "Spk", "Speaker", AppState::SPEAKER},
     {'s', "Slp", "Sleep", AppState::SLEEP},
@@ -69,7 +70,7 @@ static const MenuItem MENU_ITEMS[] = {
     {'n', "InI2", "InI2", AppState::IN_I2C},
     {'e', "ExI2", "ExI2", AppState::EX_I2C},
     {'w', "WiFi", "WiFi", AppState::WIFI},
-    {'j', "Mij", "Mijia", AppState::MIJIA},
+    {'m', "Mij", "Mijia", AppState::MIJIA},
     {'u', "Web", "Config Web", AppState::WEB},
     {'b', "BLE", "BLE", AppState::BLE},
     {'d', "Disp", "Display", AppState::DISP},
@@ -80,17 +81,17 @@ static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
 const int GAP_VERTICAL = 3;
 
 AppState currentState = AppState::MENU;
-static uint32_t btnTestCount = 0;
 static bool micHeaderReady = false;
 static bool bmiScreenReady = false;
 static int bmiPrevDotX[2] = {-1, -1};
 static int bmiPrevDotY[2] = {-1, -1};
 static int mijiaDeviceIdx = 0;
-static bool mijiaPowerKnown = false;
-static bool mijiaPowerOn = false;
-static char mijiaStatus[48] = "ready";
+static MijiaUiState mijiaUi{};
 
 void enterApp(const AppState state);
+
+// 使用 config 连接 WiFi（Mijia / Time 共用）
+bool ensureConfigWifi();
 
 // 获取当前按下的可打印字符
 String getPressedKey() {
@@ -784,19 +785,6 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
     drawSettingsApp();
 }
 
-// ===== BTNA =====
-
-// BtnA 侧键测试（短按计数，长按返回菜单）
-void drawBtnAApp() {
-    beginAppScreen("BtnA");
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-    M5Cardputer.Display.printf("count: %lu\n", btnTestCount);
-    M5Cardputer.Display.printf("press: %s\n", M5Cardputer.BtnA.isPressed() ? "ON" : "--");
-    M5Cardputer.Display.printf("hold:  %s\n", M5Cardputer.BtnA.isHolding() ? "ON" : "--");
-    M5Cardputer.Display.println("tap=count");
-    M5Cardputer.Display.println("hold=back");
-}
-
 // ===== POWER =====
 
 // 电源信息
@@ -836,19 +824,164 @@ void handleSpeakerApp(const String& key) {
 
 // ===== RTC =====
 
-// RTC 时钟
-void drawRtcApp() {
-    beginAppScreen("Time");
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+static bool rtcScreenReady = false;
+static char rtcLastTime[16] = "";
+static char rtcLastDate[20] = "";
+static char rtcLastSrc[8] = "";
+static constexpr int RTC_TIME_Y = APP_CONTENT_Y + 8;
+static constexpr int RTC_TIME_H = 26;
+static constexpr int RTC_DETAIL_Y = APP_CONTENT_Y + 38;
+static constexpr int RTC_DETAIL_LINE_H = 16;
 
-    if (!M5.Rtc.isEnabled()) {
-        M5Cardputer.Display.println("RTC N/A");
+// Time 页小字（2 号字）
+void drawRtcDetailLine(const int x, int y, const char* label, const char* value) {
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(label);
+    M5Cardputer.Display.print(": ");
+    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
+    M5Cardputer.Display.println(value);
+}
+
+// 仅重绘时分秒区域
+void updateRtcTimeText(const char* time_buf) {
+    if (strcmp(time_buf, rtcLastTime) == 0) {
         return;
     }
 
-    const m5::rtc_datetime_t dt = M5.Rtc.getDateTime();
-    M5Cardputer.Display.printf("%04d-%02d-%02d\n", dt.date.year, dt.date.month, dt.date.date);
-    M5Cardputer.Display.printf("%02d:%02d:%02d\n", dt.time.hours, dt.time.minutes, dt.time.seconds);
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, RTC_TIME_Y, 220, RTC_TIME_H, BLACK);
+    M5Cardputer.Display.setTextSize(3);
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, RTC_TIME_Y);
+    M5Cardputer.Display.print(time_buf);
+    strncpy(rtcLastTime, time_buf, sizeof(rtcLastTime) - 1);
+    rtcLastTime[sizeof(rtcLastTime) - 1] = '\0';
+}
+
+// 日期或来源变化时重绘对应行
+void updateRtcDetailLine(const int y, const char* label, const char* value, char* cache,
+                         const size_t cache_size) {
+    if (strncmp(cache, value, cache_size) == 0 && cache[0] != '\0') {
+        return;
+    }
+
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, 220, RTC_DETAIL_LINE_H, BLACK);
+    drawRtcDetailLine(APP_CONTENT_X, y, label, value);
+    strncpy(cache, value, cache_size - 1);
+    cache[cache_size - 1] = '\0';
+}
+
+// 通过 NTP 同步系统时间，并写回硬件 RTC
+static bool trySyncNtpTime() {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
+        return false;
+    }
+    if (!ensureConfigWifi()) {
+        return false;
+    }
+
+    configTzTime("CST-8", "ntp.aliyun.com", "pool.ntp.org", "time.windows.com");
+
+    struct tm timeinfo{};
+    for (int i = 0; i < 10; i++) {
+        if (getLocalTime(&timeinfo, 200)) {
+            if (M5.Rtc.isEnabled()) {
+                M5.Rtc.setDateTime(&timeinfo);
+                M5.Rtc.setSystemTimeFromRtc();
+            }
+            return true;
+        }
+        delay(100);
+    }
+    return false;
+}
+
+// 读取当前时间：优先硬件 RTC，其次系统时间
+static bool readCurrentTime(struct tm& out, const char*& source) {
+    if (M5.Rtc.isEnabled()) {
+        const m5::rtc_datetime_t dt = M5.Rtc.getDateTime();
+        if (dt.date.year >= 2020) {
+            out.tm_year = dt.date.year - 1900;
+            out.tm_mon = dt.date.month - 1;
+            out.tm_mday = dt.date.date;
+            out.tm_hour = dt.time.hours;
+            out.tm_min = dt.time.minutes;
+            out.tm_sec = dt.time.seconds;
+            out.tm_wday = dt.date.weekDay;
+            source = "RTC";
+            return true;
+        }
+    }
+
+    const time_t now = time(nullptr);
+    if (now > 1600000000) {
+        localtime_r(&now, &out);
+        source = "NTP";
+        return true;
+    }
+
+    source = "none";
+    return false;
+}
+
+// RTC / NTP 时钟：首帧全屏，之后只刷新变化的时间文字
+void drawRtcApp(const bool full_init) {
+    struct tm timeinfo{};
+    const char* source = "none";
+    if (!readCurrentTime(timeinfo, source)) {
+        if (!full_init && rtcScreenReady) {
+            return;
+        }
+        beginAppScreen("Time");
+        rtcScreenReady = true;
+        rtcLastTime[0] = '\0';
+        rtcLastDate[0] = '\0';
+        int y = APP_CONTENT_Y;
+        drawInfoLine(APP_CONTENT_X, y, "time", "not set");
+        drawInfoLine(APP_CONTENT_X, y, "hint", "need WiFi sync");
+        M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+        M5Cardputer.Display.println("enter again after WiFi");
+        return;
+    }
+
+    char time_buf[16];
+    char date_buf[20];
+    snprintf(time_buf, sizeof(time_buf), "%02d:%02d:%02d",
+             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    snprintf(date_buf, sizeof(date_buf), "%04d-%02d-%02d",
+             timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
+
+    if (full_init || !rtcScreenReady) {
+        beginAppScreen("Time");
+        rtcScreenReady = true;
+        rtcLastTime[0] = '\0';
+        rtcLastDate[0] = '\0';
+        rtcLastSrc[0] = '\0';
+        updateRtcTimeText(time_buf);
+        drawRtcDetailLine(APP_CONTENT_X, RTC_DETAIL_Y, "date", date_buf);
+        strncpy(rtcLastDate, date_buf, sizeof(rtcLastDate) - 1);
+        rtcLastDate[sizeof(rtcLastDate) - 1] = '\0';
+        drawRtcDetailLine(APP_CONTENT_X, RTC_DETAIL_Y + RTC_DETAIL_LINE_H, "src", source);
+        strncpy(rtcLastSrc, source, sizeof(rtcLastSrc) - 1);
+        rtcLastSrc[sizeof(rtcLastSrc) - 1] = '\0';
+    } else {
+        updateRtcTimeText(time_buf);
+        updateRtcDetailLine(RTC_DETAIL_Y, "date", date_buf, rtcLastDate, sizeof(rtcLastDate));
+        updateRtcDetailLine(RTC_DETAIL_Y + RTC_DETAIL_LINE_H, "src", source,
+                            rtcLastSrc, sizeof(rtcLastSrc));
+    }
+}
+
+void enterRtcApp() {
+    rtcScreenReady = false;
+    rtcLastTime[0] = '\0';
+    rtcLastDate[0] = '\0';
+    rtcLastSrc[0] = '\0';
+    trySyncNtpTime();
+    drawRtcApp(true);
 }
 
 // ===== IN I2C =====
@@ -931,58 +1064,115 @@ const MijiaDevice* getCurrentMijiaDevice() {
     return &cfg.devices[mijiaDeviceIdx];
 }
 
-// 查询当前设备 power 状态
-void refreshMijiaPower() {
+// 查询当前设备状态
+void refreshMijiaDevice() {
     const MijiaDevice* dev = getCurrentMijiaDevice();
     if (dev == nullptr) {
-        strncpy(mijiaStatus, "no device", sizeof(mijiaStatus));
-        mijiaPowerKnown = false;
+        strncpy(mijiaUi.status, "no device", sizeof(mijiaUi.status));
+        mijiaUi.power_known = false;
         return;
     }
 
     if (!ensureConfigWifi()) {
-        strncpy(mijiaStatus, "wifi fail", sizeof(mijiaStatus));
-        mijiaPowerKnown = false;
+        strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
+        mijiaUi.power_known = false;
         return;
     }
 
-    strncpy(mijiaStatus, "query...", sizeof(mijiaStatus));
+    strncpy(mijiaUi.status, "query...", sizeof(mijiaUi.status));
     drawMijiaApp();
-
-    bool power = false;
-    const MiioResult result = miioGetPower(dev->ip, dev->token, power);
-    if (result.ok) {
-        mijiaPowerKnown = true;
-        mijiaPowerOn = power;
-        strncpy(mijiaStatus, result.message, sizeof(mijiaStatus));
-    } else {
-        mijiaPowerKnown = false;
-        strncpy(mijiaStatus, result.message, sizeof(mijiaStatus));
-    }
+    mijiaRefreshDevice(dev, mijiaUi);
 }
 
 // 设置当前设备开关
 void setMijiaPower(const bool on) {
     const MijiaDevice* dev = getCurrentMijiaDevice();
     if (dev == nullptr) {
-        strncpy(mijiaStatus, "no device", sizeof(mijiaStatus));
+        strncpy(mijiaUi.status, "no device", sizeof(mijiaUi.status));
         return;
     }
 
     if (!ensureConfigWifi()) {
-        strncpy(mijiaStatus, "wifi fail", sizeof(mijiaStatus));
+        strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
         return;
     }
 
-    strncpy(mijiaStatus, on ? "turn on..." : "turn off...", sizeof(mijiaStatus));
     drawMijiaApp();
+    mijiaSetDevicePower(dev, mijiaUi, on);
+}
 
-    const MiioResult result = miioSetPower(dev->ip, dev->token, on);
-    if (result.ok) {
-        mijiaPowerKnown = true;
-        mijiaPowerOn = on;
+// 按设备类型绘制额外状态行
+void drawMijiaExtraLines(const MijiaDevice* dev, int& y) {
+    const MijiaDevKind kind = mijiaClassifyModel(dev->model);
+    char buf[32];
+
+    switch (kind) {
+        case MijiaDevKind::LIGHT:
+            if (mijiaUi.extra_known) {
+                snprintf(buf, sizeof(buf), "%d%%", mijiaUi.bright);
+                drawInfoLine(APP_CONTENT_X, y, "bright", buf);
+            }
+            break;
+        case MijiaDevKind::FAN_P5:
+            if (mijiaUi.extra_known) {
+                snprintf(buf, sizeof(buf), "%d%%", mijiaUi.speed);
+                drawInfoLine(APP_CONTENT_X, y, "speed", buf);
+                drawInfoLine(APP_CONTENT_X, y, "roll", mijiaUi.roll ? "ON" : "OFF");
+                drawInfoLine(APP_CONTENT_X, y, "mode", mijiaUi.mode == 1 ? "nature" : "normal");
+            }
+            break;
+        case MijiaDevKind::FAN_GENERIC:
+            if (mijiaUi.extra_known) {
+                snprintf(buf, sizeof(buf), "L%d", mijiaUi.speed);
+                drawInfoLine(APP_CONTENT_X, y, "speed", buf);
+            }
+            break;
+        case MijiaDevKind::AIR_PURIFIER_F20: {
+            static const char* MODE_NAMES[] = {"auto", "sleep", "low", "med", "high", "fav"};
+            if (mijiaUi.extra_known) {
+                const int mi = constrain(mijiaUi.mode, 0, 5);
+                drawInfoLine(APP_CONTENT_X, y, "mode", MODE_NAMES[mi]);
+                snprintf(buf, sizeof(buf), "%d", mijiaUi.fan_level);
+                drawInfoLine(APP_CONTENT_X, y, "fan", buf);
+                snprintf(buf, sizeof(buf), "%d", mijiaUi.aqi);
+                drawInfoLine(APP_CONTENT_X, y, "aqi", buf);
+            }
+            break;
+        }
+        default:
+            break;
     }
-    strncpy(mijiaStatus, result.message, sizeof(mijiaStatus));
+}
+
+// 按设备类型绘制操作提示
+void drawMijiaHints(const MijiaDevice* dev, int y) {
+    const MijiaDevKind kind = mijiaClassifyModel(dev->model);
+
+    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("o on f off t toggle");
+    y += INFO_LINE_H;
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("r refresh , . switch");
+    y += INFO_LINE_H;
+
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    switch (kind) {
+        case MijiaDevKind::LIGHT:
+            M5Cardputer.Display.println("-/+ bright");
+            break;
+        case MijiaDevKind::FAN_P5:
+            M5Cardputer.Display.println("9/0 spd w roll m mode");
+            break;
+        case MijiaDevKind::FAN_GENERIC:
+            M5Cardputer.Display.println("1-4 speed level");
+            break;
+        case MijiaDevKind::AIR_PURIFIER_F20:
+            M5Cardputer.Display.println("1-5 mode 9/0 fan lv");
+            break;
+        default:
+            break;
+    }
 }
 
 void drawMijiaApp() {
@@ -1002,37 +1192,24 @@ void drawMijiaApp() {
     char buf[40];
     snprintf(buf, sizeof(buf), "%s [%d/%d]", dev->name, mijiaDeviceIdx + 1, cfg.device_count);
     drawInfoLine(APP_CONTENT_X, y, "dev", buf);
-    drawInfoLine(APP_CONTENT_X, y, "ip", dev->ip);
-    drawInfoLine(APP_CONTENT_X, y, "model", dev->model);
 
-    if (WiFi.status() == WL_CONNECTED) {
-        drawInfoLine(APP_CONTENT_X, y, "wifi", WiFi.SSID().c_str());
-    } else {
-        drawInfoLine(APP_CONTENT_X, y, "wifi", "offline");
-    }
-
-    if (mijiaPowerKnown) {
-        drawInfoLine(APP_CONTENT_X, y, "power", mijiaPowerOn ? "ON" : "OFF");
+    if (mijiaUi.power_known) {
+        drawInfoLine(APP_CONTENT_X, y, "power", mijiaUi.power_on ? "ON" : "OFF");
     } else {
         drawInfoLine(APP_CONTENT_X, y, "power", "?");
     }
 
-    drawInfoLine(APP_CONTENT_X, y, "status", mijiaStatus);
-
-    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("o on f off t toggle");
-    y += INFO_LINE_H;
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("r refresh , . switch");
+    drawMijiaExtraLines(dev, y);
+    drawInfoLine(APP_CONTENT_X, y, "status", mijiaUi.status);
+    drawMijiaHints(dev, y);
 }
 
 void enterMijiaApp() {
     mijiaDeviceIdx = 0;
-    mijiaPowerKnown = false;
-    strncpy(mijiaStatus, "connecting", sizeof(mijiaStatus));
+    mijiaResetUiState(mijiaUi);
+    strncpy(mijiaUi.status, "connecting", sizeof(mijiaUi.status));
     drawMijiaApp();
-    refreshMijiaPower();
+    refreshMijiaDevice();
     drawMijiaApp();
 }
 
@@ -1042,26 +1219,72 @@ void handleMijiaApp(const String& key) {
         return;
     }
 
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev == nullptr) {
+        return;
+    }
+
+    if (!ensureConfigWifi()) {
+        strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
+        drawMijiaApp();
+        return;
+    }
+
+    const MijiaDevKind kind = mijiaClassifyModel(dev->model);
+    bool handled = true;
+
     if (key == "o") {
         setMijiaPower(true);
     } else if (key == "f") {
         setMijiaPower(false);
     } else if (key == "t") {
-        setMijiaPower(!mijiaPowerOn);
+        setMijiaPower(!mijiaUi.power_on);
     } else if (key == "r") {
-        refreshMijiaPower();
+        refreshMijiaDevice();
     } else if (key == "," || key == ";") {
         mijiaDeviceIdx = (mijiaDeviceIdx - 1 + cfg.device_count) % cfg.device_count;
-        mijiaPowerKnown = false;
-        refreshMijiaPower();
+        mijiaResetUiState(mijiaUi);
+        refreshMijiaDevice();
     } else if (key == "." || key == "/") {
         mijiaDeviceIdx = (mijiaDeviceIdx + 1) % cfg.device_count;
-        mijiaPowerKnown = false;
-        refreshMijiaPower();
+        mijiaResetUiState(mijiaUi);
+        refreshMijiaDevice();
+    } else if (kind == MijiaDevKind::LIGHT &&
+               (key == "-" || key == "_" || key == "+" || key == "=")) {
+        const int delta = (key == "-" || key == "_") ? -10 : 10;
+        mijiaAdjustBright(dev, mijiaUi, delta);
+    } else if (kind == MijiaDevKind::FAN_P5) {
+        if (key == "9") {
+            mijiaAdjustFanP5Speed(dev, mijiaUi, -10);
+        } else if (key == "0") {
+            mijiaAdjustFanP5Speed(dev, mijiaUi, 10);
+        } else if (key == "w") {
+            mijiaToggleFanP5Roll(dev, mijiaUi);
+        } else if (key == "m") {
+            mijiaToggleFanP5Mode(dev, mijiaUi);
+        } else {
+            handled = false;
+        }
+    } else if (kind == MijiaDevKind::FAN_GENERIC && key.length() == 1 && key[0] >= '1' &&
+               key[0] <= '4') {
+        mijiaSetFanSpeedLevel(dev, mijiaUi, key[0] - '0');
+    } else if (kind == MijiaDevKind::AIR_PURIFIER_F20) {
+        if (key.length() == 1 && key[0] >= '1' && key[0] <= '5') {
+            mijiaSetPurifierMode(dev, mijiaUi, key[0] - '1');
+        } else if (key == "9") {
+            mijiaAdjustPurifierFanLevel(dev, mijiaUi, -1);
+        } else if (key == "0") {
+            mijiaAdjustPurifierFanLevel(dev, mijiaUi, 1);
+        } else {
+            handled = false;
+        }
     } else {
-        return;
+        handled = false;
     }
-    drawMijiaApp();
+
+    if (handled) {
+        drawMijiaApp();
+    }
 }
 
 // ===== WEB CONFIG =====
@@ -1112,46 +1335,7 @@ void enterWebApp() {
 }
 
 // ===== WIFI =====
-
-// WiFi 状态
-void drawWifiApp() {
-    static bool wifiReady = false;
-    if (!wifiReady) {
-        WiFi.mode(WIFI_STA);
-        WiFi.disconnect();
-        wifiReady = true;
-    }
-
-    M5Cardputer.Display.clear();
-    drawAppScreenHeader("WiFi");
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-
-    if (WiFi.status() == WL_CONNECTED) {
-        M5Cardputer.Display.printf("SSID: %s\n", WiFi.SSID().c_str());
-        M5Cardputer.Display.printf("IP: %s\n", WiFi.localIP().toString().c_str());
-        M5Cardputer.Display.printf("RSSI: %d dBm\n", WiFi.RSSI());
-    } else {
-        M5Cardputer.Display.println("not connected");
-        M5Cardputer.Display.println("s = scan");
-    }
-}
-
-void handleWifiApp(const String& key) {
-    if (key != "s") {
-        return;
-    }
-
-    beginAppScreen("WiFi Scan");
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-
-    const int count = WiFi.scanNetworks();
-    M5Cardputer.Display.printf("found: %d\n", count);
-    const int show = count < 4 ? count : 4;
-    for (int i = 0; i < show; i++) {
-        M5Cardputer.Display.printf("%s %d\n", WiFi.SSID(i).c_str(), WiFi.RSSI(i));
-    }
-}
+// 见 app_wifi.cpp
 
 // ===== BLE =====
 
@@ -1272,9 +1456,6 @@ void enterApp(const AppState state) {
             micHeaderReady = false;
             drawMicApp();
             break;
-        case AppState::BTNA:
-            drawBtnAApp();
-            break;
         case AppState::POWER:
             drawPowerApp();
             break;
@@ -1282,7 +1463,7 @@ void enterApp(const AppState state) {
             drawSpeakerApp("");
             break;
         case AppState::RTC:
-            drawRtcApp();
+            enterRtcApp();
             break;
         case AppState::IN_I2C:
             drawI2cScanApp(M5Cardputer.In_I2C, "InI2");
@@ -1291,7 +1472,7 @@ void enterApp(const AppState state) {
             drawI2cScanApp(M5Cardputer.Ex_I2C, "ExI2");
             break;
         case AppState::WIFI:
-            drawWifiApp();
+            enterWifiApp();
             break;
         case AppState::BLE:
             drawBleApp();
@@ -1347,17 +1528,11 @@ void loop() {
         return;
     }
 
-    // BtnA：BtnA app 内短按计数，长按返回；其它 app 短按返回菜单
+    // BtnA：非菜单界面短按返回菜单
     if (M5Cardputer.BtnA.wasPressed()) {
-        if (currentState == AppState::BTNA) {
-            btnTestCount++;
-            drawBtnAApp();
-        } else if (currentState != AppState::MENU) {
+        if (currentState != AppState::MENU) {
             showMenu();
         }
-    }
-    if (currentState == AppState::BTNA && M5Cardputer.BtnA.wasHold()) {
-        showMenu();
     }
 
     const uint32_t now = millis();
@@ -1381,29 +1556,21 @@ void loop() {
             lastMicUpdateMs = now;
             drawMicApp();
         }
-    }
-
-    if (currentState == AppState::BTNA) {
-        static uint32_t lastBtnUpdateMs = 0;
-        if (now - lastBtnUpdateMs >= 80) {
-            lastBtnUpdateMs = now;
-            drawBtnAApp();
-        }
-    }
-
-    if (currentState == AppState::POWER) {
+    } else if (currentState == AppState::POWER) {
         static uint32_t lastPowerUpdateMs = 0;
         if (now - lastPowerUpdateMs >= 500) {
             lastPowerUpdateMs = now;
             drawPowerApp();
         }
+    } else if (currentState == AppState::WIFI) {
+        updateWifiApp();
     }
 
     if (currentState == AppState::RTC) {
         static uint32_t lastRtcUpdateMs = 0;
         if (now - lastRtcUpdateMs >= 1000) {
             lastRtcUpdateMs = now;
-            drawRtcApp();
+            drawRtcApp(false);
         }
     }
 
@@ -1436,7 +1603,7 @@ void loop() {
                 break;
             case AppState::WIFI:
                 if (M5Cardputer.Keyboard.isPressed()) {
-                    handleWifiApp(getPressedKey());
+                    handleWifiApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             case AppState::DISP:

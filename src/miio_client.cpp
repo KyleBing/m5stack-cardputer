@@ -234,7 +234,7 @@ static bool miioCommand(const char* ip, const char* method, const char* params_j
         return false;
     }
 
-    char json[192];
+    char json[512];
     snprintf(json, sizeof(json), "{\"id\":%lu,\"method\":\"%s\",\"params\":%s}",
              static_cast<unsigned long>(g_msg_id++), method, params_json);
 
@@ -342,5 +342,391 @@ MiioResult miioSetPower(const char* ip, const char* token_hex, const bool on) {
     }
 
     setResult(result, true, on ? "ON" : "OFF");
+    return result;
+}
+
+// 执行 miIO 命令并检查 error 字段
+static MiioResult miioRun(const char* ip, const char* token_hex, const char* method,
+                          const char* params_json, char* resp, const size_t resp_max) {
+    MiioResult result{};
+    if (!miioParseTokenHex(token_hex, g_token)) {
+        setResult(result, false, "bad token");
+        return result;
+    }
+
+    if (!miioCommand(ip, method, params_json, resp, resp_max)) {
+        setResult(result, false, g_last_error);
+        return result;
+    }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, resp)) {
+        setResult(result, false, "bad json");
+        return result;
+    }
+
+    if (doc["error"].is<JsonObject>()) {
+        const char* msg = doc["error"]["message"] | "error";
+        setResult(result, false, msg);
+        return result;
+    }
+
+    setResult(result, true, "ok");
+    return result;
+}
+
+static int clampInt(const int value, const int min_v, const int max_v) {
+    if (value < min_v) {
+        return min_v;
+    }
+    if (value > max_v) {
+        return max_v;
+    }
+    return value;
+}
+
+// 解析 get_prop 返回数组中的整型
+static bool parseIntAt(const char* json, const int index, int& value) {
+    JsonDocument doc;
+    if (deserializeJson(doc, json)) {
+        return false;
+    }
+    JsonArray result = doc["result"].as<JsonArray>();
+    if (result.isNull() || static_cast<int>(result.size()) <= index) {
+        return false;
+    }
+    if (result[index].is<int>()) {
+        value = result[index].as<int>();
+        return true;
+    }
+    if (result[index].is<const char*>()) {
+        value = atoi(result[index].as<const char*>());
+        return true;
+    }
+    return false;
+}
+
+MiioResult miioGetLightStatus(const char* ip, const char* token_hex, bool& on, int& bright,
+                              bool& bright_known) {
+    MiioResult result{};
+    bright_known = false;
+
+    char resp[320];
+    if (!miioParseTokenHex(token_hex, g_token)) {
+        setResult(result, false, "bad token");
+        return result;
+    }
+    if (!miioCommand(ip, "get_prop", "[\"power\",\"bright\"]", resp, sizeof(resp))) {
+        setResult(result, false, g_last_error);
+        return result;
+    }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, resp)) {
+        setResult(result, false, "bad json");
+        return result;
+    }
+    if (doc["error"].is<JsonObject>()) {
+        const char* msg = doc["error"]["message"] | "error";
+        setResult(result, false, msg);
+        return result;
+    }
+
+    if (!parseBoolResult(resp, on)) {
+        setResult(result, false, "no power");
+        return result;
+    }
+
+    int b = 0;
+    if (parseIntAt(resp, 1, b)) {
+        bright = clampInt(b, 1, 100);
+        bright_known = true;
+    }
+
+    char msg[24];
+    if (bright_known) {
+        snprintf(msg, sizeof(msg), on ? "ON %d%%" : "OFF", bright);
+    } else {
+        snprintf(msg, sizeof(msg), on ? "ON" : "OFF");
+    }
+    setResult(result, true, msg);
+    return result;
+}
+
+MiioResult miioSetBright(const char* ip, const char* token_hex, const int bright) {
+    char params[16];
+    snprintf(params, sizeof(params), "[%d]", clampInt(bright, 1, 100));
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "set_bright", params, resp, sizeof(resp));
+    if (result.ok) {
+        char msg[16];
+        snprintf(msg, sizeof(msg), "B=%d", clampInt(bright, 1, 100));
+        setResult(result, true, msg);
+    }
+    return result;
+}
+
+MiioResult miioFanP5GetStatus(const char* ip, const char* token_hex, bool& on, int& speed,
+                              bool& roll, int& mode) {
+    char resp[384];
+    if (!miioParseTokenHex(token_hex, g_token)) {
+        MiioResult result{};
+        setResult(result, false, "bad token");
+        return result;
+    }
+    if (!miioCommand(ip, "get_prop",
+                     "[\"power\",\"mode\",\"speed\",\"roll_enable\"]", resp, sizeof(resp))) {
+        MiioResult result{};
+        setResult(result, false, g_last_error);
+        return result;
+    }
+
+    JsonDocument doc;
+    MiioResult result{};
+    if (deserializeJson(doc, resp)) {
+        setResult(result, false, "bad json");
+        return result;
+    }
+    if (doc["error"].is<JsonObject>()) {
+        const char* msg = doc["error"]["message"] | "error";
+        setResult(result, false, msg);
+        return result;
+    }
+
+    JsonArray arr = doc["result"].as<JsonArray>();
+    if (arr.isNull() || arr.size() < 4) {
+        setResult(result, false, "bad result");
+        return result;
+    }
+
+    if (arr[0].is<bool>()) {
+        on = arr[0].as<bool>();
+    } else {
+        parseBoolResult(resp, on);
+    }
+
+    int sp = 0;
+    if (arr[2].is<int>()) {
+        sp = arr[2].as<int>();
+    }
+    speed = clampInt(sp, 0, 100);
+
+    if (arr[3].is<bool>()) {
+        roll = arr[3].as<bool>();
+    } else if (arr[3].is<const char*>()) {
+        roll = strcmp(arr[3].as<const char*>(), "on") == 0;
+    }
+
+    mode = 0;
+    if (arr[1].is<const char*>()) {
+        mode = strcmp(arr[1].as<const char*>(), "nature") == 0 ? 1 : 0;
+    }
+
+    char msg[32];
+    snprintf(msg, sizeof(msg), on ? "ON %d%%" : "OFF", speed);
+    setResult(result, true, msg);
+    return result;
+}
+
+MiioResult miioFanP5SetPower(const char* ip, const char* token_hex, const bool on) {
+    char params[12];
+    snprintf(params, sizeof(params), "[%s]", on ? "true" : "false");
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "s_power", params, resp, sizeof(resp));
+    if (result.ok) {
+        setResult(result, true, on ? "ON" : "OFF");
+    }
+    return result;
+}
+
+MiioResult miioFanP5SetSpeed(const char* ip, const char* token_hex, const int speed) {
+    char params[8];
+    snprintf(params, sizeof(params), "[%d]", clampInt(speed, 0, 100));
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "s_speed", params, resp, sizeof(resp));
+    if (result.ok) {
+        char msg[16];
+        snprintf(msg, sizeof(msg), "SPD %d", clampInt(speed, 0, 100));
+        setResult(result, true, msg);
+    }
+    return result;
+}
+
+MiioResult miioFanP5SetRoll(const char* ip, const char* token_hex, const bool on) {
+    char params[12];
+    snprintf(params, sizeof(params), "[%s]", on ? "true" : "false");
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "s_roll", params, resp, sizeof(resp));
+    if (result.ok) {
+        setResult(result, true, on ? "ROLL ON" : "ROLL OFF");
+    }
+    return result;
+}
+
+MiioResult miioFanP5SetMode(const char* ip, const char* token_hex, const char* mode) {
+    char params[24];
+    snprintf(params, sizeof(params), "[\"%s\"]", mode);
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "s_mode", params, resp, sizeof(resp));
+    if (result.ok) {
+        setResult(result, true, mode);
+    }
+    return result;
+}
+
+MiioResult miioFanGetStatus(const char* ip, const char* token_hex, bool& on, int& speed_level) {
+    char resp[256];
+    if (!miioParseTokenHex(token_hex, g_token)) {
+        MiioResult result{};
+        setResult(result, false, "bad token");
+        return result;
+    }
+    if (!miioCommand(ip, "get_prop", "[\"power\",\"speed_level\"]", resp, sizeof(resp))) {
+        MiioResult result{};
+        setResult(result, false, g_last_error);
+        return result;
+    }
+
+    MiioResult result{};
+    if (!parseBoolResult(resp, on)) {
+        setResult(result, false, "no power");
+        return result;
+    }
+
+    int lv = 1;
+    if (parseIntAt(resp, 1, lv)) {
+        speed_level = clampInt(lv, 1, 4);
+    } else {
+        speed_level = 1;
+    }
+
+    char msg[24];
+    snprintf(msg, sizeof(msg), on ? "ON L%d" : "OFF", speed_level);
+    setResult(result, true, msg);
+    return result;
+}
+
+MiioResult miioFanSetSpeedLevel(const char* ip, const char* token_hex, const int level) {
+    char params[8];
+    snprintf(params, sizeof(params), "[%d]", clampInt(level, 1, 4));
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "set_speed_level", params, resp, sizeof(resp));
+    if (result.ok) {
+        char msg[16];
+        snprintf(msg, sizeof(msg), "L=%d", clampInt(level, 1, 4));
+        setResult(result, true, msg);
+    }
+    return result;
+}
+
+// 读取 MIoT get_properties 单项
+static bool readMiotValue(JsonVariant item, int& out_int, bool& out_bool, bool& is_bool) {
+    if (!item.is<JsonObject>()) {
+        return false;
+    }
+    const int code = item["code"] | -1;
+    if (code != 0 && code != -1) {
+        return false;
+    }
+    if (item["value"].is<bool>()) {
+        out_bool = item["value"].as<bool>();
+        is_bool = true;
+        return true;
+    }
+    if (item["value"].is<int>()) {
+        out_int = item["value"].as<int>();
+        is_bool = false;
+        return true;
+    }
+    return false;
+}
+
+MiioResult miioF20GetStatus(const char* ip, const char* token_hex, const char* did, bool& on,
+                            int& mode, int& fan_level, int& aqi) {
+    char params[256];
+    snprintf(params, sizeof(params),
+             "[{\"did\":\"%s\",\"siid\":2,\"piid\":1},{\"did\":\"%s\",\"siid\":2,\"piid\":4},"
+             "{\"did\":\"%s\",\"siid\":2,\"piid\":7},{\"did\":\"%s\",\"siid\":3,\"piid\":4}]",
+             did, did, did, did);
+
+    char resp[512];
+    MiioResult result = miioRun(ip, token_hex, "get_properties", params, resp, sizeof(resp));
+    if (!result.ok) {
+        return result;
+    }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, resp)) {
+        setResult(result, false, "bad json");
+        return result;
+    }
+
+    JsonArray arr = doc["result"].as<JsonArray>();
+    if (arr.isNull() || arr.size() < 4) {
+        setResult(result, false, "bad result");
+        return result;
+    }
+
+    int iv = 0;
+    bool bv = false;
+    bool is_bool = false;
+    if (readMiotValue(arr[0], iv, bv, is_bool) && is_bool) {
+        on = bv;
+    }
+    if (readMiotValue(arr[1], mode, bv, is_bool) && !is_bool) {
+        // mode 已通过 out_int 写入
+    }
+    if (readMiotValue(arr[2], fan_level, bv, is_bool) && !is_bool) {
+        // fan_level 已通过 out_int 写入
+    }
+    if (readMiotValue(arr[3], aqi, bv, is_bool) && !is_bool) {
+        // aqi 已通过 out_int 写入
+    }
+
+    static const char* MODE_NAMES[] = {"auto", "sleep", "low", "med", "high", "fav"};
+    const int mode_idx = clampInt(mode, 0, 5);
+    char msg[32];
+    snprintf(msg, sizeof(msg), on ? "ON %s AQI%d" : "OFF", MODE_NAMES[mode_idx], aqi);
+    setResult(result, true, msg);
+    return result;
+}
+
+MiioResult miioF20SetPower(const char* ip, const char* token_hex, const char* did, const bool on) {
+    char params[96];
+    snprintf(params, sizeof(params), "[{\"did\":\"%s\",\"siid\":2,\"piid\":1,\"value\":%s}]", did,
+             on ? "true" : "false");
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "set_properties", params, resp, sizeof(resp));
+    if (result.ok) {
+        setResult(result, true, on ? "ON" : "OFF");
+    }
+    return result;
+}
+
+MiioResult miioF20SetMode(const char* ip, const char* token_hex, const char* did, const int mode) {
+    char params[96];
+    snprintf(params, sizeof(params), "[{\"did\":\"%s\",\"siid\":2,\"piid\":4,\"value\":%d}]", did,
+             clampInt(mode, 0, 5));
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "set_properties", params, resp, sizeof(resp));
+    if (result.ok) {
+        static const char* MODE_NAMES[] = {"auto", "sleep", "low", "med", "high", "fav"};
+        setResult(result, true, MODE_NAMES[clampInt(mode, 0, 5)]);
+    }
+    return result;
+}
+
+MiioResult miioF20SetFanLevel(const char* ip, const char* token_hex, const char* did,
+                              const int level) {
+    char params[96];
+    snprintf(params, sizeof(params), "[{\"did\":\"%s\",\"siid\":2,\"piid\":7,\"value\":%d}]", did,
+             clampInt(level, 0, 5));
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "set_properties", params, resp, sizeof(resp));
+    if (result.ok) {
+        char msg[16];
+        snprintf(msg, sizeof(msg), "FL=%d", clampInt(level, 0, 5));
+        setResult(result, true, msg);
+    }
     return result;
 }
