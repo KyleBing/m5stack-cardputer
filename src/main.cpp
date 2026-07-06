@@ -246,7 +246,7 @@ void handleMenuKey(const String& key) {
 VersionInfo getVersionInfo() {
     return VersionInfo{
         "0.0.1",
-        "2026-07-06",
+        "2026.07.06",
         "KyleBing",
         "kylebing@163.com",
         "kylebing.cn"
@@ -277,6 +277,8 @@ void drawVersionApp() {
 }
 
 // ===== KEYBOARD =====
+
+static char lastKeyLabel[16] = "-";
 
 String getKeyLabel(const Keyboard_Class::KeysState& status) {
     String key;
@@ -325,16 +327,25 @@ void drawKeyboardApp(const Keyboard_Class::KeysState& status) {
     drawModLabel(modX, modY, "alt", status.alt, WHITE);
 
     const String label = getKeyLabel(status);
-    const int contentTop = APP_CONTENT_Y;
-    const int contentH = M5Cardputer.Display.height() - contentTop;
-    constexpr int rightX = 120;
-    constexpr int textH = 16;
+    if (label != "-") {
+        strncpy(lastKeyLabel, label.c_str(), sizeof(lastKeyLabel) - 1);
+        lastKeyLabel[sizeof(lastKeyLabel) - 1] = '\0';
+        Serial.println(label);
+    }
 
-    M5Cardputer.Display.setTextSize(2);
+    constexpr int keyPanelX = 96;
+    const int keyPanelY = APP_CONTENT_Y;
+    const int keyPanelW = M5Cardputer.Display.width() - keyPanelX - 4;
+    const int keyPanelH = M5Cardputer.Display.height() - keyPanelY;
+    M5Cardputer.Display.fillRect(keyPanelX, keyPanelY, keyPanelW, keyPanelH, BLACK);
+
+    const size_t len = strlen(lastKeyLabel);
+    const int textSize = len <= 2 ? 4 : (len <= 4 ? 3 : 2);
+    M5Cardputer.Display.setTextSize(textSize);
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
-    M5Cardputer.Display.setCursor(rightX, contentTop + (contentH - textH) / 2);
-    M5Cardputer.Display.print(label);
-    Serial.println(label);
+    const int textH = 8 * textSize;
+    M5Cardputer.Display.drawCenterString(lastKeyLabel, keyPanelX + keyPanelW / 2,
+                                         keyPanelY + (keyPanelH - textH) / 2);
 }
 
 // ===== BMI =====

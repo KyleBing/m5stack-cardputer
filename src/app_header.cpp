@@ -11,6 +11,8 @@ static constexpr int BATTERY_BORDER = 1;
 static constexpr int BATTERY_INNER_GAP = 2;
 static constexpr int BATTERY_HEAD_W = 2;
 static constexpr int BATTERY_HEAD_H = 6;
+static constexpr int BOLT_ZONE_W = 7;
+static constexpr int BOLT_BATTERY_GAP = 2;
 
 // 边框内侧到电池节的间距（四边各 2px）
 static int getBatteryInset() {
@@ -31,13 +33,18 @@ static int getBatteryBodyHeight() {
     return BATTERY_SEG_H + getBatteryInset() * 2;
 }
 
-// 含左侧电池头的总宽
+// 含左侧电池头的总宽（不含充电闪电区域）
 static int getBatteryIndicatorWidth() {
     return BATTERY_HEAD_W + getBatteryBodyWidth();
 }
 
+// 显示总宽（充电时左侧预留闪电区域）
+static int getBatteryDisplayWidth(const bool charging) {
+    return getBatteryIndicatorWidth() + (charging ? BOLT_ZONE_W + BOLT_BATTERY_GAP : 0);
+}
+
 // 主菜单 header 右侧：分页圆点左侧的电量块起始 x
-static int getMenuBatteryX(const int screen_w, const int page_count) {
+static int getMenuBatteryX(const int screen_w, const int page_count, const bool charging) {
     int right = screen_w - 4;
     if (page_count > 1) {
         constexpr int dot_r = 2;
@@ -45,30 +52,36 @@ static int getMenuBatteryX(const int screen_w, const int page_count) {
         const int dots_w = page_count * dot_r * 2 + (page_count - 1) * dot_gap;
         right -= dots_w + 6;
     }
-    return right - getBatteryIndicatorWidth();
+    return right - getBatteryDisplayWidth(charging);
 }
 
-// 充电时在电池中央画黄色闪电
-static void drawChargingBolt(const int body_x, const int y, const int body_w, const int body_h) {
-    const int cx = body_x + body_w / 2;
+// 充电时在电池左前方（外侧）画黄色闪电
+static void drawChargingBolt(const int zone_x, const int y, const int body_h) {
+    const int cx = zone_x + BOLT_ZONE_W / 2;
     const int cy = y + body_h / 2;
-    M5Cardputer.Display.fillTriangle(cx + 1, cy - 4, cx - 2, cy + 1, cx, cy + 1, YELLOW);
-    M5Cardputer.Display.fillTriangle(cx - 1, cy + 4, cx + 2, cy - 1, cx, cy - 1, YELLOW);
+    M5Cardputer.Display.fillTriangle(cx + 2, cy - 5, cx - 3, cy + 2, cx, cy + 2, YELLOW);
+    M5Cardputer.Display.fillTriangle(cx - 2, cy + 5, cx + 3, cy - 2, cx, cy - 2, YELLOW);
 }
 
 // 电池外形：左头 + 1px 外框 + 内部分格（电量从左侧消耗，剩余格靠右显示）
 static void drawBatteryIndicator(const int x, const int y, const int level, const bool charging) {
     const int body_w = getBatteryBodyWidth();
     const int body_h = getBatteryBodyHeight();
-    const int body_x = x + BATTERY_HEAD_W;
+    const int bolt_offset = charging ? BOLT_ZONE_W + BOLT_BATTERY_GAP : 0;
+    const int battery_x = x + bolt_offset;
+    const int body_x = battery_x + BATTERY_HEAD_W;
     const int total_w = getBatteryIndicatorWidth();
-    const uint16_t accent = WHITE;
+    const uint16_t accent = charging ? GREEN : WHITE;
 
-    M5Cardputer.Display.fillRect(x - 1, y - 1, total_w + 2, body_h + 2, BLACK);
+    M5Cardputer.Display.fillRect(x - 1, y - 1, bolt_offset + total_w + 2, body_h + 2, BLACK);
+
+    if (charging) {
+        drawChargingBolt(x, y, body_h);
+    }
 
     // 左侧电池头（正极凸起）
     const int head_y = y + (body_h - BATTERY_HEAD_H) / 2;
-    M5Cardputer.Display.fillRect(x, head_y, BATTERY_HEAD_W, BATTERY_HEAD_H, accent);
+    M5Cardputer.Display.fillRect(battery_x, head_y, BATTERY_HEAD_W, BATTERY_HEAD_H, accent);
 
     // 外层 1px 边框
     M5Cardputer.Display.drawRect(body_x, y, body_w, body_h, accent);
@@ -86,17 +99,13 @@ static void drawBatteryIndicator(const int x, const int y, const int level, cons
             M5Cardputer.Display.drawRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, DARKGREY);
         }
     }
-
-    if (charging) {
-        drawChargingBolt(body_x, y, body_w, body_h);
-    }
 }
 
 static void drawMenuBatteryIndicator(const int screen_w, const int page_count) {
-    const int x = getMenuBatteryX(screen_w, page_count);
+    const bool charging = M5Cardputer.Power.isCharging();
+    const int x = getMenuBatteryX(screen_w, page_count, charging);
     const int y = (APP_HEADER_H - getBatteryBodyHeight()) / 2;
-    drawBatteryIndicator(x, y, M5Cardputer.Power.getBatteryLevel(),
-                         M5Cardputer.Power.isCharging());
+    drawBatteryIndicator(x, y, M5Cardputer.Power.getBatteryLevel(), charging);
 }
 
 // 绘制右侧 BtnA(GO) 返回按钮样式
