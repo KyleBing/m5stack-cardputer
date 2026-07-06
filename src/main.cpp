@@ -1,10 +1,12 @@
 #include "M5Cardputer.h"
-#include "logo_png.h"
+#include "app_logo.h"
+#include "app_header.h"
 #include <BLEDevice.h>
 #include <WiFi.h>
 #include <esp_chip_info.h>
-#include <esp_sleep.h>
 #include <esp_system.h>
+
+
 
 // ===== COMMON =====
 
@@ -34,6 +36,7 @@ enum class AppState {
     WIFI,
     BLE,
     DISP,
+    CIRCLE,
     SLEEP,
 };
 
@@ -43,17 +46,6 @@ struct MenuItem {
     AppState state;
 };
 
-// Cardputer 键盘布局（* = 已占用 app 入口，见下方映射）
-//
-// 行0: `  1  2  3  4  5  6  7  8  9  0  -  =  Bksp
-// 行1: Tab q  w* e* r  t* y  u  i* o* p* [  ]  \
-// 行2: Fn  Sh  a* s* d* f  g* h  j  k* l* ;  '  Ent
-// 行3: Ctrl Opt Alt z  x  c  v* b* n* m* ,  .  /  Spc
-//
-// 占用: a=BtnA  b=BLE  d=Disp  e=ExI2  g=BMI  i=Info
-//       k=Key  l=Spk  m=Mic  n=InI2  o=Set  p=Pwr
-//       s=Sleep t=Time v=Ver  w=WiFi
-// 空闲: c f h j q r u x y z
 
 // Cardputer 技能 → 字母入口
 static const MenuItem MENU_ITEMS[] = {
@@ -73,12 +65,14 @@ static const MenuItem MENU_ITEMS[] = {
     {'w', "WiFi", AppState::WIFI},
     {'b', "BLE", AppState::BLE},
     {'d', "Disp", AppState::DISP},
+    {'c', "Circ", AppState::CIRCLE},
 };
 
 static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
 
 AppState currentState = AppState::MENU;
 static uint32_t btnTestCount = 0;
+static bool micHeaderReady = false;
 
 void enterApp(const AppState state);
 
@@ -106,29 +100,97 @@ bool enterAppByKey(const char key) {
 
 // ===== MENU =====
 
-// 绘制主菜单（字体 2，格式：V.Ver）
+static constexpr const char* APP_NAME = "Cardputer";
+static constexpr int MENU_COLS = 3;
+static constexpr int MENU_ROWS_PER_PAGE = 4;
+static constexpr int MENU_ITEMS_PER_PAGE = MENU_COLS * MENU_ROWS_PER_PAGE;
+static constexpr int MENU_LINE_H = 16;
+
+static int menuPage = 0;
+
+// 计算菜单总页数
+int getMenuPageCount() {
+    return (MENU_ITEM_COUNT + MENU_ITEMS_PER_PAGE - 1) / MENU_ITEMS_PER_PAGE;
+}
+
+// 检测翻页键：-1 上一页，0 无，1 下一页（直接按 ; , . /，无需 Fn）
+int getMenuNavDelta(const Keyboard_Class::KeysState& status) {
+    for (const uint8_t hid : status.hid_keys) {
+        if (hid == 0x52 || hid == 0x50 || hid == 0x33 || hid == 0x36) {
+            return -1;  // Up / Left / ; ,
+        }
+        if (hid == 0x51 || hid == 0x4F || hid == 0x37 || hid == 0x38) {
+            return 1;   // Down / Right / . /
+        }
+    }
+    for (const char c : status.word) {
+        if (c == ';' || c == ',') {
+            return -1;
+        }
+        if (c == '.' || c == '/') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// 绘制单个菜单项：触发字母与菜单名各用一种固定颜色
+void drawMenuItem(const MenuItem& item) {
+    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
+    M5Cardputer.Display.printf("%c.", toupper(item.key));
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+    M5Cardputer.Display.printf("%s", item.name);
+}
+
+// 绘制主菜单当前页
+void drawMenuPage() {
+    const int startIdx = menuPage * MENU_ITEMS_PER_PAGE;
+    const int endIdx = (startIdx + MENU_ITEMS_PER_PAGE < MENU_ITEM_COUNT)
+                           ? startIdx + MENU_ITEMS_PER_PAGE
+                           : MENU_ITEM_COUNT;
+
+    M5Cardputer.Display.setTextSize(2);
+    int row = 0;
+    for (int i = startIdx; i < endIdx; i += MENU_COLS) {
+        const int y = APP_CONTENT_Y + row * MENU_LINE_H;
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+        drawMenuItem(MENU_ITEMS[i]);
+        if (i + 1 < endIdx) {
+            M5Cardputer.Display.print(" ");
+            drawMenuItem(MENU_ITEMS[i + 1]);
+        }
+        if (i + 2 < endIdx) {
+            M5Cardputer.Display.print(" ");
+            drawMenuItem(MENU_ITEMS[i + 2]);
+        }
+        row++;
+    }
+}
+
+// 绘制主菜单（header + 可翻页菜单区）
 void showMenu() {
     currentState = AppState::MENU;
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(2, 2);
-    M5Cardputer.Display.setTextSize(2);
-
-    for (int i = 0; i < MENU_ITEM_COUNT; i += 3) {
-        M5Cardputer.Display.printf("%c.%s",
-                                   toupper(MENU_ITEMS[i].key),
-                                   MENU_ITEMS[i].name);
-        if (i + 1 < MENU_ITEM_COUNT) {
-            M5Cardputer.Display.printf(" %c.%s",
-                                       toupper(MENU_ITEMS[i + 1].key),
-                                       MENU_ITEMS[i + 1].name);
-        }
-        if (i + 2 < MENU_ITEM_COUNT) {
-            M5Cardputer.Display.printf(" %c.%s",
-                                       toupper(MENU_ITEMS[i + 2].key),
-                                       MENU_ITEMS[i + 2].name);
-        }
-        M5Cardputer.Display.println();
+    const int pageCount = getMenuPageCount();
+    if (menuPage >= pageCount) {
+        menuPage = 0;
     }
+
+    M5Cardputer.Display.clear();
+    drawMenuScreenHeader(APP_NAME, menuPage, getMenuPageCount());
+    drawMenuPage();
+}
+
+// 方向键翻页，返回 true 表示已处理
+bool handleMenuPageNav(const Keyboard_Class::KeysState& status) {
+    const int delta = getMenuNavDelta(status);
+    if (delta == 0) {
+        return false;
+    }
+
+    const int pageCount = getMenuPageCount();
+    menuPage = (menuPage + delta + pageCount) % pageCount;
+    showMenu();
+    return true;
 }
 
 // 菜单按键
@@ -142,12 +204,11 @@ void handleMenuKey(const String& key) {
     }
 
     if (!enterAppByKey(c)) {
-        M5Cardputer.Display.clear();
-        M5Cardputer.Display.setCursor(5, 5);
+        beginAppScreen("Menu");
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
         M5Cardputer.Display.setTextSize(2);
+        M5Cardputer.Display.setTextColor(RED, BLACK);
         M5Cardputer.Display.printf("No app: %c\n", toupper(c));
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.println("BtnA -> menu");
     }
 }
 
@@ -164,37 +225,30 @@ VersionInfo getVersionInfo() {
     };
 }
 
-// 绘制 Version 页面（logo 上 + ver 下，居中）
+// 绘制 Version 页面
 void drawVersionApp() {
     const VersionInfo info = getVersionInfo();
-    M5Cardputer.Display.clear();
+    beginAppScreen("Ver");
 
-    constexpr int logoSrcW = 65;
-    constexpr int logoSrcH = 65;
-    constexpr int logoBox = 64;
+    constexpr int logoSize = APP_LOGO_DESIGN_SIZE;
+    const int logoX = (M5Cardputer.Display.width() - logoSize) / 2;
+    const int logoY = APP_CONTENT_Y + 4;
+    drawAppLogo(logoX, logoY, logoSize);
 
-    const float scaleW = static_cast<float>(logoBox) / logoSrcW;
-    const float scaleH = static_cast<float>(logoBox) / logoSrcH;
-    const float scale = scaleW < scaleH ? scaleW : scaleH;
-    const int logoDrawH = static_cast<int>(logoSrcH * scale);
+    const int textY = logoY + logoSize + 10;
+    const int centerX = M5Cardputer.Display.width() / 2;
+    constexpr int lineH = 12;
 
-    const int logoX = (M5Cardputer.Display.width() - logoBox) / 2;
-    const int logoY = 8;
-
-    if (!M5Cardputer.Display.drawPng(
-            logo_png, logo_png_len, logoX, logoY, logoBox, logoBox, 0, 0, 0.0f, 0.0f)) {
-        M5Cardputer.Display.setCursor(5, 5);
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.println("logo missing");
-        return;
-    }
-
-    const int textY = logoY + logoDrawH + 10;
     M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(CYAN, BLACK);
     M5Cardputer.Display.drawCenterString(
-        ("ver: " + info.version).c_str(),
-        M5Cardputer.Display.width() / 2,
-        textY);
+        ("ver: " + info.version).c_str(), centerX, textY);
+    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
+    M5Cardputer.Display.drawCenterString(
+        ("date: " + info.update_time).c_str(), centerX, textY + lineH);
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+    M5Cardputer.Display.drawCenterString(
+        ("auth: " + info.author).c_str(), centerX, textY + lineH * 2);
 }
 
 // ===== KEYBOARD =====
@@ -226,11 +280,8 @@ String getKeyLabel(const Keyboard_Class::KeysState& status) {
 }
 
 void drawKeyboardApp(const Keyboard_Class::KeysState& status) {
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("KEYBOARD");
-
+    beginAppScreen("Key");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.printf("Fn:%s Sh:%s Ct:%s\n",
                                status.fn ? "ON" : "--",
@@ -280,17 +331,16 @@ void drawBmiApp() {
 
     M5.Imu.update();
 
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
+    beginAppScreen("BMI");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
 
     if (!M5.Imu.isEnabled()) {
-        M5Cardputer.Display.println("BMI");
         M5Cardputer.Display.println("IMU not found");
         return;
     }
 
-    M5Cardputer.Display.printf("BMI %s\n", getImuTypeName(M5.Imu.getType()));
+    M5Cardputer.Display.printf("%s\n", getImuTypeName(M5.Imu.getType()));
 
     float ax = 0;
     float ay = 0;
@@ -333,10 +383,9 @@ void drawInfoApp() {
         return info;
     }();
 
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("INFO");
+    beginAppScreen("Info");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.printf("model: %s\n", ESP.getChipModel());
     M5Cardputer.Display.printf("cores: %d\n", chipInfo.cores);
     M5Cardputer.Display.printf("freq: %d MHz\n", ESP.getCpuFreqMHz());
@@ -349,20 +398,25 @@ void drawInfoApp() {
 
 // Mic 实时波形
 void drawMicApp() {
-    constexpr int waveTop = 22;
+    const int waveTop = APP_CONTENT_Y;
     const int waveW = M5Cardputer.Display.width();
-    const int waveH = M5Cardputer.Display.height() - waveTop - 5;
+    const int waveH = M5Cardputer.Display.height() - waveTop - 2;
     const int centerY = waveTop + waveH / 2;
 
     static int16_t samples[240];
 
     if (!M5Cardputer.Mic.isEnabled()) {
-        M5Cardputer.Display.clear();
-        M5Cardputer.Display.setCursor(5, 5);
-        M5Cardputer.Display.setTextSize(2);
-        M5Cardputer.Display.println("MIC");
+        beginAppScreen("Mic");
+        micHeaderReady = false;
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
         M5Cardputer.Display.println("not found");
         return;
+    }
+
+    if (!micHeaderReady) {
+        beginAppScreen("Mic");
+        micHeaderReady = true;
     }
 
     const size_t sampleCount = waveW < 240 ? waveW : 240;
@@ -388,8 +442,8 @@ void drawMicApp() {
 // ===== SETTINGS =====
 
 void drawSettingsApp() {
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("SETTINGS");
+    beginAppScreen("Set");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.println("0-9  brightness");
     M5Cardputer.Display.println("b    show level");
@@ -400,10 +454,9 @@ void drawSettingsApp() {
 }
 
 void handleSettingsApp(const String& key) {
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("SETTINGS");
+    beginAppScreen("Set");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
 
     if (key == "b") {
         M5Cardputer.Display.printf("brightness: %d\n", M5Cardputer.Display.getBrightness());
@@ -423,14 +476,12 @@ void handleSettingsApp(const String& key) {
 
 // BtnA 侧键测试（短按计数，长按返回菜单）
 void drawBtnAApp() {
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("BTNA");
+    beginAppScreen("BtnA");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.printf("count: %lu\n", btnTestCount);
     M5Cardputer.Display.printf("press: %s\n", M5Cardputer.BtnA.isPressed() ? "ON" : "--");
     M5Cardputer.Display.printf("hold:  %s\n", M5Cardputer.BtnA.isHolding() ? "ON" : "--");
-    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.println("tap=count");
     M5Cardputer.Display.println("hold=back");
 }
@@ -439,10 +490,9 @@ void drawBtnAApp() {
 
 // 电源信息
 void drawPowerApp() {
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("POWER");
+    beginAppScreen("Pwr");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.printf("bat: %d%%\n", M5Cardputer.Power.getBatteryLevel());
     M5Cardputer.Display.printf("volt: %dmV\n", M5Cardputer.Power.getBatteryVoltage());
     M5Cardputer.Display.printf("curr: %dmA\n", M5Cardputer.Power.getBatteryCurrent());
@@ -453,10 +503,8 @@ void drawPowerApp() {
 // ===== SPEAKER =====
 
 void drawSpeakerApp(const String& key) {
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("SPEAKER");
+    beginAppScreen("Spk");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
     M5Cardputer.Display.setTextSize(1);
     if (key.length() == 1 && key[0] >= '1' && key[0] <= '9') {
         M5Cardputer.Display.printf("tone: %d Hz\n", 440 + (key[0] - '1') * 110);
@@ -481,10 +529,9 @@ void handleSpeakerApp(const String& key) {
 
 // RTC 时钟
 void drawRtcApp() {
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("TIME");
+    beginAppScreen("Time");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
 
     if (!M5.Rtc.isEnabled()) {
         M5Cardputer.Display.println("RTC N/A");
@@ -506,17 +553,15 @@ void drawI2cScanApp(m5::I2C_Class& bus, const char* title) {
     }
 
     M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println(title);
+    drawAppScreenHeader(title);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
 
     if (!bus.isEnabled()) {
-        M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.println("bus disabled");
         return;
     }
 
-    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.printf("SDA:%d SCL:%d\n", bus.getSDA(), bus.getSCL());
 
     int count = 0;
@@ -550,17 +595,15 @@ void drawWifiApp() {
     }
 
     M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("WIFI");
+    drawAppScreenHeader("WiFi");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
 
     if (WiFi.status() == WL_CONNECTED) {
-        M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.printf("SSID: %s\n", WiFi.SSID().c_str());
         M5Cardputer.Display.printf("IP: %s\n", WiFi.localIP().toString().c_str());
         M5Cardputer.Display.printf("RSSI: %d dBm\n", WiFi.RSSI());
     } else {
-        M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.println("not connected");
         M5Cardputer.Display.println("s = scan");
     }
@@ -571,13 +614,11 @@ void handleWifiApp(const String& key) {
         return;
     }
 
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("WIFI SCAN");
+    beginAppScreen("WiFi Scan");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.setTextSize(1);
 
     const int count = WiFi.scanNetworks();
-    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.printf("found: %d\n", count);
     const int show = count < 4 ? count : 4;
     for (int i = 0; i < show; i++) {
@@ -595,10 +636,8 @@ void drawBleApp() {
         bleReady = true;
     }
 
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("BLE");
+    beginAppScreen("BLE");
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.printf("addr:\n%s\n", BLEDevice::getAddress().toString().c_str());
     M5Cardputer.Display.println("name: Cardputer");
@@ -614,12 +653,11 @@ void drawDisplayApp(const int colorIndex) {
 
     const int idx = colorIndex % colorCount;
     M5Cardputer.Display.fillScreen(colors[idx]);
+    drawAppScreenHeader("Disp");
     M5Cardputer.Display.setTextColor(BLACK, colors[idx]);
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("DISPLAY");
-    M5Cardputer.Display.printf("color: %s\n", names[idx]);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
     M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.printf("color: %s\n", names[idx]);
     M5Cardputer.Display.println("1-7 switch");
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
 }
@@ -631,61 +669,50 @@ void handleDisplayApp(const String& key) {
     drawDisplayApp(key[0] - '1');
 }
 
+// ===== CIRCLE =====
+
+// 像素比例测试：正圆 + 十字线，圆不变形则屏幕像素为 1:1
+void drawCircleTestApp() {
+    M5Cardputer.Display.clear();
+
+    const int cx = M5Cardputer.Display.width() / 2;
+    const int cy = (M5Cardputer.Display.height() + APP_HEADER_H) / 2;
+    constexpr int radius = 30;
+
+    M5Cardputer.Display.drawCircle(cx, cy, radius, WHITE);
+    M5Cardputer.Display.drawFastHLine(cx - radius, cy, radius * 2 + 1, DARKGREY);
+    M5Cardputer.Display.drawFastVLine(cx, cy - radius, radius * 2 + 1, DARKGREY);
+
+    drawAppScreenHeader("Circ");
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.printf("r=%d\n", radius);
+    M5Cardputer.Display.println("round=1:1 ok");
+}
+
 // ===== SLEEP =====
 
 static bool displayAsleep = false;
 
-// 屏幕休眠演示页
-void drawSleepApp() {
-    M5Cardputer.Display.wakeup();
-    displayAsleep = false;
-
-    M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.println("SLEEP");
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.println("d  screen off");
-    M5Cardputer.Display.println("l  light 5s");
-    M5Cardputer.Display.println("BtnA -> menu");
-}
-
-// 从屏幕休眠唤醒并刷新界面
-void wakeSleepDisplay() {
-    if (!displayAsleep) {
-        return;
-    }
-    M5Cardputer.Display.wakeup();
-    displayAsleep = false;
-    drawSleepApp();
-}
-
-void handleSleepApp(const String& key) {
-    if (key == "d") {
-        M5Cardputer.Display.sleep();
-        displayAsleep = true;
-        return;
-    }
-    if (key == "l") {
-        M5Cardputer.Display.clear();
-        M5Cardputer.Display.setCursor(5, 5);
-        M5Cardputer.Display.setTextSize(2);
-        M5Cardputer.Display.println("SLEEP");
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.println("light 5s...");
-
-        esp_sleep_enable_timer_wakeup(5ULL * 1000000ULL);
-        esp_light_sleep_start();
-        drawSleepApp();
-    }
+// s 入口：直接关屏，loop 内等 BtnA 唤醒
+void enterSleep() {
+    displayAsleep = true;
+    M5Cardputer.Display.sleep();
 }
 
 // ===== MAIN =====
 
 void enterApp(const AppState state) {
     currentState = state;
+
+    // Sleep 直接关屏，不刷新界面
+    if (state == AppState::SLEEP) {
+        enterSleep();
+        return;
+    }
+
     M5Cardputer.Display.clear();
-    M5Cardputer.Display.setCursor(5, 5);
 
     switch (state) {
         case AppState::VERSION:
@@ -703,8 +730,8 @@ void enterApp(const AppState state) {
             drawInfoApp();
             break;
         case AppState::MIC:
-            M5Cardputer.Display.setTextSize(2);
-            M5Cardputer.Display.println("MIC");
+            micHeaderReady = false;
+            drawMicApp();
             break;
         case AppState::BTNA:
             drawBtnAApp();
@@ -719,10 +746,10 @@ void enterApp(const AppState state) {
             drawRtcApp();
             break;
         case AppState::IN_I2C:
-            drawI2cScanApp(M5Cardputer.In_I2C, "IN I2C");
+            drawI2cScanApp(M5Cardputer.In_I2C, "InI2");
             break;
         case AppState::EX_I2C:
-            drawI2cScanApp(M5Cardputer.Ex_I2C, "EX I2C");
+            drawI2cScanApp(M5Cardputer.Ex_I2C, "ExI2");
             break;
         case AppState::WIFI:
             drawWifiApp();
@@ -733,11 +760,11 @@ void enterApp(const AppState state) {
         case AppState::DISP:
             drawDisplayApp(0);
             break;
+        case AppState::CIRCLE:
+            drawCircleTestApp();
+            break;
         case AppState::SETTINGS:
             drawSettingsApp();
-            break;
-        case AppState::SLEEP:
-            drawSleepApp();
             break;
         default:
             break;
@@ -755,11 +782,19 @@ void setup() {
 void loop() {
     M5Cardputer.update();
 
-    // BtnA：BtnA app 内短按计数，长按返回；Sleep 屏灭时先唤醒；其它 app 短按返回
+    // 休眠中只处理 BtnA 唤醒
+    if (displayAsleep) {
+        if (M5Cardputer.BtnA.wasPressed()) {
+            M5Cardputer.Display.wakeup();
+            displayAsleep = false;
+            showMenu();
+        }
+        return;
+    }
+
+    // BtnA：BtnA app 内短按计数，长按返回；其它 app 短按返回菜单
     if (M5Cardputer.BtnA.wasPressed()) {
-        if (currentState == AppState::SLEEP && displayAsleep) {
-            wakeSleepDisplay();
-        } else if (currentState == AppState::BTNA) {
+        if (currentState == AppState::BTNA) {
             btnTestCount++;
             drawBtnAApp();
         } else if (currentState != AppState::MENU) {
@@ -812,14 +847,13 @@ void loop() {
     }
 
     if (M5Cardputer.Keyboard.isChange()) {
-        if (currentState == AppState::SLEEP && displayAsleep) {
-            wakeSleepDisplay();
-        }
-
         switch (currentState) {
             case AppState::MENU:
                 if (M5Cardputer.Keyboard.isPressed()) {
-                    handleMenuKey(getPressedKey());
+                    const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+                    if (!handleMenuPageNav(status)) {
+                        handleMenuKey(getPressedKey());
+                    }
                 }
                 break;
             case AppState::KEYBOARD:
@@ -843,11 +877,6 @@ void loop() {
             case AppState::DISP:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleDisplayApp(getPressedKey());
-                }
-                break;
-            case AppState::SLEEP:
-                if (M5Cardputer.Keyboard.isPressed() && !displayAsleep) {
-                    handleSleepApp(getPressedKey());
                 }
                 break;
             default:
