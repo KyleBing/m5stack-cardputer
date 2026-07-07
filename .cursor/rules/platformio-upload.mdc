@@ -1,0 +1,16 @@
+---
+description: 固件改动完成后自动 upload 到 Cardputer
+alwaysApply: true
+---
+
+# PlatformIO 烧录
+
+完成固件相关代码改动后，验证步骤使用：
+
+```bash
+pio run -t upload
+```
+
+不要仅用 `pio run` 编译而不烧录（除非用户明确要求只编译）。
+
+upload 失败时排查并重试；设备未连接时告知用户。

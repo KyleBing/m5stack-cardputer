@@ -4,10 +4,12 @@
 #include "app_header.h"
 #include "app_colors.h"
 #include "app_icons.h"
+#include "app_mijia_ui.h"
 #include "mijia_control.h"
 #include <cstring>
 
 static int mijiaDeviceIdx = 0;
+static bool mijiaOverviewMode = false;
 static MijiaUiState mijiaUi{};
 
 static const MijiaDevice* getCurrentMijiaDevice() {
@@ -61,46 +63,45 @@ static void setMijiaPower(const bool on) {
     mijiaSetDevicePower(dev, mijiaUi, on);
 }
 
-// 按设备类型绘制额外状态行
-static void drawMijiaExtraLines(const MijiaDevice* dev, int& y) {
-    const MijiaDevKind kind = mijiaClassifyModel(dev->model);
-    char buf[32];
+// 设备概览：总数量 + 每台 name / ip / model
+static void drawMijiaOverview(int& y) {
+    const AppConfig& cfg = getAppConfig();
+    const int screen_bottom = M5Cardputer.Display.height() - INFO_LINE_H;
 
-    switch (kind) {
-        case MijiaDevKind::LIGHT:
-            if (mijiaUi.extra_known) {
-                snprintf(buf, sizeof(buf), "%d%%", mijiaUi.bright);
-                drawInfoLine(APP_CONTENT_X, y, "bright", buf);
-            }
-            break;
-        case MijiaDevKind::FAN_P5:
-            if (mijiaUi.extra_known) {
-                snprintf(buf, sizeof(buf), "%d%%", mijiaUi.speed);
-                drawInfoLine(APP_CONTENT_X, y, "speed", buf);
-                drawInfoLine(APP_CONTENT_X, y, "roll", mijiaUi.roll ? "ON" : "OFF");
-                drawInfoLine(APP_CONTENT_X, y, "mode", mijiaUi.mode == 1 ? "nature" : "normal");
-            }
-            break;
-        case MijiaDevKind::FAN_GENERIC:
-            if (mijiaUi.extra_known) {
-                snprintf(buf, sizeof(buf), "L%d", mijiaUi.speed);
-                drawInfoLine(APP_CONTENT_X, y, "speed", buf);
-            }
-            break;
-        case MijiaDevKind::AIR_PURIFIER_F20: {
-            static const char* MODE_NAMES[] = {"auto", "sleep", "low", "med", "high", "fav"};
-            if (mijiaUi.extra_known) {
-                const int mi = constrain(mijiaUi.mode, 0, 5);
-                drawInfoLine(APP_CONTENT_X, y, "mode", MODE_NAMES[mi]);
-                snprintf(buf, sizeof(buf), "%d", mijiaUi.fan_level);
-                drawInfoLine(APP_CONTENT_X, y, "fan", buf);
-                snprintf(buf, sizeof(buf), "%d", mijiaUi.aqi);
-                drawInfoLine(APP_CONTENT_X, y, "aqi", buf);
-            }
-            break;
+    if (!cfg.loaded || cfg.device_count == 0) {
+        drawInfoLine(APP_CONTENT_X, y, "total", "0");
+        drawInfoLine(APP_CONTENT_X, y, "hint", "press u web");
+        drawHintText(APP_CONTENT_X, y, "i back");
+        return;
+    }
+
+    char buf[40];
+    snprintf(buf, sizeof(buf), "%d", cfg.device_count);
+    drawInfoLine(APP_CONTENT_X, y, "total", buf);
+
+    for (int i = 0; i < cfg.device_count; i++) {
+        if (y > screen_bottom) {
+            drawHintText(APP_CONTENT_X, y, "...");
+            return;
         }
-        default:
-            break;
+        const MijiaDevice& entry = cfg.devices[i];
+        const MijiaDevKind kind = mijiaClassifyModel(entry.model);
+        snprintf(buf, sizeof(buf), "#%d%s", i + 1, i == mijiaDeviceIdx ? "*" : "");
+        drawMijiaDeviceIcon(kind, APP_CONTENT_X, y, APP_COLOR_HINT);
+        drawInfoLine(APP_CONTENT_X + MIJIA_ICON_W + 4, y, buf, entry.name);
+        if (y > screen_bottom) {
+            return;
+        }
+        if (entry.model[0] != '\0') {
+            snprintf(buf, sizeof(buf), "%s  %.16s", entry.ip, entry.model);
+        } else {
+            snprintf(buf, sizeof(buf), "%s", entry.ip);
+        }
+        drawInfoLine(APP_CONTENT_X, y, "ip", buf);
+    }
+
+    if (y <= screen_bottom) {
+        drawHintText(APP_CONTENT_X, y, "i back");
     }
 }
 
@@ -131,7 +132,7 @@ static void drawMijiaRefreshHint(const int x, const int y) {
 static void drawMijiaHints(const MijiaDevice* dev, int y) {
     const MijiaDevKind kind = mijiaClassifyModel(dev->model);
 
-    drawHintText(APP_CONTENT_X, y, "o on f off t toggle");
+    drawHintText(APP_CONTENT_X, y, "o on f off t toggle i info");
     y += INFO_LINE_H;
     drawMijiaRefreshHint(APP_CONTENT_X, y);
     y += INFO_LINE_H;
@@ -162,29 +163,30 @@ void drawMijiaApp() {
     const AppConfig& cfg = getAppConfig();
     const MijiaDevice* dev = getCurrentMijiaDevice();
 
+    if (mijiaOverviewMode) {
+        drawMijiaOverview(y);
+        return;
+    }
+
     if (!cfg.loaded || dev == nullptr) {
         drawInfoLine(APP_CONTENT_X, y, "cfg", "none");
         drawInfoLine(APP_CONTENT_X, y, "hint", "press u web");
         return;
     }
 
-    char buf[40];
-    snprintf(buf, sizeof(buf), "%d/%d", mijiaDeviceIdx + 1, cfg.device_count);
-    drawInfoLine(APP_CONTENT_X, y, "dev", buf);
-
-    if (mijiaUi.power_known) {
-        drawInfoLine(APP_CONTENT_X, y, "power", mijiaUi.power_on ? "ON" : "OFF");
-    } else {
-        drawInfoLine(APP_CONTENT_X, y, "power", "?");
-    }
-
-    drawMijiaExtraLines(dev, y);
+    const MijiaDevKind kind = mijiaClassifyModel(dev->model);
+    y = drawMijiaDeviceHeader(dev, kind, mijiaDeviceIdx, cfg.device_count, APP_CONTENT_X, y);
+    drawMijiaPowerTags(APP_CONTENT_X, y, mijiaUi.power_known, mijiaUi.power_on);
+    y += MIJIA_TAG_H + 6;
+    y = drawMijiaDeviceControls(dev, kind, mijiaUi, APP_CONTENT_X, y);
+    y += 4;
     drawInfoLine(APP_CONTENT_X, y, "status", mijiaUi.status);
     drawMijiaHints(dev, y);
 }
 
 void enterMijiaApp() {
     mijiaDeviceIdx = 0;
+    mijiaOverviewMode = false;
     mijiaResetUiState(mijiaUi);
     strncpy(mijiaUi.status, "connecting", sizeof(mijiaUi.status));
     drawMijiaApp();
@@ -193,6 +195,15 @@ void enterMijiaApp() {
 }
 
 void handleMijiaApp(const String& key) {
+    if (key == "i") {
+        mijiaOverviewMode = !mijiaOverviewMode;
+        drawMijiaApp();
+        return;
+    }
+    if (mijiaOverviewMode) {
+        return;
+    }
+
     const AppConfig& cfg = getAppConfig();
     if (!cfg.loaded || cfg.device_count == 0) {
         return;

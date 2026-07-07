@@ -479,41 +479,143 @@ void drawBmiApp() {
 
 // ===== INFO =====
 
-// 绘制板级 Info 页面
-void drawInfoApp() {
+static constexpr int INFO_ICON_SIZE = ICON_INFO_H;
+static constexpr int INFO_CARD_LINE_H = 8;
+static constexpr int INFO_CARD_GAP = 6;
+static int infoScrollIdx = 0;
+
+struct InfoListItem {
+    void (*draw_icon)(int x, int y, uint16_t color);
+    const char* l1_label;
+    const char* l1_value;
+    const char* l2_label;
+    const char* l2_value;
+    const char* l3_label;
+    const char* l3_value;
+};
+
+// 绘制卡片右侧单行（行高 8px，与 24px 图标对齐）
+static void drawInfoCardLine(const int x, const int y, const char* label, const char* value) {
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(label);
+    M5Cardputer.Display.print(": ");
+    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
+    M5Cardputer.Display.print(value);
+}
+
+// 绘制单项：左图标 + 右三行
+static void drawInfoCardItem(const InfoListItem& item, const int x, const int y) {
+    item.draw_icon(x, y, APP_COLOR_VALUE);
+    const int text_x = x + INFO_ICON_SIZE + 6;
+    drawInfoCardLine(text_x, y, item.l1_label, item.l1_value);
+    drawInfoCardLine(text_x, y + INFO_CARD_LINE_H, item.l2_label, item.l2_value);
+    drawInfoCardLine(text_x, y + INFO_CARD_LINE_H * 2, item.l3_label, item.l3_value);
+}
+
+// 组装 Info 列表数据
+static int buildInfoListItems(InfoListItem* items, const int max_items) {
     const esp_chip_info_t chipInfo = []() {
         esp_chip_info_t info{};
         esp_chip_info(&info);
         return info;
     }();
 
-    beginAppScreen("Info");
-    M5Cardputer.Display.setTextSize(1);
+    static char buf_model[24];
+    static char buf_cores[8];
+    static char buf_freq[16];
+    static char buf_flash[16];
+    static char buf_heap[16];
+    static char buf_sdk[20];
+    static char buf_bat[8];
+    static char buf_volt[12];
+    static char buf_chg[8];
 
-    int y = APP_CONTENT_Y;
-    char buf[32];
+    snprintf(buf_model, sizeof(buf_model), "%s", ESP.getChipModel());
+    snprintf(buf_cores, sizeof(buf_cores), "%d", chipInfo.cores);
+    snprintf(buf_freq, sizeof(buf_freq), "%d MHz", ESP.getCpuFreqMHz());
+    snprintf(buf_flash, sizeof(buf_flash), "%d MB", ESP.getFlashChipSize() / (1024 * 1024));
+    snprintf(buf_heap, sizeof(buf_heap), "%d KB", ESP.getFreeHeap() / 1024);
+    snprintf(buf_sdk, sizeof(buf_sdk), "%s", ESP.getSdkVersion());
+    snprintf(buf_bat, sizeof(buf_bat), "%d%%", M5Cardputer.Power.getBatteryLevel());
+    snprintf(buf_volt, sizeof(buf_volt), "%dmV", M5Cardputer.Power.getBatteryVoltage());
+    strncpy(buf_chg, getChargingStatusText(), sizeof(buf_chg));
+    buf_chg[sizeof(buf_chg) - 1] = '\0';
 
-    drawInfoLine(APP_CONTENT_X, y, "model", ESP.getChipModel());
-    drawInfoLineInt(APP_CONTENT_X, y, "cores", chipInfo.cores);
-    snprintf(buf, sizeof(buf), "%d MHz", ESP.getCpuFreqMHz());
-    drawInfoLine(APP_CONTENT_X, y, "freq", buf);
-    snprintf(buf, sizeof(buf), "%d MB", ESP.getFlashChipSize() / (1024 * 1024));
-    drawInfoLine(APP_CONTENT_X, y, "flash", buf);
-    snprintf(buf, sizeof(buf), "%d KB", ESP.getFreeHeap() / 1024);
-    drawInfoLine(APP_CONTENT_X, y, "heap", buf);
-    drawInfoLine(APP_CONTENT_X, y, "sdk", ESP.getSdkVersion());
-
-    const AppConfig& cfg = getAppConfig();
-    if (cfg.loaded) {
-        snprintf(buf, sizeof(buf), "%d", cfg.device_count);
-        drawInfoLine(APP_CONTENT_X, y, "cfg", buf);
-        if (cfg.device_count > 0) {
-            drawInfoLine(APP_CONTENT_X, y, "dev0", cfg.devices[0].name);
-            drawInfoLine(APP_CONTENT_X, y, "ip0", cfg.devices[0].ip);
-        }
-    } else {
-        drawInfoLine(APP_CONTENT_X, y, "cfg", "none");
+    int count = 0;
+    if (count < max_items) {
+        items[count++] = {drawIconInfoChip, "model", buf_model, "cores", buf_cores, "freq",
+                          buf_freq};
     }
+    if (count < max_items) {
+        items[count++] = {drawIconInfoStorage, "flash", buf_flash, "heap", buf_heap, "sdk", buf_sdk};
+    }
+    if (count < max_items) {
+        items[count++] = {drawIconInfoBattery, "bat", buf_bat, "volt", buf_volt, "chg", buf_chg};
+    }
+    return count;
+}
+
+static int getInfoVisibleCount() {
+    const int avail_h = M5Cardputer.Display.height() - APP_CONTENT_Y - 12;
+    return avail_h / (INFO_ICON_SIZE + INFO_CARD_GAP);
+}
+
+// 绘制 Info 列表（支持滚动）
+void drawInfoApp() {
+    InfoListItem items[6];
+    const int item_count = buildInfoListItems(items, 6);
+    const int visible = getInfoVisibleCount();
+    const int max_scroll = item_count > visible ? item_count - visible : 0;
+    if (infoScrollIdx > max_scroll) {
+        infoScrollIdx = max_scroll;
+    }
+    if (infoScrollIdx < 0) {
+        infoScrollIdx = 0;
+    }
+
+    beginAppScreen("Info");
+    int y = APP_CONTENT_Y;
+    for (int i = 0; i < visible; i++) {
+        const int idx = infoScrollIdx + i;
+        if (idx >= item_count) {
+            break;
+        }
+        drawInfoCardItem(items[idx], APP_CONTENT_X, y);
+        y += INFO_ICON_SIZE + INFO_CARD_GAP;
+    }
+
+    if (item_count > visible) {
+        char hint[24];
+        snprintf(hint, sizeof(hint), "%d/%d , . scroll", infoScrollIdx + 1, max_scroll + 1);
+        drawHintText(APP_CONTENT_X, M5Cardputer.Display.height() - 12, hint);
+    }
+}
+
+// Info 列表滚动
+bool handleInfoPageNav(const Keyboard_Class::KeysState& status) {
+    InfoListItem items[6];
+    const int item_count = buildInfoListItems(items, 6);
+    const int visible = getInfoVisibleCount();
+    if (item_count <= visible) {
+        return false;
+    }
+
+    const int delta = getMenuNavDelta(status);
+    if (delta == 0) {
+        return false;
+    }
+
+    const int max_scroll = item_count - visible;
+    infoScrollIdx = constrain(infoScrollIdx + delta, 0, max_scroll);
+    drawInfoApp();
+    return true;
+}
+
+void enterInfoApp() {
+    infoScrollIdx = 0;
+    drawInfoApp();
 }
 
 // ===== MIC =====
@@ -1167,12 +1269,74 @@ void handleCircleApp(const String& key) {
 
 // ===== SLEEP =====
 
+enum class SleepPhase {
+    NONE,
+    PROMPT,
+    ASLEEP,
+};
+
+static SleepPhase sleepPhase = SleepPhase::NONE;
+static uint32_t sleepPromptMs = 0;
+static int sleepPromptLastSec = -1;
 static bool displayAsleep = false;
 
-// s 入口：直接关屏，loop 内等 BtnA 唤醒
-void enterSleep() {
+// 休眠前提示：倒计时 + 唤醒键说明
+static void drawSleepPrompt(const int seconds_left) {
+    beginAppScreen("Sleep");
+    M5Cardputer.Display.setTextSize(1);
+
+    int y = APP_CONTENT_Y + 8;
+    drawInfoLineAt(APP_CONTENT_X, y, "tip", "screen off soon");
+    y += 14;
+
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%ds", seconds_left);
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(APP_COLOR_WARN, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.print(buf);
+    y += 22;
+
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("wake: BtnA (GO)");
+}
+
+// 进入休眠提示流程（3 秒后再关屏）
+static void enterSleepApp() {
+    currentState = AppState::SLEEP;
+    sleepPhase = SleepPhase::PROMPT;
+    sleepPromptMs = millis();
+    sleepPromptLastSec = -1;
+    M5Cardputer.Display.clear();
+    drawSleepPrompt(3);
+}
+
+// 真正关屏休眠
+static void enterDisplaySleep() {
+    sleepPhase = SleepPhase::ASLEEP;
     displayAsleep = true;
     M5Cardputer.Display.sleep();
+}
+
+// loop 内处理休眠提示倒计时
+static void updateSleepPrompt() {
+    if (sleepPhase != SleepPhase::PROMPT) {
+        return;
+    }
+
+    const uint32_t elapsed = millis() - sleepPromptMs;
+    if (elapsed >= 3000) {
+        enterDisplaySleep();
+        return;
+    }
+
+    const int sec_left = 3 - static_cast<int>(elapsed / 1000);
+    if (sec_left != sleepPromptLastSec) {
+        sleepPromptLastSec = sec_left;
+        drawSleepPrompt(sec_left);
+    }
 }
 
 // ===== MAIN =====
@@ -1180,9 +1344,9 @@ void enterSleep() {
 void enterApp(const AppState state) {
     currentState = state;
 
-    // Sleep 直接关屏，不刷新界面
+    // Sleep 先显示 3 秒提示，再关屏
     if (state == AppState::SLEEP) {
-        enterSleep();
+        enterSleepApp();
         return;
     }
 
@@ -1202,7 +1366,7 @@ void enterApp(const AppState state) {
             drawBmiApp();
             break;
         case AppState::INFO:
-            drawInfoApp();
+            enterInfoApp();
             break;
         case AppState::MIC:
             micHeaderReady = false;
@@ -1271,11 +1435,22 @@ void setup() {
 void loop() {
     M5Cardputer.update();
 
+    // 休眠提示倒计时
+    if (sleepPhase == SleepPhase::PROMPT) {
+        updateSleepPrompt();
+        if (M5Cardputer.BtnA.wasPressed()) {
+            sleepPhase = SleepPhase::NONE;
+            showMenu();
+        }
+        return;
+    }
+
     // 休眠中只处理 BtnA 唤醒
     if (displayAsleep) {
         if (M5Cardputer.BtnA.wasPressed()) {
             M5Cardputer.Display.wakeup();
             displayAsleep = false;
+            sleepPhase = SleepPhase::NONE;
             showMenu();
         }
         return;
@@ -1371,6 +1546,11 @@ void loop() {
             case AppState::CIRCLE:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleCircleApp(getPressedKey());
+                }
+                break;
+            case AppState::INFO:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleInfoPageNav(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             case AppState::MIJIA:

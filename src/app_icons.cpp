@@ -258,3 +258,34 @@ void drawIconPageDots(const int x, const int cy, const int page, const int page_
         }
     }
 }
+
+// ===== Info 列表图标 =====
+
+void drawIconInfoChip(const int x, const int y, const uint16_t color) {
+    M5Cardputer.Display.drawRoundRect(x + 4, y + 4, 16, 16, 2, color);
+    for (int i = 0; i < 4; i++) {
+        const int px = x + 6 + (i % 2) * 10;
+        const int py = y + 2 + (i / 2) * 18;
+        M5Cardputer.Display.fillRect(px, py, 2, 3, color);
+    }
+    M5Cardputer.Display.drawFastHLine(x + 8, y + 11, 8, color);
+    M5Cardputer.Display.drawFastHLine(x + 8, y + 14, 8, color);
+}
+
+void drawIconInfoStorage(const int x, const int y, const uint16_t color) {
+    M5Cardputer.Display.drawRoundRect(x + 5, y + 3, 14, 18, 2, color);
+    M5Cardputer.Display.fillRect(x + 8, y + 6, 8, 3, color);
+    for (int i = 0; i < 3; i++) {
+        M5Cardputer.Display.drawFastHLine(x + 8, y + 11 + i * 3, 8, color);
+    }
+}
+
+void drawIconInfoBattery(const int x, const int y, const uint16_t color) {
+    const int body_x = x + 4;
+    const int body_y = y + 6;
+    const int body_w = 16;
+    const int body_h = 12;
+    M5Cardputer.Display.fillRect(x + 9, y + 4, 4, 3, color);
+    M5Cardputer.Display.drawRoundRect(body_x, body_y, body_w, body_h, 2, color);
+    M5Cardputer.Display.fillRect(body_x + 3, body_y + 3, 7, 6, color);
+}
