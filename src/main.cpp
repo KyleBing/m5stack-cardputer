@@ -9,6 +9,8 @@
 #include "app_mijia_ui.h"
 #include "app_ble.h"
 #include "app_connectivity.h"
+#include "app_countdown.h"
+#include "app_stopwatch.h"
 #include <WiFi.h>
 #include <esp_chip_info.h>
 #include <esp_system.h>
@@ -48,6 +50,8 @@ enum class AppState {
     SLEEP,
     MIJIA,
     WEB,
+    COUNTDOWN,
+    STOPWATCH,
 };
 
 struct MenuItem {
@@ -79,6 +83,8 @@ static const MenuItem MENU_ITEMS[] = {
     {'d', "Disp", "Display", AppState::DISP},
     {'c', "Circ", "Circle", AppState::CIRCLE},
     {'a', "Icn", "Icons", AppState::ICONS},
+    {'q', "Cd", "Countdown", AppState::COUNTDOWN},
+    {'f', "Sw", "Stopwatch", AppState::STOPWATCH},
 };
 
 static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
@@ -128,27 +134,6 @@ static int menuPage = 0;
 // 计算菜单总页数
 int getMenuPageCount() {
     return (MENU_ITEM_COUNT + MENU_ITEMS_PER_PAGE - 1) / MENU_ITEMS_PER_PAGE;
-}
-
-// 检测翻页键：-1 上一页，0 无，1 下一页（直接按 ; , . /，无需 Fn）
-int getMenuNavDelta(const Keyboard_Class::KeysState& status) {
-    for (const uint8_t hid : status.hid_keys) {
-        if (hid == 0x52 || hid == 0x50 || hid == 0x33 || hid == 0x36) {
-            return -1;  // Up / Left / ; ,
-        }
-        if (hid == 0x51 || hid == 0x4F || hid == 0x37 || hid == 0x38) {
-            return 1;   // Down / Right / . /
-        }
-    }
-    for (const char c : status.word) {
-        if (c == ';' || c == ',') {
-            return -1;
-        }
-        if (c == '.' || c == '/') {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 // 绘制单个菜单项：按键块 + 名称
@@ -418,6 +403,13 @@ static void drawBmiCrosshair(const int panelX, const int panelW, const int conte
     const int crossCx = panelX + panelW / 2;
     const int crossCy = contentTop + contentH / 2;
     constexpr int crossLen = 38;
+    // 参考圆线条比十字线更浅
+    constexpr uint16_t ringColor = 0x3186;
+    static constexpr int ringRadii[] = {12, 24, 36};
+
+    for (const int r : ringRadii) {
+        M5Cardputer.Display.drawCircle(crossCx, crossCy, r, ringColor);
+    }
 
     M5Cardputer.Display.drawFastHLine(crossCx - crossLen, crossCy, crossLen * 2 + 1, DARKGREY);
     M5Cardputer.Display.drawFastVLine(crossCx, crossCy - crossLen, crossLen * 2 + 1, DARKGREY);
@@ -643,7 +635,7 @@ void drawInfoApp() {
 
     if (item_count > visible) {
         char hint[24];
-        snprintf(hint, sizeof(hint), "%d/%d , . scroll", infoScrollIdx + 1, max_scroll + 1);
+        snprintf(hint, sizeof(hint), "%d/%d  , . [ ] scroll", infoScrollIdx + 1, max_scroll + 1);
         drawHintText(APP_CONTENT_X, M5Cardputer.Display.height() - 12, hint);
     }
 }
@@ -1380,27 +1372,6 @@ static int getIconDemoPageCount() {
     return (total + ICON_DEMO_ITEMS_PER_PAGE - 1) / ICON_DEMO_ITEMS_PER_PAGE;
 }
 
-// 上下左右都用于翻页：左/上上一页，右/下下一页
-static int getIconDemoNavDelta(const Keyboard_Class::KeysState& status) {
-    for (const uint8_t hid : status.hid_keys) {
-        if (hid == 0x52 || hid == 0x50 || hid == 0x33 || hid == 0x36) {
-            return -1;
-        }
-        if (hid == 0x51 || hid == 0x4F || hid == 0x37 || hid == 0x38) {
-            return 1;
-        }
-    }
-    for (const char c : status.word) {
-        if (c == ';' || c == ',') {
-            return -1;
-        }
-        if (c == '.' || c == '/') {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static void drawIconDemoApp() {
     beginAppScreen("Icons");
     const int page_count = getIconDemoPageCount();
@@ -1414,8 +1385,8 @@ static void drawIconDemoApp() {
     int y = APP_CONTENT_Y;
     char buf[32];
     static const KeyHintItem nav_items[] = {
-        {';', "prev"},
-        {'.', "next"},
+        {'[', "prev"},
+        {']', "next"},
     };
     drawKeyHintsRow(APP_CONTENT_X, y, nav_items, sizeof(nav_items) / sizeof(nav_items[0]), 1,
                     APP_COLOR_HINT);
@@ -1446,15 +1417,11 @@ static void drawIconDemoApp() {
         M5Cardputer.Display.setCursor(APP_CONTENT_X, row_y + INFO_LINE_H_2X);
         M5Cardputer.Display.printf("size %dx%d", item.width, item.height);
 
-        // 图标展示区域增加 1px 边框，方便查看图标轮廓占位
         const int icon_x = APP_CONTENT_X + 170;
         const int icon_y = row_y + 28;
-        M5Cardputer.Display.drawRect(icon_x - 1, icon_y - 1, item.width + 2, item.height + 2,
-                                     APP_COLOR_HINT);
         item.draw(icon_x, icon_y);
 
         y += 72;
-        M5Cardputer.Display.drawFastHLine(APP_CONTENT_X + 34, y - 2, 196, APP_COLOR_MUTED);
     }
 }
 
@@ -1464,7 +1431,7 @@ static void enterIconDemoApp() {
 }
 
 static void handleIconDemoNav(const Keyboard_Class::KeysState& status) {
-    const int delta = getIconDemoNavDelta(status);
+    const int delta = getMenuNavDelta(status);
     if (delta == 0) {
         return;
     }
@@ -1489,11 +1456,10 @@ static bool displayAsleep = false;
 // 休眠前提示：倒计时 + 唤醒键说明
 static void drawSleepPrompt(const int seconds_left) {
     beginAppScreen("Sleep");
-    M5Cardputer.Display.setTextSize(1);
 
     int y = APP_CONTENT_Y + 8;
-    drawInfoLineAt(APP_CONTENT_X, y, "tip", "screen off soon");
-    y += 14;
+    drawInfoLineAt(APP_CONTENT_X, y, "SCREEN", "WILL OFF IN", 2);
+    y += INFO_LINE_H_2X + 4;
 
     char buf[8];
     snprintf(buf, sizeof(buf), "%ds", seconds_left);
@@ -1503,7 +1469,7 @@ static void drawSleepPrompt(const int seconds_left) {
     M5Cardputer.Display.print(buf);
     y += 30;
 
-    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
     M5Cardputer.Display.println("wake: BtnA (GO)");
@@ -1615,6 +1581,12 @@ void enterApp(const AppState state) {
         case AppState::WEB:
             enterWebApp();
             break;
+        case AppState::COUNTDOWN:
+            enterCountdownApp();
+            break;
+        case AppState::STOPWATCH:
+            enterStopwatchApp();
+            break;
         default:
             break;
     }
@@ -1709,6 +1681,14 @@ void loop() {
             lastBleUpdateMs = now;
             updateBleApp();
         }
+    } else if (currentState == AppState::MIJIA) {
+        updateMijiaApp();
+    } else if (currentState == AppState::WEB) {
+        updateWebApp();
+    } else if (currentState == AppState::COUNTDOWN) {
+        updateCountdownApp();
+    } else if (currentState == AppState::STOPWATCH) {
+        updateStopwatchApp();
     }
 
     if (currentState == AppState::RTC) {
@@ -1717,10 +1697,6 @@ void loop() {
             lastRtcUpdateMs = now;
             drawRtcApp(false);
         }
-    }
-
-    if (currentState == AppState::WEB) {
-        handleConfigWebServer();
     }
 
     if (M5Cardputer.Keyboard.isChange()) {
@@ -1766,11 +1742,18 @@ void loop() {
                     handleInfoPageNav(M5Cardputer.Keyboard.keysState());
                 }
                 break;
-            case AppState::MIJIA:
+            case AppState::MIJIA: {
+                const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+                if (handleMijiaHelpKey(status)) {
+                    break;
+                }
                 if (M5Cardputer.Keyboard.isPressed()) {
-                    handleMijiaApp(getPressedKey());
+                    if (!handleMijiaOverviewPageNav(status) && !handleMijiaDeviceNav(status)) {
+                        handleMijiaApp(getPressedKey());
+                    }
                 }
                 break;
+            }
             case AppState::BLE:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
@@ -1784,13 +1767,29 @@ void loop() {
                     handleIconDemoNav(M5Cardputer.Keyboard.keysState());
                 }
                 break;
+            case AppState::WEB:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleWebApp(getPressedKey());
+                }
+                break;
+            case AppState::COUNTDOWN:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleCountdownApp(getPressedKey());
+                }
+                break;
+            case AppState::STOPWATCH:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleStopwatchApp(getPressedKey());
+                }
+                break;
             default:
                 break;
         }
     }
 
     // 实时 app 不休眠；其它状态 yield 10ms
-    if (currentState != AppState::BMI && currentState != AppState::MIC) {
+    if (currentState != AppState::BMI && currentState != AppState::MIC &&
+        currentState != AppState::STOPWATCH) {
         delay(10);
     }
 }

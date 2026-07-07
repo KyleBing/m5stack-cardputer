@@ -29,27 +29,6 @@ static char wifiPassword[WIFI_PASS_MAX + 1] = "";
 static char wifiStatus[48] = "";
 static uint32_t wifiConnectDeadline = 0;
 
-// 翻页：-1 上一页，0 无，1 下一页
-static int getWifiPageNavDelta(const Keyboard_Class::KeysState& status) {
-    for (const uint8_t hid : status.hid_keys) {
-        if (hid == 0x52 || hid == 0x50 || hid == 0x33 || hid == 0x36) {
-            return -1;
-        }
-        if (hid == 0x51 || hid == 0x4F || hid == 0x37 || hid == 0x38) {
-            return 1;
-        }
-    }
-    for (const char c : status.word) {
-        if (c == ';' || c == ',') {
-            return -1;
-        }
-        if (c == '.' || c == '/') {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static int getWifiListPageCount() {
     if (wifiScanCount <= 0) {
         return 1;
@@ -450,7 +429,7 @@ void handleWifiApp(const Keyboard_Class::KeysState& status) {
     }
 
     if (wifiPhase == WifiAppPhase::LIST) {
-        const int nav = getWifiPageNavDelta(status);
+        const int nav = getMenuNavDelta(status);
         if (nav != 0) {
             const int page_count = getWifiListPageCount();
             wifiListPage = (wifiListPage + nav + page_count) % page_count;

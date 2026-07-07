@@ -11,7 +11,7 @@ struct MijiaDevice {
     char model[48];
 };
 
-static constexpr int MIJIA_DEVICE_MAX = 8;
+static constexpr int MIJIA_DEVICE_MAX = 50;
 
 struct AppConfig {
     char wifi_ssid[33];

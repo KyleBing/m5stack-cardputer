@@ -5,84 +5,116 @@
 #include "M5Cardputer.h"
 #include <cstring>
 
-// 绘制 16x16 灯泡图标
-static void drawMijiaIconLight(const int x, const int y, const uint16_t color) {
-    const int cx = x + 8;
-    // 小尺寸下用轮廓灯泡 + 灯座，避免实心圆看起来像普通圆点。
-    M5Cardputer.Display.drawCircle(cx, y + 6, 5, color);
-    M5Cardputer.Display.drawFastHLine(x + 6, y + 11, 5, color);
-    M5Cardputer.Display.fillRect(x + 5, y + 12, 7, 2, color);
-    M5Cardputer.Display.drawFastHLine(x + 6, y + 15, 5, color);
-    M5Cardputer.Display.drawPixel(cx, y + 4, color);
+// 16x16 基准坐标缩放到任意边长
+static int mijiaIconS(const int v, const int size) {
+    return (v * size + 8) / 16;
 }
 
-// 绘制 16x16 风扇图标
-static void drawMijiaIconFan(const int x, const int y, const uint16_t color) {
-    const int cx = x + 8;
-    const int cy = y + 8;
-    M5Cardputer.Display.drawCircle(cx, cy, 7, color);
-    // 四叶扇页用三角形叠出，16x16 时比曲线更清楚。
-    M5Cardputer.Display.fillTriangle(cx, cy - 1, cx - 2, y + 2, cx + 2, y + 3, color);
-    M5Cardputer.Display.fillTriangle(cx + 1, cy, x + 13, cy - 2, x + 14, cy + 2, color);
-    M5Cardputer.Display.fillTriangle(cx, cy + 1, cx + 2, y + 14, cx - 2, y + 13, color);
-    M5Cardputer.Display.fillTriangle(cx - 1, cy, x + 2, cy + 2, x + 3, cy - 2, color);
-    M5Cardputer.Display.fillCircle(cx, cy, 2, BLACK);
-    M5Cardputer.Display.drawCircle(cx, cy, 2, color);
+// 绘制灯泡图标
+static void drawMijiaIconLight(const int x, const int y, const int size, const uint16_t color) {
+    const int cx = x + mijiaIconS(8, size);
+    M5Cardputer.Display.drawCircle(cx, y + mijiaIconS(6, size), mijiaIconS(5, size), color);
+    M5Cardputer.Display.drawFastHLine(x + mijiaIconS(6, size), y + mijiaIconS(11, size),
+                                      mijiaIconS(5, size), color);
+    M5Cardputer.Display.fillRect(x + mijiaIconS(5, size), y + mijiaIconS(12, size),
+                                 mijiaIconS(7, size), mijiaIconS(2, size), color);
+    M5Cardputer.Display.drawFastHLine(x + mijiaIconS(6, size), y + mijiaIconS(15, size),
+                                      mijiaIconS(5, size), color);
+    M5Cardputer.Display.drawPixel(cx, y + mijiaIconS(4, size), color);
 }
 
-// 绘制 16x16 净化器图标
-static void drawMijiaIconPurifier(const int x, const int y, const uint16_t color) {
-    M5Cardputer.Display.drawRoundRect(x + 3, y + 1, 10, 14, 2, color);
+// 绘制风扇图标
+static void drawMijiaIconFan(const int x, const int y, const int size, const uint16_t color) {
+    const int cx = x + mijiaIconS(8, size);
+    const int cy = y + mijiaIconS(8, size);
+    const int r = mijiaIconS(7, size);
+    M5Cardputer.Display.drawCircle(cx, cy, r, color);
+    M5Cardputer.Display.fillTriangle(cx, cy - mijiaIconS(1, size), cx - mijiaIconS(2, size),
+                                     y + mijiaIconS(2, size), cx + mijiaIconS(2, size),
+                                     y + mijiaIconS(3, size), color);
+    M5Cardputer.Display.fillTriangle(cx + mijiaIconS(1, size), cy, x + mijiaIconS(13, size),
+                                     cy - mijiaIconS(2, size), x + mijiaIconS(14, size),
+                                     cy + mijiaIconS(2, size), color);
+    M5Cardputer.Display.fillTriangle(cx, cy + mijiaIconS(1, size), cx + mijiaIconS(2, size),
+                                     y + mijiaIconS(14, size), cx - mijiaIconS(2, size),
+                                     y + mijiaIconS(13, size), color);
+    M5Cardputer.Display.fillTriangle(cx - mijiaIconS(1, size), cy, x + mijiaIconS(2, size),
+                                     cy + mijiaIconS(2, size), x + mijiaIconS(3, size),
+                                     cy - mijiaIconS(2, size), color);
+    const int hub = mijiaIconS(2, size);
+    M5Cardputer.Display.fillCircle(cx, cy, hub, BLACK);
+    M5Cardputer.Display.drawCircle(cx, cy, hub, color);
+}
+
+// 绘制净化器图标
+static void drawMijiaIconPurifier(const int x, const int y, const int size, const uint16_t color) {
+    M5Cardputer.Display.drawRoundRect(x + mijiaIconS(3, size), y + mijiaIconS(1, size),
+                                      mijiaIconS(10, size), mijiaIconS(14, size), mijiaIconS(2, size),
+                                      color);
     for (int i = 0; i < 3; i++) {
-        const int ly = y + 4 + i * 4;
-        M5Cardputer.Display.drawFastHLine(x + 5, ly, 6, color);
+        const int ly = y + mijiaIconS(4, size) + i * mijiaIconS(4, size);
+        M5Cardputer.Display.drawFastHLine(x + mijiaIconS(5, size), ly, mijiaIconS(6, size), color);
     }
-    M5Cardputer.Display.fillRect(x + 6, y + 13, 4, 2, color);
+    M5Cardputer.Display.fillRect(x + mijiaIconS(6, size), y + mijiaIconS(13, size),
+                                 mijiaIconS(4, size), mijiaIconS(2, size), color);
 }
 
-// 绘制 16x16 空气炸锅图标
-static void drawMijiaIconAirFryer(const int x, const int y, const uint16_t color) {
-    M5Cardputer.Display.drawRoundRect(x + 3, y + 4, 10, 10, 2, color);
-    M5Cardputer.Display.fillRect(x + 5, y + 2, 6, 3, color);
-    M5Cardputer.Display.drawFastHLine(x + 5, y + 7, 6, color);
-    M5Cardputer.Display.fillRect(x + 6, y + 10, 4, 2, color);
-    M5Cardputer.Display.fillRect(x + 13, y + 7, 2, 4, color);
+// 绘制空气炸锅图标
+static void drawMijiaIconAirFryer(const int x, const int y, const int size, const uint16_t color) {
+    M5Cardputer.Display.drawRoundRect(x + mijiaIconS(3, size), y + mijiaIconS(4, size),
+                                      mijiaIconS(10, size), mijiaIconS(10, size),
+                                      mijiaIconS(2, size), color);
+    M5Cardputer.Display.fillRect(x + mijiaIconS(5, size), y + mijiaIconS(2, size),
+                                 mijiaIconS(6, size), mijiaIconS(3, size), color);
+    M5Cardputer.Display.drawFastHLine(x + mijiaIconS(5, size), y + mijiaIconS(7, size),
+                                      mijiaIconS(6, size), color);
+    M5Cardputer.Display.fillRect(x + mijiaIconS(6, size), y + mijiaIconS(10, size),
+                                 mijiaIconS(4, size), mijiaIconS(2, size), color);
+    M5Cardputer.Display.fillRect(x + mijiaIconS(13, size), y + mijiaIconS(7, size),
+                                 mijiaIconS(2, size), mijiaIconS(4, size), color);
 }
 
-// 绘制 16x16 插座图标
-static void drawMijiaIconPlug(const int x, const int y, const uint16_t color) {
-    M5Cardputer.Display.fillRoundRect(x + 2, y + 6, 12, 9, 2, color);
-    M5Cardputer.Display.fillRect(x + 5, y + 2, 2, 5, color);
-    M5Cardputer.Display.fillRect(x + 9, y + 2, 2, 5, color);
+// 绘制插座图标
+static void drawMijiaIconPlug(const int x, const int y, const int size, const uint16_t color) {
+    M5Cardputer.Display.fillRoundRect(x + mijiaIconS(2, size), y + mijiaIconS(6, size),
+                                      mijiaIconS(12, size), mijiaIconS(9, size),
+                                      mijiaIconS(2, size), color);
+    M5Cardputer.Display.fillRect(x + mijiaIconS(5, size), y + mijiaIconS(2, size),
+                                 mijiaIconS(2, size), mijiaIconS(5, size), color);
+    M5Cardputer.Display.fillRect(x + mijiaIconS(9, size), y + mijiaIconS(2, size),
+                                 mijiaIconS(2, size), mijiaIconS(5, size), color);
 }
 
-// 绘制 16x16 通用设备图标
-static void drawMijiaIconGeneric(const int x, const int y, const uint16_t color) {
-    M5Cardputer.Display.drawRoundRect(x + 2, y + 2, 12, 12, 2, color);
-    M5Cardputer.Display.fillCircle(x + 8, y + 8, 2, color);
+// 绘制通用设备图标
+static void drawMijiaIconGeneric(const int x, const int y, const int size, const uint16_t color) {
+    M5Cardputer.Display.drawRoundRect(x + mijiaIconS(2, size), y + mijiaIconS(2, size),
+                                      mijiaIconS(12, size), mijiaIconS(12, size),
+                                      mijiaIconS(2, size), color);
+    M5Cardputer.Display.fillCircle(x + mijiaIconS(8, size), y + mijiaIconS(8, size),
+                                   mijiaIconS(2, size), color);
 }
 
-void drawMijiaDeviceIcon(const MijiaDevKind kind, const int x, const int y,
-                         const uint16_t color) {
+void drawMijiaDeviceIcon(const MijiaDevKind kind, const int x, const int y, const uint16_t color,
+                         const int size) {
     switch (kind) {
         case MijiaDevKind::LIGHT:
-            drawMijiaIconLight(x, y, color);
+            drawMijiaIconLight(x, y, size, color);
             break;
         case MijiaDevKind::FAN_P5:
         case MijiaDevKind::FAN_GENERIC:
-            drawMijiaIconFan(x, y, color);
+            drawMijiaIconFan(x, y, size, color);
             break;
         case MijiaDevKind::AIR_PURIFIER_F20:
-            drawMijiaIconPurifier(x, y, color);
+            drawMijiaIconPurifier(x, y, size, color);
             break;
         case MijiaDevKind::AIR_FRYER:
-            drawMijiaIconAirFryer(x, y, color);
+            drawMijiaIconAirFryer(x, y, size, color);
             break;
         case MijiaDevKind::PLUG:
-            drawMijiaIconPlug(x, y, color);
+            drawMijiaIconPlug(x, y, size, color);
             break;
         default:
-            drawMijiaIconGeneric(x, y, color);
+            drawMijiaIconGeneric(x, y, size, color);
             break;
     }
 }
@@ -171,14 +203,34 @@ int drawMijiaDeviceHeader(const MijiaDevice* dev, const MijiaDevKind kind, const
     return y + MIJIA_ICON_H + 4;
 }
 
-void drawMijiaPowerTags(const int x, const int y, const bool known, const bool on) {
-    if (!known) {
-        drawMijiaStatusTag(x, y, "?", true, APP_COLOR_MUTED);
-        return;
+// 仅设备无法读取状态时，在 ON/OFF 或 ? 后显示连接/查询状态
+static bool mijiaShouldShowInlineStatus(const char* status, const bool power_known) {
+    if (power_known) {
+        return false;
     }
+    return status != nullptr && status[0] != '\0';
+}
+
+// 流程状态小字（跟在 tag 后面）
+static void drawMijiaInlineStatus(const int x, const int y, const char* status) {
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(x, y + 1);
+    M5Cardputer.Display.print(status);
+}
+
+void drawMijiaPowerTags(const int x, const int y, const bool known, const bool on,
+                        const char* status) {
     int cx = x;
-    cx += drawMijiaStatusTag(cx, y, "ON", on, APP_COLOR_OK);
-    drawMijiaStatusTag(cx, y, "OFF", !on, APP_COLOR_LABEL);
+    if (!known) {
+        cx += drawMijiaStatusTag(cx, y, "?", true, APP_COLOR_MUTED);
+    } else {
+        cx += drawMijiaStatusTag(cx, y, "ON", on, APP_COLOR_OK);
+        cx += drawMijiaStatusTag(cx, y, "OFF", !on, APP_COLOR_LABEL);
+    }
+    if (mijiaShouldShowInlineStatus(status, known)) {
+        drawMijiaInlineStatus(cx, y, status);
+    }
 }
 
 // 绘制带标签的百分比条（标签 + 数值 + 条）

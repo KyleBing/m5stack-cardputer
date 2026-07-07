@@ -40,6 +40,9 @@ void mijiaSetDevicePower(const MijiaDevice* dev, MijiaUiState& state, bool on);
 // 灯：调节亮度（delta 可正可负）
 void mijiaAdjustBright(const MijiaDevice* dev, MijiaUiState& state, int delta);
 
+// 灯：直接设亮度百分比 1-100
+void mijiaSetBrightPercent(const MijiaDevice* dev, MijiaUiState& state, int percent);
+
 // 风扇 P5：调节风速
 void mijiaAdjustFanP5Speed(const MijiaDevice* dev, MijiaUiState& state, int delta);
 

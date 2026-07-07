@@ -147,3 +147,24 @@ String getPressedKey() {
     }
     return key;
 }
+
+// 检测翻页键：-1 上一页，0 无，1 下一页
+int getMenuNavDelta(const Keyboard_Class::KeysState& status) {
+    for (const uint8_t hid : status.hid_keys) {
+        if (hid == 0x52 || hid == 0x50 || hid == 0x33 || hid == 0x36) {
+            return -1;  // Up / Left / ; ,
+        }
+        if (hid == 0x51 || hid == 0x4F || hid == 0x37 || hid == 0x38) {
+            return 1;   // Down / Right / . /
+        }
+    }
+    for (const char c : status.word) {
+        if (c == ';' || c == ',' || c == '[') {
+            return -1;
+        }
+        if (c == '.' || c == '/' || c == ']') {
+            return 1;
+        }
+    }
+    return 0;
+}

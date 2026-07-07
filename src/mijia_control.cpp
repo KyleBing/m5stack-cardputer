@@ -159,7 +159,15 @@ void mijiaAdjustBright(const MijiaDevice* dev, MijiaUiState& state, const int de
 
     int target = state.extra_known ? state.bright : 50;
     target = clampInt(target + delta, 1, 100);
+    mijiaSetBrightPercent(dev, state, target);
+}
 
+void mijiaSetBrightPercent(const MijiaDevice* dev, MijiaUiState& state, const int percent) {
+    if (dev == nullptr) {
+        return;
+    }
+
+    const int target = clampInt(percent, 1, 100);
     strncpy(state.status, "bright...", sizeof(state.status));
     const MiioResult result = miioSetBright(dev->ip, dev->token, target);
     if (result.ok) {

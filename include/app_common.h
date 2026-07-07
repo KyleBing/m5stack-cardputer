@@ -45,3 +45,6 @@ void releaseConfigWifi();
 
 // 获取当前按下的可打印字符
 String getPressedKey();
+
+// 翻页键：-1 上一页，0 无，1 下一页（方向键 / ; , . / / [ ]）
+int getMenuNavDelta(const Keyboard_Class::KeysState& status);

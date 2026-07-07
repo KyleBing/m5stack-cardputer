@@ -8,6 +8,16 @@
 
 static constexpr uint16_t MIIO_PORT = 54321;
 static constexpr int MIIO_TIMEOUT_MS = 2000;
+static constexpr int MIIO_QUERY_TIMEOUT_MS = 1000;
+
+static uint32_t g_query_deadline_ms = 0;
+
+// 状态查询共用总超时（握手 + 命令）
+class MiioQueryScope {
+public:
+    explicit MiioQueryScope(const uint32_t timeout_ms) { g_query_deadline_ms = millis() + timeout_ms; }
+    ~MiioQueryScope() { g_query_deadline_ms = 0; }
+};
 
 static WiFiUDP g_udp;
 static uint8_t g_token[16];
@@ -114,7 +124,12 @@ static int udpSendTo(const char* ip_str, const uint8_t* packet, const size_t pac
         return -1;
     }
 
-    const uint32_t deadline = millis() + MIIO_TIMEOUT_MS;
+    const uint32_t deadline =
+        g_query_deadline_ms > 0 ? g_query_deadline_ms : (millis() + MIIO_TIMEOUT_MS);
+    if (static_cast<int32_t>(millis() - deadline) >= 0) {
+        strncpy(g_last_error, "timeout", sizeof(g_last_error));
+        return -1;
+    }
     while (static_cast<int32_t>(millis() - deadline) < 0) {
         const int len = g_udp.parsePacket();
         if (len > 0) {
@@ -280,6 +295,7 @@ static bool parseBoolResult(const char* json, bool& value) {
 }
 
 MiioResult miioGetPower(const char* ip, const char* token_hex, bool& on) {
+    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
     MiioResult result{};
     if (!miioParseTokenHex(token_hex, g_token)) {
         setResult(result, false, "bad token");
@@ -408,6 +424,7 @@ static bool parseIntAt(const char* json, const int index, int& value) {
 
 MiioResult miioGetLightStatus(const char* ip, const char* token_hex, bool& on, int& bright,
                               bool& bright_known) {
+    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
     MiioResult result{};
     bright_known = false;
 
@@ -468,6 +485,7 @@ MiioResult miioSetBright(const char* ip, const char* token_hex, const int bright
 
 MiioResult miioFanP5GetStatus(const char* ip, const char* token_hex, bool& on, int& speed,
                               bool& roll, int& mode) {
+    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
     char resp[384];
     if (!miioParseTokenHex(token_hex, g_token)) {
         MiioResult result{};
@@ -575,6 +593,7 @@ MiioResult miioFanP5SetMode(const char* ip, const char* token_hex, const char* m
 }
 
 MiioResult miioFanGetStatus(const char* ip, const char* token_hex, bool& on, int& speed_level) {
+    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
     char resp[256];
     if (!miioParseTokenHex(token_hex, g_token)) {
         MiioResult result{};
@@ -643,6 +662,7 @@ static bool readMiotValue(JsonVariant item, int& out_int, bool& out_bool, bool& 
 
 MiioResult miioF20GetStatus(const char* ip, const char* token_hex, const char* did, bool& on,
                             int& mode, int& fan_level, int& aqi) {
+    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
     char params[256];
     snprintf(params, sizeof(params),
              "[{\"did\":\"%s\",\"siid\":2,\"piid\":1},{\"did\":\"%s\",\"siid\":2,\"piid\":4},"

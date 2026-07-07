@@ -138,26 +138,6 @@ static int getBlePageCount() {
     return (bleScanCount + BLE_SCAN_PAGE_SIZE - 1) / BLE_SCAN_PAGE_SIZE;
 }
 
-static int getBlePageNavDelta(const Keyboard_Class::KeysState& status) {
-    for (const uint8_t hid : status.hid_keys) {
-        if (hid == 0x52 || hid == 0x50 || hid == 0x33 || hid == 0x36) {
-            return -1;
-        }
-        if (hid == 0x51 || hid == 0x4F || hid == 0x37 || hid == 0x38) {
-            return 1;
-        }
-    }
-    for (const char c : status.word) {
-        if (c == ';' || c == ',') {
-            return -1;
-        }
-        if (c == '.' || c == '/') {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 // 蓝牙设备类型：普通 BLE / Beacon / BLE 服务设备
 static const char* classifyBleCategory(BLEAdvertisedDevice& dev) {
     if (dev.haveManufacturerData() && !dev.haveServiceUUID()) {
@@ -374,7 +354,7 @@ bool handleBlePageNav(const Keyboard_Class::KeysState& status) {
     if (bleInfoMode || bleScanning) {
         return false;
     }
-    const int delta = getBlePageNavDelta(status);
+    const int delta = getMenuNavDelta(status);
     if (delta == 0) {
         return false;
     }

@@ -8,6 +8,7 @@
 static constexpr const char* AP_SSID = "Cardputer-Setup";
 static constexpr const char* AP_PASS = "cardputer";
 static constexpr const char* AP_WEB_URL = "http://192.168.4.1";
+static constexpr int WEB_DEVICE_MAX = MIJIA_DEVICE_MAX;
 
 enum class ConfigWebMode {
     NONE,
@@ -21,7 +22,36 @@ static ConfigWebMode g_mode = ConfigWebMode::NONE;
 static char g_web_url[32] = "";
 static char g_web_status[48] = "ready";
 
-// textarea 内容转义
+enum class WebStartupPhase {
+    IDLE,
+    CONNECTING,
+    READY,
+    FAILED,
+};
+
+static WebStartupPhase g_startup_phase = WebStartupPhase::IDLE;
+static uint32_t g_connect_deadline_ms = 0;
+static bool g_wifi_begin_sent = false;
+static bool g_force_ap_mode = false;
+
+static const char* DEFAULT_CONFIG = R"({
+  "wifi": {
+    "ssid": "your-ssid",
+    "password": "your-password"
+  },
+  "devices": [
+    {
+      "name": "living-room-light",
+      "id": "123456789",
+      "mac": "AA:BB:CC:DD:EE:FF",
+      "ip": "192.168.1.50",
+      "token": "0123456789abcdef0123456789abcdef",
+      "model": "yeelink.light.lamp2"
+    }
+  ]
+})";
+
+// textarea / HTML 属性转义
 static String escapeForTextarea(const String& text) {
     String out;
     out.reserve(text.length() + 16);
@@ -38,37 +68,217 @@ static String escapeForTextarea(const String& text) {
     return out;
 }
 
+// 嵌入 <script type="application/json"> 时防止截断标签
+static String sanitizeJsonForHtml(const String& json) {
+    String out;
+    out.reserve(json.length() + 16);
+    for (size_t i = 0; i < json.length(); i++) {
+        if (json[i] == '<' && i + 1 < json.length() && json[i + 1] == '/') {
+            out += "\\u003c";
+        } else {
+            out += json[i];
+        }
+    }
+    return out;
+}
+
+static String loadConfigText() {
+    String cfg;
+    if (!readAppConfigRaw(cfg) || cfg.isEmpty()) {
+        cfg = DEFAULT_CONFIG;
+    }
+    return cfg;
+}
+
 static void sendHtmlPage(const String& body) {
     String html;
-    html.reserve(body.length() + 512);
+    html.reserve(body.length() + 4096);
     html += F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
               "<meta name='viewport' content='width=device-width,initial-scale=1'>"
               "<title>Cardputer Config</title>"
-              "<style>body{font-family:sans-serif;margin:16px;max-width:720px}"
-              "textarea{width:100%;height:320px;font-family:monospace;font-size:13px}"
-              "button{padding:10px 18px;margin-top:10px}"
-              ".ok{color:#0a0}.err{color:#a00}pre{background:#111;color:#eee;padding:12px;"
-              "overflow:auto;font-size:12px}</style></head><body>");
+              "<style>"
+              "*{box-sizing:border-box}"
+              "body{font-family:system-ui,sans-serif;margin:0;padding:10px 12px;line-height:1.4;"
+              "width:100%;max-width:100%}"
+              "h1{font-size:1.2rem;margin:0 0 8px}"
+              "input,textarea{width:100%;padding:6px 8px;font-size:13px;border:1px solid #ccc;"
+              "border-radius:4px;font-family:inherit}"
+              "textarea{resize:vertical;min-height:28px;font-family:ui-monospace,monospace;"
+              "font-size:12px;line-height:1.35}"
+              "label{font-size:12px;color:#555;display:block;margin-bottom:10px}"
+              "button{padding:8px 14px;margin:0 6px 6px 0;border:1px solid #bbb;border-radius:4px;"
+              "background:#f5f5f5;cursor:pointer;font-size:13px}"
+              "button.primary{background:#1a73e8;color:#fff;border-color:#1a73e8}"
+              "button.danger{color:#c00;border-color:#e8b4b4;background:#fff5f5}"
+              "button.icon-btn{padding:3px 6px;font-size:12px;line-height:1;min-width:26px;"
+              "white-space:nowrap}"
+              ".topbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;"
+              "gap:8px;margin-bottom:8px}"
+              ".nav{font-size:13px;margin:0}"
+              ".nav a{color:#1a73e8}"
+              ".tabs{display:flex;gap:0;border-bottom:2px solid #e0e0e0;margin-bottom:12px}"
+              ".tab{padding:10px 18px;cursor:pointer;border:none;background:none;font-size:14px;"
+              "color:#666;border-bottom:2px solid transparent;margin-bottom:-2px}"
+              ".tab.active{color:#1a73e8;border-bottom-color:#1a73e8;font-weight:600}"
+              ".panel{display:none}"
+              ".panel.active{display:block}"
+              ".toolbar{margin:10px 0;display:flex;flex-wrap:wrap;align-items:center;gap:6px}"
+              ".toolbar .count{font-size:13px;color:#666;margin-left:auto}"
+              ".table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}"
+              "table.dev-table{width:100%;min-width:948px;border-collapse:collapse;table-layout:fixed}"
+              ".dev-table th,.dev-table td{border:1px solid #e0e0e0;padding:4px;vertical-align:top;"
+              "background:#fff}"
+              ".dev-table th{background:#f5f5f5;font-size:12px;font-weight:600;text-align:left;"
+              "padding:6px 4px}"
+              ".dev-table tr:nth-child(even) td{background:#fafafa}"
+              ".dev-table tr:hover td{background:#e3f2fd!important}"
+              ".dev-table .col-idx{width:36px;text-align:center;color:#888;font-size:12px;"
+              "vertical-align:middle}"
+              ".dev-table .col-act{width:168px;vertical-align:middle}"
+              ".dev-table .col-act .act-stack{display:flex;flex-direction:row;flex-wrap:nowrap;"
+              "gap:3px;align-items:center}"
+              ".dev-table .col-act button{width:auto;margin:0;flex-shrink:0}"
+              ".dev-table .col-name{width:14%}"
+              ".dev-table .col-ip{width:11%}"
+              ".dev-table .col-token{width:22%}"
+              ".dev-table .col-model{width:18%}"
+              ".dev-table .col-id{width:10%}"
+              ".dev-table .col-mac{width:13%}"
+              ".wifi-grid{max-width:480px}"
+              ".save-bar{margin-top:14px;padding-top:12px;border-top:1px solid #e0e0e0}"
+              ".ok{color:#0a0}.err{color:#a00}"
+              "pre{background:#111;color:#eee;padding:12px;overflow:auto;font-size:12px}"
+              "textarea.json-editor{height:min(70vh,520px);font-family:ui-monospace,monospace}"
+              "</style></head><body>");
     html += body;
     html += F("</body></html>");
     g_server.send(200, "text/html", html);
 }
 
-static void handleRoot() {
-    String cfg;
-    if (!readAppConfigRaw(cfg) || cfg.isEmpty()) {
-        cfg = F("{\n  \"wifi\": {\n    \"ssid\": \"your-ssid\",\n    \"password\": \"your-password\"\n  },\n  \"devices\": [\n    {\n      \"name\": \"living-room-light\",\n      \"id\": \"123456789\",\n      \"mac\": \"AA:BB:CC:DD:EE:FF\",\n      \"ip\": \"192.168.1.50\",\n      \"token\": \"0123456789abcdef0123456789abcdef\",\n      \"model\": \"yeelink.light.lamp2\"\n    }\n  ]\n}");
-    }
+// 表单编辑页（Tab：WiFi / 米家设备）
+static void handleFormRoot() {
+    const String cfg = sanitizeJsonForHtml(loadConfigText());
+
+    String body;
+    body.reserve(cfg.length() + 8192);
+    body += F("<div class='topbar'><h1>Cardputer Config</h1>"
+              "<p class='nav'><a href='/advanced'>高级 JSON</a> · "
+              "<a href='/example'>示例</a></p></div>"
+              "<form id='save-form' method='POST' action='/save'>"
+              "<input type='hidden' name='config' id='config-payload'>"
+              "<div class='tabs'>"
+              "<button type='button' class='tab active' data-tab='wifi'>WiFi</button>"
+              "<button type='button' class='tab' data-tab='devices'>米家设备</button>"
+              "</div>"
+              "<div id='panel-wifi' class='panel active'>"
+              "<div class='wifi-grid'>"
+              "<label>SSID<input id='wifi-ssid' autocomplete='off'></label>"
+              "<label>密码<input id='wifi-pass' autocomplete='off'></label>"
+              "</div></div>"
+              "<div id='panel-devices' class='panel'>"
+              "<div class='toolbar'>"
+              "<button type='button' id='btn-add'>+ 添加设备</button>"
+              "<span class='count' id='dev-count'></span>"
+              "</div>"
+              "<div class='table-wrap'><table class='dev-table'>"
+              "<thead><tr>"
+              "<th class='col-idx'>#</th>"
+              "<th class='col-name'>名称</th>"
+              "<th class='col-act'>操作</th>"
+              "<th class='col-ip'>IP</th>"
+              "<th class='col-token'>Token</th>"
+              "<th class='col-model'>型号</th>"
+              "<th class='col-id'>ID</th>"
+              "<th class='col-mac'>MAC</th>"
+              "</tr></thead>"
+              "<tbody id='dev-tbody'></tbody>"
+              "</table></div></div>"
+              "<div class='save-bar'>"
+              "<button type='submit' class='primary' id='btn-save'>保存到设备</button>"
+              "</div></form>"
+              "<script type='application/json' id='cfg-data'>");
+    body += cfg;
+    body += F("</script><script>");
+    body += F("const DEV_MAX=");
+    body += WEB_DEVICE_MAX;
+    body += F(";");
+    body += F(
+        "let cfg={wifi:{ssid:'',password:''},devices:[]};"
+        "function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/\"/g,'&quot;')"
+        ".replace(/</g,'&lt;');}"
+        "function ta(f,v){return `<textarea data-f='${f}' rows='1'>${esc(v)}</textarea>`;}"
+        "function collect(){cfg.wifi.ssid=document.getElementById('wifi-ssid').value;"
+        "cfg.wifi.password=document.getElementById('wifi-pass').value;cfg.devices=[];"
+        "document.querySelectorAll('#dev-tbody tr').forEach(row=>{"
+        "const d={};row.querySelectorAll('[data-f]').forEach(el=>{d[el.dataset.f]=el.value;});"
+        "cfg.devices.push(d);});}"
+        "function render(){const tb=document.getElementById('dev-tbody');tb.innerHTML='';"
+        "cfg.devices.forEach((d,i)=>{const tr=document.createElement('tr');tr.dataset.i=i;"
+        "tr.innerHTML=`<td class='col-idx'>${i+1}</td>"
+        "<td class='col-name'>${ta('name',d.name)}</td>"
+        "<td class='col-act'><div class='act-stack'>"
+        "<button type='button' class='icon-btn' data-act='up' title='上移'>↑</button>"
+        "<button type='button' class='icon-btn' data-act='down' title='下移'>↓</button>"
+        "<button type='button' class='icon-btn' data-act='top' title='置顶'>顶</button>"
+        "<button type='button' class='icon-btn' data-act='bottom' title='置底'>底</button>"
+        "<button type='button' class='danger icon-btn' data-act='del' title='删除'>删</button>"
+        "</div></td>"
+        "<td class='col-ip'>${ta('ip',d.ip)}</td>"
+        "<td class='col-token'>${ta('token',d.token)}</td>"
+        "<td class='col-model'>${ta('model',d.model)}</td>"
+        "<td class='col-id'>${ta('id',d.id)}</td>"
+        "<td class='col-mac'>${ta('mac',d.mac)}</td>`;tb.appendChild(tr);});"
+        "document.getElementById('dev-count').textContent=`共 ${cfg.devices.length} / ${DEV_MAX} 台`;}"
+        "function move(i,d){collect();const j=i+d;if(j<0||j>=cfg.devices.length)return;"
+        "[cfg.devices[i],cfg.devices[j]]=[cfg.devices[j],cfg.devices[i]];render();}"
+        "function moveTop(i){collect();if(i<=0)return;"
+        "const item=cfg.devices.splice(i,1)[0];cfg.devices.unshift(item);render();}"
+        "function moveBottom(i){collect();if(i>=cfg.devices.length-1)return;"
+        "const item=cfg.devices.splice(i,1)[0];cfg.devices.push(item);render();}"
+        "function switchTab(id){document.querySelectorAll('.tab').forEach(t=>{"
+        "t.classList.toggle('active',t.dataset.tab===id);});"
+        "document.querySelectorAll('.panel').forEach(p=>{"
+        "p.classList.toggle('active',p.id==='panel-'+id);});}"
+        "function init(){try{cfg=JSON.parse(document.getElementById('cfg-data').textContent);}"
+        "catch(e){cfg={wifi:{ssid:'',password:''},devices:[]};}"
+        "if(!cfg.wifi)cfg.wifi={ssid:'',password:''};"
+        "if(!cfg.devices)cfg.devices=[];"
+        "document.getElementById('wifi-ssid').value=cfg.wifi.ssid||'';"
+        "document.getElementById('wifi-pass').value=cfg.wifi.password||'';"
+        "render();"
+        "document.querySelectorAll('.tab').forEach(t=>{"
+        "t.onclick=()=>switchTab(t.dataset.tab);});"
+        "document.getElementById('btn-add').onclick=()=>{collect();"
+        "if(cfg.devices.length>=DEV_MAX){alert('最多 '+DEV_MAX+' 台设备');return;}"
+        "cfg.devices.push({name:'',id:'',mac:'',ip:'',token:'',model:''});render();"
+        "switchTab('devices');};"
+        "document.getElementById('dev-tbody').onclick=e=>{const b=e.target.closest('button');"
+        "if(!b)return;const i=+b.closest('tr').dataset.i;"
+        "if(b.dataset.act==='up')move(i,-1);"
+        "else if(b.dataset.act==='down')move(i,1);"
+        "else if(b.dataset.act==='top')moveTop(i);"
+        "else if(b.dataset.act==='bottom')moveBottom(i);"
+        "else if(b.dataset.act==='del'){collect();cfg.devices.splice(i,1);render();}};"
+        "document.getElementById('save-form').onsubmit=()=>{collect();"
+        "document.getElementById('config-payload').value=JSON.stringify(cfg,null,2);};}"
+        "init();");
+    body += F("</script>");
+    sendHtmlPage(body);
+}
+
+// 高级 JSON 编辑页
+static void handleAdvancedRoot() {
+    const String cfg = loadConfigText();
 
     String body;
     body.reserve(cfg.length() + 512);
-    body += F("<h1>Cardputer Config</h1>"
-              "<p>连接热点后编辑并保存 <code>config.json</code>。</p>"
+    body += F("<h1>高级 JSON 编辑</h1>"
+              "<p class='nav'><a href='/'>← 返回表单编辑</a> · "
+              "<a href='/example'>示例格式</a></p>"
               "<form method='POST' action='/save'>"
-              "<textarea name='config'>");
+              "<textarea class='json-editor' name='config'>");
     body += escapeForTextarea(cfg);
-    body += F("</textarea><br><button type='submit'>保存到设备</button></form>"
-              "<p><a href='/example'>查看示例格式</a></p>");
+    body += F("</textarea><br><button type='submit' class='primary'>保存到设备</button></form>");
     sendHtmlPage(body);
 }
 
@@ -86,43 +296,78 @@ static void handleSave() {
         String body = F("<h1>已保存</h1><p class='ok'>config.json 写入成功。</p>"
                         "<p>设备数: ");
         body += getAppConfig().device_count;
-        body += F("</p><p><a href='/'>返回编辑</a></p>");
+        body += F("</p><p><a href='/'>返回表单编辑</a> · "
+                  "<a href='/advanced'>高级 JSON</a></p>");
         sendHtmlPage(body);
     } else {
         strncpy(g_web_status, "json error", sizeof(g_web_status));
         String body = F("<h1>保存失败</h1><p class='err'>JSON 格式无效，请检查后重试。</p>"
-                        "<p><a href='/'>返回编辑</a></p>");
+                        "<p><a href='/'>返回表单编辑</a> · "
+                        "<a href='/advanced'>高级 JSON</a></p>");
         sendHtmlPage(body);
     }
 }
 
 static void handleExample() {
-    const char* example = R"({
-  "wifi": {
-    "ssid": "your-ssid",
-    "password": "your-password"
-  },
-  "devices": [
-    {
-      "name": "台灯",
-      "id": "434412341",
-      "mac": "B4:60:ED:03:2E:8A",
-      "ip": "192.168.1.50",
-      "token": "0123456789abcdef0123456789abcdef",
-      "model": "yeelink.light.lamp2"
+    String body = F("<h1>示例 config.json</h1><p>米家控制使用 <code>ip</code> + <code>token</code>，"
+                    "开关命令为 <code>set_power</code>。</p><pre>");
+    body += DEFAULT_CONFIG;
+    body += F("</pre><p><a href='/'>返回表单编辑</a></p>");
+    sendHtmlPage(body);
+}
+
+// 重置并进入连接流程
+static void beginWebStartup(const bool force_ap) {
+    if (g_running) {
+        g_server.stop();
+        if (g_mode == ConfigWebMode::AP) {
+            WiFi.softAPdisconnect(true);
+        }
+        g_running = false;
+        g_mode = ConfigWebMode::NONE;
+        g_web_url[0] = '\0';
     }
-  ]
-})";
-  String body = F("<h1>示例 config.json</h1><p>米家控制使用 <code>ip</code> + <code>token</code>，"
-                  "开关命令为 <code>set_power</code>。</p><pre>");
-  body += example;
-  body += F("</pre><p><a href='/'>返回编辑</a></p>");
-  sendHtmlPage(body);
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+
+    g_force_ap_mode = force_ap;
+    g_startup_phase = WebStartupPhase::CONNECTING;
+    g_wifi_begin_sent = false;
+    g_connect_deadline_ms = 0;
+    strncpy(g_web_status, "starting", sizeof(g_web_status));
+}
+
+// 开始尝试连接路由器（非阻塞）
+static void startWifiConnectAttempt() {
+    const AppConfig& cfg = getAppConfig();
+    if (!g_force_ap_mode && cfg.loaded && cfg.wifi_ssid[0] != '\0') {
+        WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
+        WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
+        g_connect_deadline_ms = millis() + 12000;
+        strncpy(g_web_status, "wifi...", sizeof(g_web_status));
+    } else {
+        // 无 WiFi 配置或强制 AP：立即走热点
+        g_connect_deadline_ms = millis();
+        strncpy(g_web_status, "ap...", sizeof(g_web_status));
+    }
+    g_wifi_begin_sent = true;
+}
+
+// 连接中动画省略号
+static void loadingDots(char* buf, const size_t buf_size) {
+    const int n = static_cast<int>((millis() / 400) % 4);
+    size_t i = 0;
+    for (; i < static_cast<size_t>(n) && i + 1 < buf_size; i++) {
+        buf[i] = '.';
+    }
+    buf[i] = '\0';
 }
 
 // 注册 HTTP 路由
 static void registerWebRoutes() {
-    g_server.on("/", HTTP_GET, handleRoot);
+    g_server.on("/", HTTP_GET, handleFormRoot);
+    g_server.on("/advanced", HTTP_GET, handleAdvancedRoot);
     g_server.on("/save", HTTP_POST, handleSave);
     g_server.on("/example", HTTP_GET, handleExample);
     g_server.onNotFound([]() { g_server.send(404, "text/plain", "not found"); });
@@ -165,41 +410,61 @@ static bool startApConfigWebServer() {
 }
 
 bool startConfigWebServer() {
-    if (g_running) {
-        return true;
-    }
-
-    // WiFi 默认关闭，有配置时先尝试连路由器再走局域网
-    const AppConfig& cfg = getAppConfig();
-    if (WiFi.status() != WL_CONNECTED && cfg.loaded && cfg.wifi_ssid[0] != '\0') {
-        ensureConfigWifi();
-    }
-
-    // 优先走局域网 IP，手机无需切热点
-    if (startStaConfigWebServer()) {
-        return true;
-    }
-    return startApConfigWebServer();
+    beginWebStartup(false);
+    return true;
 }
 
 void stopConfigWebServer() {
-    if (!g_running) {
-        return;
-    }
-    g_server.stop();
-
-    if (g_mode == ConfigWebMode::AP) {
-        WiFi.softAPdisconnect(true);
+    if (g_running) {
+        g_server.stop();
+        if (g_mode == ConfigWebMode::AP) {
+            WiFi.softAPdisconnect(true);
+        }
     }
     releaseConfigWifi();
 
     g_running = false;
     g_mode = ConfigWebMode::NONE;
     g_web_url[0] = '\0';
+    g_startup_phase = WebStartupPhase::IDLE;
+    g_wifi_begin_sent = false;
     strncpy(g_web_status, "stopped", sizeof(g_web_status));
 }
 
-void handleConfigWebServer() {
+// 推进连接并在就绪后处理 HTTP
+void updateWebApp() {
+    if (g_startup_phase == WebStartupPhase::CONNECTING) {
+        if (!g_wifi_begin_sent) {
+            startWifiConnectAttempt();
+        }
+
+        if (!g_force_ap_mode && WiFi.status() == WL_CONNECTED) {
+            if (startStaConfigWebServer()) {
+                g_startup_phase = WebStartupPhase::READY;
+                drawWebApp();
+            } else {
+                g_startup_phase = WebStartupPhase::FAILED;
+                strncpy(g_web_status, "sta fail", sizeof(g_web_status));
+                drawWebApp();
+            }
+        } else if (g_force_ap_mode || static_cast<int32_t>(millis() - g_connect_deadline_ms) >= 0) {
+            if (startApConfigWebServer()) {
+                g_startup_phase = WebStartupPhase::READY;
+                drawWebApp();
+            } else {
+                g_startup_phase = WebStartupPhase::FAILED;
+                drawWebApp();
+            }
+        } else {
+            static uint32_t last_draw_ms = 0;
+            if (millis() - last_draw_ms >= 400) {
+                last_draw_ms = millis();
+                drawWebApp();
+            }
+        }
+        return;
+    }
+
     if (g_running) {
         g_server.handleClient();
     }
@@ -241,61 +506,100 @@ static const char* stripHttpPrefix(const char* url) {
 
 void drawWebApp() {
     beginAppScreen("Config Setup");
-    M5Cardputer.Display.setTextSize(2);
 
     int y = APP_CONTENT_Y;
-    const auto drawWebLine = [&](const char* label, const char* value) {
-        drawInfoLineAt(APP_CONTENT_X, y, label, value, 2);
+
+    const auto drawLine1x = [&](const char* label, const char* value) {
+        drawInfoLineAt(APP_CONTENT_X, y, label, value, 1);
+        y += INFO_LINE_H;
+    };
+
+    // label / value 均为 2x
+    const auto drawLineValue2x = [&](const char* label, const char* value) {
+        M5Cardputer.Display.setTextSize(2);
+        M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+        M5Cardputer.Display.print(label);
+        M5Cardputer.Display.print(": ");
+        const int value_x = M5Cardputer.Display.getCursorX();
+        M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
+        M5Cardputer.Display.setCursor(value_x, y);
+        M5Cardputer.Display.println(value);
         y += infoLineHeight(2);
     };
 
+    const auto drawKeyHint = [&](const char key, const char* text) {
+        int cx = APP_CONTENT_X + drawKeyBadge(APP_CONTENT_X, y, key, 1);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, y);
+        M5Cardputer.Display.print(text);
+        y += INFO_LINE_H;
+    };
+
+    // 连接中
+    if (g_startup_phase == WebStartupPhase::CONNECTING) {
+        char dots[5];
+        loadingDots(dots, sizeof(dots));
+        char status[20];
+        snprintf(status, sizeof(status), "%s%s", g_web_status, dots);
+        drawLine1x("status", status);
+
+        const AppConfig& cfg = getAppConfig();
+        if (!g_force_ap_mode && cfg.loaded && cfg.wifi_ssid[0] != '\0') {
+            drawLine1x("wifi", cfg.wifi_ssid);
+            drawLine1x("plan", "LAN then AP");
+        } else {
+            drawLine1x("plan", "AP hotspot");
+        }
+
+        drawKeyHint('a', "skip to AP mode");
+        return;
+    }
+
+    if (g_startup_phase == WebStartupPhase::FAILED) {
+        drawLine1x("status", "failed");
+        drawLine1x("state", g_web_status);
+        drawKeyHint('a', "for AP");
+        return;
+    }
+
     if (!isConfigWebServerRunning()) {
-        drawWebLine("status", "offline");
-        drawWebLine("hint", "re-enter u");
+        drawLine1x("status", "offline");
+        drawLine1x("hint", "re-enter u");
         return;
     }
 
     if (isConfigWebStaMode()) {
-        drawWebLine("mode", "lan");
-        drawWebLine("url", stripHttpPrefix(getConfigWebUrl()));
+        drawLineValue2x("mode", "LAN");
+        drawLineValue2x("url", stripHttpPrefix(getConfigWebUrl()));
+        drawLineValue2x("state", getConfigWebStatus());
+        drawKeyHint('a', "switch to AP hotspot");
     } else {
-        drawWebLine("mode", "ap");
-        drawWebLine("ap", getConfigWebApSsid());
-        drawWebLine("pass", getConfigWebApPass());
-        drawWebLine("url", stripHttpPrefix(getConfigWebUrl()));
+        drawLine1x("mode", "AP");
+        drawLineValue2x("ssid", getConfigWebApSsid());
+        drawLineValue2x("pass", getConfigWebApPass());
+        drawLineValue2x("url", stripHttpPrefix(getConfigWebUrl()));
+        drawLine1x("state", getConfigWebStatus());
+        drawLine1x("hint", "phone connect AP");
+        drawLine1x("hint", "open url in browser");
+        drawKeyHint('l', "retry LAN mode");
     }
-    drawWebLine("state", getConfigWebStatus());
+}
 
-    const AppConfig& cfg = getAppConfig();
-    if (cfg.loaded) {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%d", cfg.device_count);
-        drawWebLine("mi devices", buf);
-    } else {
-        drawWebLine("mi devices", "none");
+void handleWebApp(const String& key) {
+    if (key == "a") {
+        beginWebStartup(true);
+        drawWebApp();
+        return;
     }
-
-    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    if (isConfigWebStaMode()) {
-        M5Cardputer.Display.println("same wifi open url");
-    } else {
-        M5Cardputer.Display.println("phone connect AP");
-        y += infoLineHeight(2);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-        M5Cardputer.Display.println("open url in browser");
+    if (key == "l" && g_startup_phase == WebStartupPhase::READY && !isConfigWebStaMode()) {
+        beginWebStartup(false);
+        drawWebApp();
     }
 }
 
 void enterWebApp() {
-    if (startConfigWebServer()) {
-        drawWebApp();
-    } else {
-        beginAppScreen("Config Setup");
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-        M5Cardputer.Display.setTextColor(RED, BLACK);
-        M5Cardputer.Display.println("AP start failed");
-    }
+    beginWebStartup(false);
+    drawWebApp();
 }

@@ -1,13 +1,15 @@
 #pragma once
 
-// 启动 Web 配网：已连路由器时用 STA IP，否则开 AP 热点
+#include <WString.h>
+
+// 启动 Web 配网（非阻塞，由 updateWebApp 推进）
 bool startConfigWebServer();
 
-// 停止 Web 服务；AP 模式会尝试恢复 config 中的 WiFi
+// 停止 Web 服务
 void stopConfigWebServer();
 
-// loop 中轮询 HTTP 请求
-void handleConfigWebServer();
+// loop 中轮询连接进度与 HTTP 请求
+void updateWebApp();
 
 bool isConfigWebServerRunning();
 
@@ -21,3 +23,4 @@ const char* getConfigWebStatus();
 
 void drawWebApp();
 void enterWebApp();
+void handleWebApp(const String& key);
