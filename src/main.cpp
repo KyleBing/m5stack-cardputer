@@ -6,8 +6,8 @@
 #include "app_web.h"
 #include "app_wifi.h"
 #include "app_mijia.h"
+#include "app_ble.h"
 #include "app_connectivity.h"
-#include <BLEDevice.h>
 #include <WiFi.h>
 #include <esp_chip_info.h>
 #include <esp_system.h>
@@ -43,6 +43,7 @@ enum class AppState {
     BLE,
     DISP,
     CIRCLE,
+    ICONS,
     SLEEP,
     MIJIA,
     WEB,
@@ -72,10 +73,11 @@ static const MenuItem MENU_ITEMS[] = {
     {'e', "ExI2", "ExI2", AppState::EX_I2C},
     {'w', "WiFi", "WiFi", AppState::WIFI},
     {'m', "Mij", "Mijia", AppState::MIJIA},
-    {'u', "Web", "Config Web", AppState::WEB},
+    {'u', "Cfg", "Config Setup", AppState::WEB},
     {'b', "BLE", "BLE", AppState::BLE},
     {'d', "Disp", "Display", AppState::DISP},
     {'c', "Circ", "Circle", AppState::CIRCLE},
+    {'a', "Icn", "Icons", AppState::ICONS},
 };
 
 static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
@@ -267,6 +269,17 @@ void drawVersionApp() {
 // ===== KEYBOARD =====
 
 static char lastKeyLabel[16] = "-";
+static char keyboardDisplayedKey[16] = "";
+static bool keyboardScreenReady = false;
+static bool keyboardLastFn = false;
+static bool keyboardLastShift = false;
+static bool keyboardLastOpt = false;
+static bool keyboardLastCtrl = false;
+static bool keyboardLastAlt = false;
+
+static constexpr int KEY_MOD_LINE_H = 18;
+static constexpr int KEY_MOD_COL_W = 88;
+static constexpr int KEY_PANEL_X = 96;
 
 String getKeyLabel(const Keyboard_Class::KeysState& status) {
     String key;
@@ -292,27 +305,59 @@ String getKeyLabel(const Keyboard_Class::KeysState& status) {
 }
 
 // 修饰键：仅字体颜色，2 倍字，无底色
-static void drawModLabel(const int x, int& y, const char* label, const bool active,
-                         const uint16_t activeColor) {
-    constexpr int lineH = 18;
+static void drawModLabelAt(const int x, const int y, const char* label, const bool active,
+                           const uint16_t activeColor) {
+    M5Cardputer.Display.fillRect(x, y, KEY_MOD_COL_W, KEY_MOD_LINE_H, BLACK);
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(active ? activeColor : DARKGREY, BLACK);
     M5Cardputer.Display.setCursor(x, y);
     M5Cardputer.Display.print(label);
-    y += lineH;
 }
 
-void drawKeyboardApp(const Keyboard_Class::KeysState& status) {
-    beginAppScreen("Key");
+// 仅修饰键状态变化时重绘对应行
+static void updateModLabelIfChanged(const int x, const int y, const char* label, const bool active,
+                                    bool& cache, const uint16_t activeColor) {
+    if (keyboardScreenReady && cache == active) {
+        return;
+    }
+    cache = active;
+    drawModLabelAt(x, y, label, active, activeColor);
+}
 
-    constexpr int modX = APP_CONTENT_X;
-    int modY = APP_CONTENT_Y;
+// 仅重绘右侧按键内容区
+static void updateKeyboardKeyPanel() {
+    const int keyPanelY = APP_CONTENT_Y;
+    const int keyPanelW = M5Cardputer.Display.width() - KEY_PANEL_X - 4;
+    const int keyPanelH = M5Cardputer.Display.height() - keyPanelY;
 
-    drawModLabel(modX, modY, "Fn", status.fn, ORANGE);
-    drawModLabel(modX, modY, "Aa", status.shift, BLUE);
-    drawModLabel(modX, modY, "opt", status.opt, GREEN);
-    drawModLabel(modX, modY, "ctrl", status.ctrl, WHITE);
-    drawModLabel(modX, modY, "alt", status.alt, WHITE);
+    if (keyboardScreenReady && strcmp(keyboardDisplayedKey, lastKeyLabel) == 0) {
+        return;
+    }
+
+    M5Cardputer.Display.fillRect(KEY_PANEL_X, keyPanelY, keyPanelW, keyPanelH, BLACK);
+
+    const size_t len = strlen(lastKeyLabel);
+    const int textSize = len <= 2 ? 4 : (len <= 4 ? 3 : 2);
+    M5Cardputer.Display.setTextSize(textSize);
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+    const int textH = 8 * textSize;
+    M5Cardputer.Display.drawCenterString(lastKeyLabel, KEY_PANEL_X + keyPanelW / 2,
+                                         keyPanelY + (keyPanelH - textH) / 2);
+    strncpy(keyboardDisplayedKey, lastKeyLabel, sizeof(keyboardDisplayedKey) - 1);
+    keyboardDisplayedKey[sizeof(keyboardDisplayedKey) - 1] = '\0';
+}
+
+void drawKeyboardApp(const Keyboard_Class::KeysState& status, const bool full_init) {
+    if (full_init || !keyboardScreenReady) {
+        beginAppScreen("Key");
+        keyboardScreenReady = true;
+        keyboardLastFn = !status.fn;
+        keyboardLastShift = !status.shift;
+        keyboardLastOpt = !status.opt;
+        keyboardLastCtrl = !status.ctrl;
+        keyboardLastAlt = !status.alt;
+        keyboardDisplayedKey[0] = '\0';
+    }
 
     const String label = getKeyLabel(status);
     if (label != "-") {
@@ -321,19 +366,28 @@ void drawKeyboardApp(const Keyboard_Class::KeysState& status) {
         Serial.println(label);
     }
 
-    constexpr int keyPanelX = 96;
-    const int keyPanelY = APP_CONTENT_Y;
-    const int keyPanelW = M5Cardputer.Display.width() - keyPanelX - 4;
-    const int keyPanelH = M5Cardputer.Display.height() - keyPanelY;
-    M5Cardputer.Display.fillRect(keyPanelX, keyPanelY, keyPanelW, keyPanelH, BLACK);
+    constexpr int modX = APP_CONTENT_X;
+    int modY = APP_CONTENT_Y;
+    updateModLabelIfChanged(modX, modY, "Fn", status.fn, keyboardLastFn, ORANGE);
+    modY += KEY_MOD_LINE_H;
+    updateModLabelIfChanged(modX, modY, "Aa", status.shift, keyboardLastShift, BLUE);
+    modY += KEY_MOD_LINE_H;
+    updateModLabelIfChanged(modX, modY, "opt", status.opt, keyboardLastOpt, GREEN);
+    modY += KEY_MOD_LINE_H;
+    updateModLabelIfChanged(modX, modY, "ctrl", status.ctrl, keyboardLastCtrl, WHITE);
+    modY += KEY_MOD_LINE_H;
+    updateModLabelIfChanged(modX, modY, "alt", status.alt, keyboardLastAlt, WHITE);
 
-    const size_t len = strlen(lastKeyLabel);
-    const int textSize = len <= 2 ? 4 : (len <= 4 ? 3 : 2);
-    M5Cardputer.Display.setTextSize(textSize);
-    M5Cardputer.Display.setTextColor(WHITE, BLACK);
-    const int textH = 8 * textSize;
-    M5Cardputer.Display.drawCenterString(lastKeyLabel, keyPanelX + keyPanelW / 2,
-                                         keyPanelY + (keyPanelH - textH) / 2);
+    updateKeyboardKeyPanel();
+}
+
+void enterKeyboardApp() {
+    keyboardScreenReady = false;
+    lastKeyLabel[0] = '-';
+    lastKeyLabel[1] = '\0';
+    keyboardDisplayedKey[0] = '\0';
+    Keyboard_Class::KeysState status{};
+    drawKeyboardApp(status, true);
 }
 
 // ===== BMI =====
@@ -873,7 +927,6 @@ static char powerLastCurr[12] = "";
 static char powerLastChg[8] = "";
 static char powerLastVbus[12] = "";
 static constexpr int POWER_TEXT_SIZE = 2;
-static constexpr int POWER_LINE_H = 16; // infoLineHeight(2)
 
 // 仅重绘变化的电源信息行
 static void updatePowerLine(const int y, const char* label, const char* value, char* cache,
@@ -882,7 +935,7 @@ static void updatePowerLine(const int y, const char* label, const char* value, c
         return;
     }
 
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, 220, POWER_LINE_H, BLACK);
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, 220, INFO_LINE_H_2X, BLACK);
     drawInfoLineAt(APP_CONTENT_X, y, label, value, POWER_TEXT_SIZE);
     strncpy(cache, value, cache_size - 1);
     cache[cache_size - 1] = '\0';
@@ -926,13 +979,13 @@ void drawPowerApp(const bool full_init) {
 
     int y = APP_CONTENT_Y;
     updatePowerLine(y, "bat", bat, powerLastBat, sizeof(powerLastBat));
-    y += POWER_LINE_H;
+    y += INFO_LINE_H_2X;
     updatePowerLine(y, "volt", volt, powerLastVolt, sizeof(powerLastVolt));
-    y += POWER_LINE_H;
+    y += INFO_LINE_H_2X;
     updatePowerLine(y, "curr", curr, powerLastCurr, sizeof(powerLastCurr));
-    y += POWER_LINE_H;
+    y += INFO_LINE_H_2X;
     updatePowerLine(y, "chg", chg, powerLastChg, sizeof(powerLastChg));
-    y += POWER_LINE_H;
+    y += INFO_LINE_H_2X;
     updatePowerLine(y, "vbus", vbus, powerLastVbus, sizeof(powerLastVbus));
 }
 
@@ -1195,17 +1248,7 @@ void drawI2cScanApp(m5::I2C_Class& bus, const char* title) {
 // 见 app_wifi.cpp
 
 // ===== BLE =====
-
-// BLE 状态
-void drawBleApp() {
-    ensureBleStack();
-
-    beginAppScreen("BLE");
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-    M5Cardputer.Display.printf("addr:\n%s\n", BLEDevice::getAddress().toString().c_str());
-    M5Cardputer.Display.println("name: Cardputer");
-    M5Cardputer.Display.println(isBleConnected() ? "client: yes" : "client: no");
-}
+// 见 app_ble.cpp
 
 // ===== DISP =====
 
@@ -1267,6 +1310,156 @@ void handleCircleApp(const String& key) {
     }
 }
 
+// ===== ICONS =====
+
+struct IconDemoItem {
+    const char* name;
+    int width;
+    int height;
+    void (*draw)(int x, int y);
+};
+
+static int iconDemoPage = 0;
+static constexpr int ICON_DEMO_ITEMS_PER_PAGE = 1;
+
+static void drawDemoLogo(const int x, const int y) { drawAppLogo(x, y, 24); }
+static void drawDemoArrowLeft(const int x, const int y) { drawIconArrowLeft(x, y + 4, WHITE); }
+static void drawDemoArrowRight(const int x, const int y) { drawIconArrowRight(x, y + 4, WHITE); }
+static void drawDemoArrowUp(const int x, const int y) { drawIconArrowUp(x, y + 4, WHITE); }
+static void drawDemoArrowDown(const int x, const int y) { drawIconArrowDown(x, y + 4, WHITE); }
+static void drawDemoArrowLeftRight(const int x, const int y) { drawIconArrowLeftRight(x, y + 4, WHITE); }
+static void drawDemoArrowUpDown(const int x, const int y) { drawIconArrowUpDown(x, y + 7, WHITE); }
+static void drawDemoSignalBars(const int x, const int y) { drawSignalBars(x, y, -56, WHITE); }
+static void drawDemoWifi(const int x, const int y) { drawIconWifi(x, y, -56, WHITE); }
+static void drawDemoBle(const int x, const int y) { drawIconBle(x, y, WHITE); }
+static void drawDemoChargingBolt(const int x, const int y) { drawIconChargingBolt(x, y, 12); }
+static void drawDemoBattery(const int x, const int y) { drawIconBattery(x, y, 75, false); }
+static void drawDemoPageDots(const int x, const int y) { drawIconPageDots(x, y + 2, 1, 4); }
+static void drawDemoInfoChip(const int x, const int y) { drawIconInfoChip(x, y, WHITE); }
+static void drawDemoInfoStorage(const int x, const int y) { drawIconInfoStorage(x, y, WHITE); }
+static void drawDemoInfoBattery(const int x, const int y) { drawIconInfoBattery(x, y, WHITE); }
+
+static const IconDemoItem ICON_DEMO_ITEMS[] = {
+    {"app logo", 24, 24, drawDemoLogo},
+    {"arrow left", ICON_ARROW_W, ICON_ARROW_H, drawDemoArrowLeft},
+    {"arrow right", ICON_ARROW_W, ICON_ARROW_H, drawDemoArrowRight},
+    {"arrow up", ICON_ARROW_W, ICON_ARROW_H, drawDemoArrowUp},
+    {"arrow down", ICON_ARROW_W, ICON_ARROW_H, drawDemoArrowDown},
+    {"arrow left-right", ICON_ARROW_LR_W, ICON_ARROW_H, drawDemoArrowLeftRight},
+    {"arrow up-down", ICON_ARROW_W, ICON_ARROW_UD_H, drawDemoArrowUpDown},
+    {"signal bars", ICON_SIGNAL_W, ICON_SIGNAL_H, drawDemoSignalBars},
+    {"wifi", ICON_WIFI_W, ICON_WIFI_H, drawDemoWifi},
+    {"ble", ICON_BLE_W, ICON_BLE_H, drawDemoBle},
+    {"charging bolt", 6, 12, drawDemoChargingBolt},
+    {"battery", getIconBatteryDisplayWidth(false), getIconBatteryBodyHeight(), drawDemoBattery},
+    {"page dots", 22, 4, drawDemoPageDots},
+    {"info chip", ICON_INFO_W, ICON_INFO_H, drawDemoInfoChip},
+    {"info storage", ICON_INFO_W, ICON_INFO_H, drawDemoInfoStorage},
+    {"info battery", ICON_INFO_W, ICON_INFO_H, drawDemoInfoBattery},
+};
+
+static int getIconDemoItemCount() {
+    return sizeof(ICON_DEMO_ITEMS) / sizeof(ICON_DEMO_ITEMS[0]);
+}
+
+static int getIconDemoPageCount() {
+    const int total = getIconDemoItemCount();
+    return (total + ICON_DEMO_ITEMS_PER_PAGE - 1) / ICON_DEMO_ITEMS_PER_PAGE;
+}
+
+// 上下左右都用于翻页：左/上上一页，右/下下一页
+static int getIconDemoNavDelta(const Keyboard_Class::KeysState& status) {
+    for (const uint8_t hid : status.hid_keys) {
+        if (hid == 0x52 || hid == 0x50 || hid == 0x33 || hid == 0x36) {
+            return -1;
+        }
+        if (hid == 0x51 || hid == 0x4F || hid == 0x37 || hid == 0x38) {
+            return 1;
+        }
+    }
+    for (const char c : status.word) {
+        if (c == ';' || c == ',') {
+            return -1;
+        }
+        if (c == '.' || c == '/') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void drawIconDemoApp() {
+    beginAppScreen("Icons");
+    const int page_count = getIconDemoPageCount();
+    if (iconDemoPage >= page_count) {
+        iconDemoPage = page_count - 1;
+    }
+    if (iconDemoPage < 0) {
+        iconDemoPage = 0;
+    }
+
+    int y = APP_CONTENT_Y;
+    char buf[32];
+    static const KeyHintItem nav_items[] = {
+        {';', "prev"},
+        {'.', "next"},
+    };
+    drawKeyHintsRow(APP_CONTENT_X, y, nav_items, sizeof(nav_items) / sizeof(nav_items[0]), 1,
+                    APP_COLOR_HINT);
+    snprintf(buf, sizeof(buf), "page %d/%d", iconDemoPage + 1, page_count);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X + 168, y);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.print(buf);
+    y += INFO_LINE_H + 4;
+
+    const int start = iconDemoPage * ICON_DEMO_ITEMS_PER_PAGE;
+    int end = start + ICON_DEMO_ITEMS_PER_PAGE;
+    const int total = getIconDemoItemCount();
+    if (end > total) {
+        end = total;
+    }
+
+    for (int i = start; i < end; i++) {
+        const IconDemoItem& item = ICON_DEMO_ITEMS[i];
+        const int row_y = y;
+
+        M5Cardputer.Display.setTextSize(2);
+        M5Cardputer.Display.setTextColor(WHITE, BLACK);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, row_y);
+        M5Cardputer.Display.printf("%02d %s", i + 1, item.name);
+
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, row_y + INFO_LINE_H_2X);
+        M5Cardputer.Display.printf("size %dx%d", item.width, item.height);
+
+        // 图标展示区域增加 1px 边框，方便查看图标轮廓占位
+        const int icon_x = APP_CONTENT_X + 170;
+        const int icon_y = row_y + 28;
+        M5Cardputer.Display.drawRect(icon_x - 1, icon_y - 1, item.width + 2, item.height + 2,
+                                     APP_COLOR_HINT);
+        item.draw(icon_x, icon_y);
+
+        y += 72;
+        M5Cardputer.Display.drawFastHLine(APP_CONTENT_X + 34, y - 2, 196, APP_COLOR_MUTED);
+    }
+}
+
+static void enterIconDemoApp() {
+    iconDemoPage = 0;
+    drawIconDemoApp();
+}
+
+static void handleIconDemoNav(const Keyboard_Class::KeysState& status) {
+    const int delta = getIconDemoNavDelta(status);
+    if (delta == 0) {
+        return;
+    }
+    const int page_count = getIconDemoPageCount();
+    iconDemoPage = (iconDemoPage + delta + page_count) % page_count;
+    drawIconDemoApp();
+}
+
 // ===== SLEEP =====
 
 enum class SleepPhase {
@@ -1291,11 +1484,11 @@ static void drawSleepPrompt(const int seconds_left) {
 
     char buf[8];
     snprintf(buf, sizeof(buf), "%ds", seconds_left);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setTextColor(APP_COLOR_WARN, BLACK);
+    M5Cardputer.Display.setTextSize(3);
+    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
     M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
     M5Cardputer.Display.print(buf);
-    y += 22;
+    y += 30;
 
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
@@ -1303,14 +1496,14 @@ static void drawSleepPrompt(const int seconds_left) {
     M5Cardputer.Display.println("wake: BtnA (GO)");
 }
 
-// 进入休眠提示流程（3 秒后再关屏）
+// 进入休眠提示流程（5 秒后再关屏）
 static void enterSleepApp() {
     currentState = AppState::SLEEP;
     sleepPhase = SleepPhase::PROMPT;
     sleepPromptMs = millis();
     sleepPromptLastSec = -1;
     M5Cardputer.Display.clear();
-    drawSleepPrompt(3);
+    drawSleepPrompt(5);
 }
 
 // 真正关屏休眠
@@ -1327,12 +1520,12 @@ static void updateSleepPrompt() {
     }
 
     const uint32_t elapsed = millis() - sleepPromptMs;
-    if (elapsed >= 3000) {
+    if (elapsed >= 5000) {
         enterDisplaySleep();
         return;
     }
 
-    const int sec_left = 3 - static_cast<int>(elapsed / 1000);
+    const int sec_left = 5 - static_cast<int>(elapsed / 1000);
     if (sec_left != sleepPromptLastSec) {
         sleepPromptLastSec = sec_left;
         drawSleepPrompt(sec_left);
@@ -1344,7 +1537,7 @@ static void updateSleepPrompt() {
 void enterApp(const AppState state) {
     currentState = state;
 
-    // Sleep 先显示 3 秒提示，再关屏
+    // Sleep 先显示 5 秒提示，再关屏
     if (state == AppState::SLEEP) {
         enterSleepApp();
         return;
@@ -1356,11 +1549,9 @@ void enterApp(const AppState state) {
         case AppState::VERSION:
             drawVersionApp();
             break;
-        case AppState::KEYBOARD: {
-            Keyboard_Class::KeysState status{};
-            drawKeyboardApp(status);
+        case AppState::KEYBOARD:
+            enterKeyboardApp();
             break;
-        }
         case AppState::BMI:
             bmiScreenReady = false;
             drawBmiApp();
@@ -1391,13 +1582,16 @@ void enterApp(const AppState state) {
             enterWifiApp();
             break;
         case AppState::BLE:
-            drawBleApp();
+            enterBleApp();
             break;
         case AppState::DISP:
             drawDisplayApp(0);
             break;
         case AppState::CIRCLE:
             drawCircleTestApp();
+            break;
+        case AppState::ICONS:
+            enterIconDemoApp();
             break;
         case AppState::SETTINGS:
             drawSettingsApp();
@@ -1496,6 +1690,12 @@ void loop() {
         }
     } else if (currentState == AppState::WIFI) {
         updateWifiApp();
+    } else if (currentState == AppState::BLE) {
+        static uint32_t lastBleUpdateMs = 0;
+        if (now - lastBleUpdateMs >= 500) {
+            lastBleUpdateMs = now;
+            updateBleApp();
+        }
     }
 
     if (currentState == AppState::RTC) {
@@ -1521,7 +1721,7 @@ void loop() {
                 }
                 break;
             case AppState::KEYBOARD:
-                drawKeyboardApp(M5Cardputer.Keyboard.keysState());
+                drawKeyboardApp(M5Cardputer.Keyboard.keysState(), false);
                 break;
             case AppState::SETTINGS:
                 if (M5Cardputer.Keyboard.isPressed()) {
@@ -1556,6 +1756,19 @@ void loop() {
             case AppState::MIJIA:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleMijiaApp(getPressedKey());
+                }
+                break;
+            case AppState::BLE:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+                    if (!handleBlePageNav(status)) {
+                        handleBleApp(getPressedKey());
+                    }
+                }
+                break;
+            case AppState::ICONS:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleIconDemoNav(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             default:

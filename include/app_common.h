@@ -5,6 +5,7 @@
 #include <WString.h>
 
 static constexpr int INFO_LINE_H = 10;
+static constexpr int INFO_LINE_H_2X = 18; // 16px 字高 + 2px 行间距
 static constexpr uint16_t INFO_LABEL_COLOR = APP_COLOR_LABEL;
 static constexpr uint16_t INFO_VALUE_COLOR = APP_COLOR_VALUE;
 // 指定字号下的行高（默认字体每级 8px）
@@ -23,6 +24,15 @@ bool isBatteryCharging();
 
 // 绘制按键字母块（菜单键色底 + 黑字），text_size 仅支持 1 或 2，返回占用宽度（含右侧间距）
 int drawKeyBadge(int x, int y, char key, int text_size = 1);
+
+struct KeyHintItem {
+    char key;
+    const char* text;
+};
+
+// 按键提示行：按键徽章 + 文案（例如 o on / f off）
+void drawKeyHintsRow(int x, int y, const KeyHintItem* items, int item_count, int text_size = 1,
+                     uint16_t color = APP_COLOR_HINT);
 
 // 提示小字：',' 左箭头，'.' 右箭头
 void drawHintText(int x, int y, const char* text, int text_size = 1);

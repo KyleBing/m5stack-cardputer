@@ -6,7 +6,8 @@
 
 static constexpr int MENU_LOGO_SIZE = 24;
 static constexpr int HEADER_STATUS_GAP = 4;
-static constexpr int APP_GO_BTN_W = 36;
+static constexpr int APP_BACK_BTN_W = ICON_BACK_W;
+static constexpr int HEADER_STATUS_CLEAR_PAD = 2;
 
 static int headerStatusIconY(const int icon_h) {
     return (APP_HEADER_H - icon_h) / 2;
@@ -41,7 +42,7 @@ static int getHeaderStatusWidth(const bool include_battery, const bool wifi, con
 // 从右向左绘制连接状态图标，在 header 内垂直居中
 static int drawHeaderStatusIcons(const int right_x, const bool include_battery) {
     const bool wifi = isWifiStaConnected();
-    const bool ble = isBleConnected();
+    const bool ble = isBleStackReady();
     const bool charging = isBatteryCharging();
     const int body_h = getIconBatteryBodyHeight();
 
@@ -70,19 +71,13 @@ static void clearHeaderStatusArea(const int left_x, const int right_x) {
     M5Cardputer.Display.fillRect(left_x, 0, right_x - left_x, APP_HEADER_H - 1, BLACK);
 }
 
-// 绘制右侧 BtnA(GO) 返回按钮样式
+// 绘制右侧 BtnA 返回图标：半个圆角矩形 + 左箭头
 static void drawBackButton(const int screen_w) {
-    constexpr int btn_w = APP_GO_BTN_W;
-    constexpr int btn_h = 18;
-    constexpr int btn_r = 4;
+    constexpr int btn_w = APP_BACK_BTN_W;
+    constexpr int btn_h = ICON_BACK_H;
     const int btn_x = screen_w - btn_w - 2;
     const int btn_y = (APP_HEADER_H - btn_h) / 2;
-
-    M5Cardputer.Display.fillRoundRect(btn_x, btn_y, btn_w, btn_h, btn_r, DARKGREY);
-    M5Cardputer.Display.drawRoundRect(btn_x, btn_y, btn_w, btn_h, btn_r, WHITE);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(WHITE, DARKGREY);
-    M5Cardputer.Display.drawCenterString("GO", btn_x + btn_w / 2, btn_y + 5);
+    drawIconBack(btn_x, btn_y, WHITE);
 }
 
 static void drawHeaderDivider(const int screen_w) {
@@ -98,7 +93,7 @@ void drawAppScreenHeader(const char* title) {
     M5Cardputer.Display.setCursor(4, (APP_HEADER_H - 16) / 2);
     M5Cardputer.Display.print(title);
 
-    const int status_right = screen_w - 2 - APP_GO_BTN_W - 4;
+    const int status_right = screen_w - 2 - APP_BACK_BTN_W - 4;
     drawHeaderStatusIcons(status_right, false);
     drawBackButton(screen_w);
     drawHeaderDivider(screen_w);
@@ -132,28 +127,40 @@ void drawMenuScreenHeader(const char* app_name, const int page, const int page_c
 }
 
 void updateMenuHeaderStatus(const int page_count) {
+    static int prev_width = 0;
     const int screen_w = M5Cardputer.Display.width();
     const int status_right = getMenuStatusRightX(screen_w, page_count);
     const bool wifi = isWifiStaConnected();
-    const bool ble = isBleConnected();
+    const bool ble = isBleStackReady();
     const bool charging = isBatteryCharging();
     const int width = getHeaderStatusWidth(true, wifi, ble, charging);
-    const int left_x = status_right - width;
+    const int clear_width = (width > prev_width) ? width : prev_width;
+    int left_x = status_right - clear_width - HEADER_STATUS_CLEAR_PAD;
+    if (left_x < 0) {
+        left_x = 0;
+    }
     clearHeaderStatusArea(left_x, status_right);
     drawHeaderStatusIcons(status_right, true);
     drawHeaderDivider(screen_w);
+    prev_width = width;
 }
 
 void updateAppHeaderStatus() {
+    static int prev_width = 0;
     const int screen_w = M5Cardputer.Display.width();
-    const int status_right = screen_w - 2 - APP_GO_BTN_W - 4;
+    const int status_right = screen_w - 2 - APP_BACK_BTN_W - 4;
     const bool wifi = isWifiStaConnected();
-    const bool ble = isBleConnected();
+    const bool ble = isBleStackReady();
     const int width = getHeaderStatusWidth(false, wifi, ble, false);
-    const int left_x = status_right - width;
+    const int clear_width = (width > prev_width) ? width : prev_width;
+    int left_x = status_right - clear_width - HEADER_STATUS_CLEAR_PAD;
+    if (left_x < 0) {
+        left_x = 0;
+    }
     clearHeaderStatusArea(left_x, status_right);
     drawHeaderStatusIcons(status_right, false);
     drawHeaderDivider(screen_w);
+    prev_width = width;
 }
 
 void updateMenuScreenBattery(const int page_count) {

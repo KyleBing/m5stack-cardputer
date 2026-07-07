@@ -28,6 +28,31 @@ int drawKeyBadge(const int x, const int y, char key, const int text_size) {
     return bw + gap;
 }
 
+void drawKeyHintsRow(const int x, const int y, const KeyHintItem* items, const int item_count,
+                     const int text_size, const uint16_t color) {
+    if (items == nullptr || item_count <= 0) {
+        return;
+    }
+
+    int cx = x;
+    M5Cardputer.Display.setTextSize(text_size);
+    M5Cardputer.Display.setTextColor(color, BLACK);
+
+    for (int i = 0; i < item_count; i++) {
+        const KeyHintItem& item = items[i];
+        cx += drawKeyBadge(cx, y, item.key, text_size);
+        M5Cardputer.Display.setCursor(cx, y);
+        M5Cardputer.Display.setTextColor(color, BLACK);
+        M5Cardputer.Display.print(item.text);
+        cx += M5Cardputer.Display.textWidth(item.text);
+        if (i != item_count - 1) {
+            M5Cardputer.Display.setCursor(cx, y);
+            M5Cardputer.Display.print(" ");
+            cx += M5Cardputer.Display.textWidth(" ");
+        }
+    }
+}
+
 // 提示小字：',' 左箭头，'.' 右箭头
 void drawHintText(const int x, const int y, const char* text, const int text_size) {
     const int size = (text_size == 2) ? 2 : 1;

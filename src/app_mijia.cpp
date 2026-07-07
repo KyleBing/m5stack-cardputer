@@ -128,11 +128,22 @@ static void drawMijiaRefreshHint(const int x, const int y) {
     M5Cardputer.Display.print("switch");
 }
 
+// 第一行提示：o/f/t/i 使用按键徽章样式，和 BLE 页面一致
+static void drawMijiaActionHints(const int x, const int y) {
+    static const KeyHintItem items[] = {
+        {'o', "on"},
+        {'f', "off"},
+        {'t', "toggle"},
+        {'i', "info"},
+    };
+    drawKeyHintsRow(x, y, items, sizeof(items) / sizeof(items[0]), 1, APP_COLOR_HINT);
+}
+
 // 按设备类型绘制操作提示
 static void drawMijiaHints(const MijiaDevice* dev, int y) {
     const MijiaDevKind kind = mijiaClassifyModel(dev->model);
 
-    drawHintText(APP_CONTENT_X, y, "o on f off t toggle i info");
+    drawMijiaActionHints(APP_CONTENT_X, y);
     y += INFO_LINE_H;
     drawMijiaRefreshHint(APP_CONTENT_X, y);
     y += INFO_LINE_H;

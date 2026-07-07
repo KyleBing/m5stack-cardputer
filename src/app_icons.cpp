@@ -48,11 +48,11 @@ void drawAppLogo(const int dest_x, const int dest_y, const int size) {
 // ===== 方向箭头 =====
 
 void drawIconArrowLeft(const int x, const int cy, const uint16_t color) {
-    M5Cardputer.Display.fillTriangle(x, cy - 3, x + 5, cy, x, cy + 3, color);
+    M5Cardputer.Display.fillTriangle(x + 5, cy - 3, x, cy, x + 5, cy + 3, color);
 }
 
 void drawIconArrowRight(const int x, const int cy, const uint16_t color) {
-    M5Cardputer.Display.fillTriangle(x + 5, cy - 3, x, cy, x + 5, cy + 3, color);
+    M5Cardputer.Display.fillTriangle(x, cy - 3, x + 5, cy, x, cy + 3, color);
 }
 
 void drawIconArrowUp(const int x, const int cy, const uint16_t color) {
@@ -75,6 +75,25 @@ void drawIconArrowLeftRight(const int x, const int cy, const uint16_t color) {
 void drawIconArrowUpDown(const int x, const int cy, const uint16_t color) {
     drawIconArrowUp(x, cy - 4, color);
     drawIconArrowDown(x, cy + 4, color);
+}
+
+// ===== 返回图标（header） =====
+
+void drawIconBack(const int x, const int y, const uint16_t color) {
+    const int cx = x + ICON_BACK_W / 2 + 1;
+    const int cy = y + ICON_BACK_H / 2 + 1;
+    constexpr int r = 5;
+
+    // 回退图标：左箭头 + 回弯圆弧（不绘制底框）
+    const int ay = cy - 5;
+    M5Cardputer.Display.drawLine(x + 5, ay, cx + 1, ay, color);
+    M5Cardputer.Display.fillTriangle(x + 2, ay, x + 6, ay - 4, x + 6, ay + 4, color);
+    for (int deg = -90; deg <= 90; deg++) {
+        const float rad = deg * 3.14159265f / 180.0f;
+        const int px = cx + static_cast<int>(r * cosf(rad));
+        const int py = cy + static_cast<int>(r * sinf(rad));
+        M5Cardputer.Display.drawPixel(px, py, color);
+    }
 }
 
 // ===== WiFi 信号条 =====
@@ -150,12 +169,31 @@ void drawIconWifi(const int x, const int y, const int rssi, const uint16_t color
 // ===== 蓝牙 =====
 
 void drawIconBle(const int x, const int y, const uint16_t color) {
-    const int cx = x + ICON_BLE_W / 2;
-    const int cy = y + ICON_BLE_H / 2;
-    M5Cardputer.Display.drawLine(cx - 3, cy - 4, cx - 3, cy + 4, color);
-    M5Cardputer.Display.drawLine(cx + 3, cy - 4, cx + 3, cy + 4, color);
-    M5Cardputer.Display.fillTriangle(cx - 3, cy - 4, cx + 3, cy - 1, cx - 3, cy - 1, color);
-    M5Cardputer.Display.fillTriangle(cx - 3, cy + 1, cx + 3, cy + 1, cx - 3, cy + 4, color);
+    // 设定基准坐标
+    // 高度 y 到 y+14，宽度 x 到 x+9
+    const int mid = x + 4;         // 中心纵轴
+    const int left = x + 1;        // 左侧边缘
+    const int right = x + 8;       // 右侧边缘
+    const int top = y + 1;         // 顶部留白
+    const int center = y + 7;      // 水平中心线
+    const int bottom = y + 13;     // 底部
+
+    // 1. 绘制核心竖线 (中心轴)
+    M5Cardputer.Display.drawLine(mid, top, mid, bottom, color);
+
+    // 2. 绘制右侧主菱形（两组折线）
+    // 上半部分右侧
+    M5Cardputer.Display.drawLine(mid, top + 1, right, y + 4, color);
+    M5Cardputer.Display.drawLine(right, y + 4, mid, center, color);
+    // 下半部分右侧
+    M5Cardputer.Display.drawLine(mid, center, right, y + 10, color);
+    M5Cardputer.Display.drawLine(right, y + 10, mid, bottom - 1, color);
+
+    // 3. 绘制左侧装饰线（对应右侧的折角）
+    // 上半部分左侧
+    M5Cardputer.Display.drawLine(left, y + 4, mid, center, color);
+    // 下半部分左侧
+    M5Cardputer.Display.drawLine(mid, center, left, y + 10, color);
 }
 
 // ===== 充电闪电 =====
@@ -261,6 +299,7 @@ void drawIconPageDots(const int x, const int cy, const int page, const int page_
 
 // ===== Info 列表图标 =====
 
+// CHIP
 void drawIconInfoChip(const int x, const int y, const uint16_t color) {
     M5Cardputer.Display.drawRoundRect(x + 4, y + 4, 16, 16, 2, color);
     for (int i = 0; i < 4; i++) {
@@ -272,6 +311,7 @@ void drawIconInfoChip(const int x, const int y, const uint16_t color) {
     M5Cardputer.Display.drawFastHLine(x + 8, y + 14, 8, color);
 }
 
+// STORAGE
 void drawIconInfoStorage(const int x, const int y, const uint16_t color) {
     M5Cardputer.Display.drawRoundRect(x + 5, y + 3, 14, 18, 2, color);
     M5Cardputer.Display.fillRect(x + 8, y + 6, 8, 3, color);
@@ -280,12 +320,27 @@ void drawIconInfoStorage(const int x, const int y, const uint16_t color) {
     }
 }
 
+// BATTERY
 void drawIconInfoBattery(const int x, const int y, const uint16_t color) {
+    // 更接近标准电池外观：电池头 + 矩形电池体 + 三段电量
     const int body_x = x + 4;
-    const int body_y = y + 6;
+    const int body_y = y + 7;
     const int body_w = 16;
-    const int body_h = 12;
-    M5Cardputer.Display.fillRect(x + 9, y + 4, 4, 3, color);
-    M5Cardputer.Display.drawRoundRect(body_x, body_y, body_w, body_h, 2, color);
-    M5Cardputer.Display.fillRect(body_x + 3, body_y + 3, 7, 6, color);
+    const int body_h = 10;
+    const int head_w = 4;
+    const int head_h = 4;
+    const int head_x = body_x + (body_w - head_w) / 2;
+    const int head_y = body_y - head_h;
+
+    // 电池头
+    M5Cardputer.Display.fillRect(head_x, head_y, head_w, head_h, color);
+    // 电池外框
+    M5Cardputer.Display.drawRect(body_x, body_y, body_w, body_h, color);
+
+    // 电量块（视觉上更像电池）
+    const int seg_y = body_y + 2;
+    const int seg_h = body_h - 4;
+    M5Cardputer.Display.fillRect(body_x + 2, seg_y, 3, seg_h, color);
+    M5Cardputer.Display.fillRect(body_x + 7, seg_y, 3, seg_h, color);
+    M5Cardputer.Display.fillRect(body_x + 12, seg_y, 2, seg_h, color);
 }

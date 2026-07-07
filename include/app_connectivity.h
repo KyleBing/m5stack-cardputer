@@ -12,5 +12,17 @@ bool isBleStackReady();
 // BLE 是否有客户端连接
 bool isBleConnected();
 
-// 启动 BLE 广播（BLE 应用调用）
+// 已连接客户端数量（未启动时返回 0）
+int getBleConnectedCount();
+
+// BLE 是否在广播
+bool isBleAdvertising();
+
+// 启动 BLE 广播
+void startBleStack();
+
+// 关闭 BLE 并释放栈
+void stopBleStack();
+
+// 兼容旧调用
 void ensureBleStack();

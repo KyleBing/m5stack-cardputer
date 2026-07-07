@@ -20,6 +20,11 @@ void drawIconArrowDown(int x, int cy, uint16_t color);
 void drawIconArrowLeftRight(int x, int cy, uint16_t color);
 void drawIconArrowUpDown(int x, int cy, uint16_t color);
 
+// ===== 返回图标（header） =====
+static constexpr int ICON_BACK_W = 28;
+static constexpr int ICON_BACK_H = 18;
+void drawIconBack(int x, int y, uint16_t color = 0xFFFF);
+
 // ===== WiFi 信号条（列表 RSSI） =====
 static constexpr int ICON_SIGNAL_W = 11;
 static constexpr int ICON_SIGNAL_H = 8;
@@ -40,7 +45,7 @@ void drawIconWifi(int x, int y, int rssi, uint16_t color = 0xFFFF);
 
 // ===== 蓝牙 =====
 static constexpr int ICON_BLE_W = 8;
-static constexpr int ICON_BLE_H = 10;
+static constexpr int ICON_BLE_H = 14;
 
 void drawIconBle(int x, int y, uint16_t color = 0xFFFF);
 

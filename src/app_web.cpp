@@ -229,44 +229,60 @@ const char* getConfigWebStatus() {
     return g_web_status;
 }
 
+static const char* stripHttpPrefix(const char* url) {
+    if (url == nullptr) {
+        return "";
+    }
+    if (strncmp(url, "http://", 7) == 0) {
+        return url + 7;
+    }
+    return url;
+}
+
 void drawWebApp() {
-    beginAppScreen("Web");
-    M5Cardputer.Display.setTextSize(1);
+    beginAppScreen("Config Setup");
+    M5Cardputer.Display.setTextSize(2);
 
     int y = APP_CONTENT_Y;
+    const auto drawWebLine = [&](const char* label, const char* value) {
+        drawInfoLineAt(APP_CONTENT_X, y, label, value, 2);
+        y += infoLineHeight(2);
+    };
+
     if (!isConfigWebServerRunning()) {
-        drawInfoLine(APP_CONTENT_X, y, "status", "offline");
-        drawInfoLine(APP_CONTENT_X, y, "hint", "re-enter u");
+        drawWebLine("status", "offline");
+        drawWebLine("hint", "re-enter u");
         return;
     }
 
     if (isConfigWebStaMode()) {
-        drawInfoLine(APP_CONTENT_X, y, "mode", "lan");
-        drawInfoLine(APP_CONTENT_X, y, "url", getConfigWebUrl());
+        drawWebLine("mode", "lan");
+        drawWebLine("url", stripHttpPrefix(getConfigWebUrl()));
     } else {
-        drawInfoLine(APP_CONTENT_X, y, "mode", "ap");
-        drawInfoLine(APP_CONTENT_X, y, "ap", getConfigWebApSsid());
-        drawInfoLine(APP_CONTENT_X, y, "pass", getConfigWebApPass());
-        drawInfoLine(APP_CONTENT_X, y, "url", getConfigWebUrl());
+        drawWebLine("mode", "ap");
+        drawWebLine("ap", getConfigWebApSsid());
+        drawWebLine("pass", getConfigWebApPass());
+        drawWebLine("url", stripHttpPrefix(getConfigWebUrl()));
     }
-    drawInfoLine(APP_CONTENT_X, y, "state", getConfigWebStatus());
+    drawWebLine("state", getConfigWebStatus());
 
     const AppConfig& cfg = getAppConfig();
     if (cfg.loaded) {
         char buf[16];
         snprintf(buf, sizeof(buf), "%d", cfg.device_count);
-        drawInfoLine(APP_CONTENT_X, y, "cfg", buf);
+        drawWebLine("mi devices", buf);
     } else {
-        drawInfoLine(APP_CONTENT_X, y, "cfg", "none");
+        drawWebLine("mi devices", "none");
     }
 
     M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
+    M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
     if (isConfigWebStaMode()) {
         M5Cardputer.Display.println("same wifi open url");
     } else {
         M5Cardputer.Display.println("phone connect AP");
-        y += INFO_LINE_H;
+        y += infoLineHeight(2);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
         M5Cardputer.Display.println("open url in browser");
     }
@@ -276,7 +292,7 @@ void enterWebApp() {
     if (startConfigWebServer()) {
         drawWebApp();
     } else {
-        beginAppScreen("Web");
+        beginAppScreen("Config Setup");
         M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
         M5Cardputer.Display.setTextColor(RED, BLACK);
