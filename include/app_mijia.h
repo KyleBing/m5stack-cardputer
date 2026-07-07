@@ -12,5 +12,3 @@ bool handleMijiaOverviewPageNav(const Keyboard_Class::KeysState& status);
 bool handleMijiaDeviceNav(const Keyboard_Class::KeysState& status);
 // 主循环调用：应用异步查询结果并重绘
 void updateMijiaApp();
-// 按住 H 显示帮助页，松开恢复；返回 true 表示正在显示帮助
-bool handleMijiaHelpKey(const Keyboard_Class::KeysState& status);

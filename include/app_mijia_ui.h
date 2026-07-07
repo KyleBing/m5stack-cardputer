@@ -6,6 +6,7 @@
 
 static constexpr int MIJIA_ICON_W = 16;
 static constexpr int MIJIA_ICON_H = 16;
+static constexpr int MIJIA_HEADER_ICON_H = 32; // 控制页设备名 2x 时配套图标边长
 static constexpr int MIJIA_TAG_H = 12;
 // 列表项高度：名称 2x + IP 1x + 型号 1x（与 app_common INFO_LINE_H 对齐）
 static constexpr int MIJIA_LIST_ITEM_H = 38;

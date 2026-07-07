@@ -1742,18 +1742,14 @@ void loop() {
                     handleInfoPageNav(M5Cardputer.Keyboard.keysState());
                 }
                 break;
-            case AppState::MIJIA: {
-                const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
-                if (handleMijiaHelpKey(status)) {
-                    break;
-                }
+            case AppState::MIJIA:
                 if (M5Cardputer.Keyboard.isPressed()) {
+                    const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
                     if (!handleMijiaOverviewPageNav(status) && !handleMijiaDeviceNav(status)) {
                         handleMijiaApp(getPressedKey());
                     }
                 }
                 break;
-            }
             case AppState::BLE:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();

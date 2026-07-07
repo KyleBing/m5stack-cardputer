@@ -171,9 +171,9 @@ void drawMijiaLevelSegments(const int x, const int y, const int w, const int h, 
 
 int drawMijiaDeviceHeader(const MijiaDevice* dev, const MijiaDevKind kind, const int device_idx,
                           const int device_count, const int x, const int y) {
-    drawMijiaDeviceIcon(kind, x, y, APP_COLOR_VALUE);
+    drawMijiaDeviceIcon(kind, x, y, APP_COLOR_VALUE, MIJIA_HEADER_ICON_H);
 
-    const int text_x = x + MIJIA_ICON_W + 4;
+    const int text_x = x + MIJIA_HEADER_ICON_H + 6;
     const int screen_w = M5Cardputer.Display.width();
     char pager[12];
     snprintf(pager, sizeof(pager), "%d/%d", device_idx + 1, device_count);
@@ -181,10 +181,11 @@ int drawMijiaDeviceHeader(const MijiaDevice* dev, const MijiaDevKind kind, const
     M5Cardputer.Display.setTextSize(1);
     const int pager_w = M5Cardputer.Display.textWidth(pager);
     const int pager_x = screen_w - APP_CONTENT_X - pager_w;
-    const int name_max_w = pager_x - text_x - 6;
 
+    M5Cardputer.Display.setTextSize(2);
+    const int name_max_w = pager_x - text_x - 6;
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-    M5Cardputer.Display.setCursor(text_x, y + 4);
+    M5Cardputer.Display.setCursor(text_x, y);
     if (dev != nullptr && dev->name[0] != '\0') {
         char name[32];
         strncpy(name, dev->name, sizeof(name) - 1);
@@ -197,10 +198,11 @@ int drawMijiaDeviceHeader(const MijiaDevice* dev, const MijiaDevKind kind, const
         M5Cardputer.Display.print("device");
     }
 
+    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(pager_x, y + 4);
+    M5Cardputer.Display.setCursor(pager_x, y + (MIJIA_HEADER_ICON_H - INFO_LINE_H) / 2);
     M5Cardputer.Display.print(pager);
-    return y + MIJIA_ICON_H + 4;
+    return y + MIJIA_HEADER_ICON_H + 4;
 }
 
 // 仅设备无法读取状态时，在 ON/OFF 或 ? 后显示连接/查询状态
