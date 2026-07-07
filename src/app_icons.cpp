@@ -249,7 +249,8 @@ void drawIconBattery(const int x, const int y, const int level, const bool charg
     const int body_h = getIconBatteryBodyHeight();
     const int bolt_offset = charging ? BOLT_ZONE_W + BOLT_BATTERY_GAP : 0;
     const int battery_x = x + bolt_offset;
-    const int body_x = battery_x + BATTERY_HEAD_W;
+    const int body_x = battery_x;
+    const int head_x = body_x + body_w;
     const int total_w = getBatteryIndicatorWidth();
     const uint16_t accent = charging ? GREEN : WHITE;
 
@@ -260,17 +261,16 @@ void drawIconBattery(const int x, const int y, const int level, const bool charg
     }
 
     const int head_y = y + (body_h - BATTERY_HEAD_H) / 2;
-    M5Cardputer.Display.fillRect(battery_x, head_y, BATTERY_HEAD_W, BATTERY_HEAD_H, accent);
+    M5Cardputer.Display.fillRect(head_x, head_y, BATTERY_HEAD_W, BATTERY_HEAD_H, accent);
     M5Cardputer.Display.drawRect(body_x, y, body_w, body_h, accent);
 
     const int inset = getBatteryInset();
     const int seg_x0 = body_x + inset;
     const int seg_y = y + inset;
     const int filled = constrain((level + 19) / 20, 0, BATTERY_SEGMENTS);
-    const int fill_start = BATTERY_SEGMENTS - filled;
     for (int i = 0; i < BATTERY_SEGMENTS; i++) {
         const int sx = seg_x0 + i * (BATTERY_SEG_W + BATTERY_SEG_GAP);
-        if (i >= fill_start) {
+        if (i < filled) {
             M5Cardputer.Display.fillRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, accent);
         } else {
             M5Cardputer.Display.drawRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, DARKGREY);
@@ -301,14 +301,22 @@ void drawIconPageDots(const int x, const int cy, const int page, const int page_
 
 // CHIP
 void drawIconInfoChip(const int x, const int y, const uint16_t color) {
-    M5Cardputer.Display.drawRoundRect(x + 4, y + 4, 16, 16, 2, color);
+    const int body_x = x + 5;
+    const int body_y = y + 5;
+    const int body_w = 14;
+    const int body_h = 14;
+
+    // CPU 图标：四边短引脚 + 内部核心框，小尺寸也能看出是芯片。
+    M5Cardputer.Display.drawRoundRect(body_x, body_y, body_w, body_h, 2, color);
     for (int i = 0; i < 4; i++) {
-        const int px = x + 6 + (i % 2) * 10;
-        const int py = y + 2 + (i / 2) * 18;
-        M5Cardputer.Display.fillRect(px, py, 2, 3, color);
+        const int p = 7 + i * 3;
+        M5Cardputer.Display.drawFastVLine(x + p, y + 2, 3, color);
+        M5Cardputer.Display.drawFastVLine(x + p, y + 19, 3, color);
+        M5Cardputer.Display.drawFastHLine(x + 2, y + p, 3, color);
+        M5Cardputer.Display.drawFastHLine(x + 19, y + p, 3, color);
     }
-    M5Cardputer.Display.drawFastHLine(x + 8, y + 11, 8, color);
-    M5Cardputer.Display.drawFastHLine(x + 8, y + 14, 8, color);
+    M5Cardputer.Display.drawRect(x + 9, y + 9, 6, 6, color);
+    M5Cardputer.Display.drawPixel(x + 12, y + 12, color);
 }
 
 // STORAGE
@@ -322,25 +330,17 @@ void drawIconInfoStorage(const int x, const int y, const uint16_t color) {
 
 // BATTERY
 void drawIconInfoBattery(const int x, const int y, const uint16_t color) {
-    // 更接近标准电池外观：电池头 + 矩形电池体 + 三段电量
-    const int body_x = x + 4;
+    const int body_x = x + 3;
     const int body_y = y + 7;
     const int body_w = 16;
     const int body_h = 10;
-    const int head_w = 4;
-    const int head_h = 4;
-    const int head_x = body_x + (body_w - head_w) / 2;
-    const int head_y = body_y - head_h;
+    const int head_x = body_x + body_w;
+    const int head_y = body_y + 3;
 
-    // 电池头
-    M5Cardputer.Display.fillRect(head_x, head_y, head_w, head_h, color);
-    // 电池外框
+    // 标准横向电池：右侧电池头 + 内部电量块。
     M5Cardputer.Display.drawRect(body_x, body_y, body_w, body_h, color);
-
-    // 电量块（视觉上更像电池）
-    const int seg_y = body_y + 2;
-    const int seg_h = body_h - 4;
-    M5Cardputer.Display.fillRect(body_x + 2, seg_y, 3, seg_h, color);
-    M5Cardputer.Display.fillRect(body_x + 7, seg_y, 3, seg_h, color);
-    M5Cardputer.Display.fillRect(body_x + 12, seg_y, 2, seg_h, color);
+    M5Cardputer.Display.fillRect(head_x, head_y, 2, 4, color);
+    for (int i = 0; i < 3; i++) {
+        M5Cardputer.Display.fillRect(body_x + 2 + i * 5, body_y + 2, 3, body_h - 4, color);
+    }
 }

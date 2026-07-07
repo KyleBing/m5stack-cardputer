@@ -6,6 +6,7 @@
 #include "app_web.h"
 #include "app_wifi.h"
 #include "app_mijia.h"
+#include "app_mijia_ui.h"
 #include "app_ble.h"
 #include "app_connectivity.h"
 #include <WiFi.h>
@@ -1338,6 +1339,15 @@ static void drawDemoPageDots(const int x, const int y) { drawIconPageDots(x, y +
 static void drawDemoInfoChip(const int x, const int y) { drawIconInfoChip(x, y, WHITE); }
 static void drawDemoInfoStorage(const int x, const int y) { drawIconInfoStorage(x, y, WHITE); }
 static void drawDemoInfoBattery(const int x, const int y) { drawIconInfoBattery(x, y, WHITE); }
+static void drawDemoMijiaLight(const int x, const int y) {
+    drawMijiaDeviceIcon(MijiaDevKind::LIGHT, x + 4, y + 4, WHITE);
+}
+static void drawDemoMijiaFan(const int x, const int y) {
+    drawMijiaDeviceIcon(MijiaDevKind::FAN_GENERIC, x + 4, y + 4, WHITE);
+}
+static void drawDemoMijiaAirFryer(const int x, const int y) {
+    drawMijiaDeviceIcon(MijiaDevKind::AIR_FRYER, x + 4, y + 4, WHITE);
+}
 
 static const IconDemoItem ICON_DEMO_ITEMS[] = {
     {"app logo", 24, 24, drawDemoLogo},
@@ -1356,6 +1366,9 @@ static const IconDemoItem ICON_DEMO_ITEMS[] = {
     {"info chip", ICON_INFO_W, ICON_INFO_H, drawDemoInfoChip},
     {"info storage", ICON_INFO_W, ICON_INFO_H, drawDemoInfoStorage},
     {"info battery", ICON_INFO_W, ICON_INFO_H, drawDemoInfoBattery},
+    {"mijia light", ICON_INFO_W, ICON_INFO_H, drawDemoMijiaLight},
+    {"mijia fan", ICON_INFO_W, ICON_INFO_H, drawDemoMijiaFan},
+    {"mijia fryer", ICON_INFO_W, ICON_INFO_H, drawDemoMijiaAirFryer},
 };
 
 static int getIconDemoItemCount() {

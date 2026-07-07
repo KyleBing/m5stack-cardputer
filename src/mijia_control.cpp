@@ -32,6 +32,9 @@ MijiaDevKind mijiaClassifyModel(const char* model) {
     if (strcmp(model, "dmaker.airpurifier.f20") == 0) {
         return MijiaDevKind::AIR_PURIFIER_F20;
     }
+    if (strstr(model, "airfryer") != nullptr || strstr(model, ".fryer.") != nullptr) {
+        return MijiaDevKind::AIR_FRYER;
+    }
     if (strstr(model, ".plug.") != nullptr) {
         return MijiaDevKind::PLUG;
     }

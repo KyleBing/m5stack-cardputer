@@ -9,6 +9,7 @@ enum class MijiaDevKind {
     FAN_P5,
     FAN_GENERIC,
     AIR_PURIFIER_F20,
+    AIR_FRYER,
     PLUG,
 };
 

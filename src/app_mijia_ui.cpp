@@ -3,38 +3,31 @@
 #include "app_common.h"
 #include "app_header.h"
 #include "M5Cardputer.h"
-#include <cmath>
 #include <cstring>
 
 // 绘制 16x16 灯泡图标
 static void drawMijiaIconLight(const int x, const int y, const uint16_t color) {
     const int cx = x + 8;
-    const int cy = y + 6;
-    M5Cardputer.Display.fillCircle(cx, cy, 5, color);
-    M5Cardputer.Display.fillRect(cx - 3, y + 12, 6, 3, color);
-    for (int i = 0; i < 4; i++) {
-        const int angle = i * 90 + 45;
-        const float rad = angle * 3.14159265f / 180.0f;
-        const int x0 = cx + static_cast<int>(6 * cosf(rad));
-        const int y0 = cy + static_cast<int>(6 * sinf(rad));
-        const int x1 = cx + static_cast<int>(8 * cosf(rad));
-        const int y1 = cy + static_cast<int>(8 * sinf(rad));
-        M5Cardputer.Display.drawLine(x0, y0, x1, y1, color);
-    }
+    // 小尺寸下用轮廓灯泡 + 灯座，避免实心圆看起来像普通圆点。
+    M5Cardputer.Display.drawCircle(cx, y + 6, 5, color);
+    M5Cardputer.Display.drawFastHLine(x + 6, y + 11, 5, color);
+    M5Cardputer.Display.fillRect(x + 5, y + 12, 7, 2, color);
+    M5Cardputer.Display.drawFastHLine(x + 6, y + 15, 5, color);
+    M5Cardputer.Display.drawPixel(cx, y + 4, color);
 }
 
 // 绘制 16x16 风扇图标
 static void drawMijiaIconFan(const int x, const int y, const uint16_t color) {
     const int cx = x + 8;
     const int cy = y + 8;
-    M5Cardputer.Display.drawCircle(cx, cy, 6, color);
-    for (int i = 0; i < 3; i++) {
-        const float rad = (i * 120 - 90) * 3.14159265f / 180.0f;
-        const int x1 = cx + static_cast<int>(5 * cosf(rad));
-        const int y1 = cy + static_cast<int>(5 * sinf(rad));
-        M5Cardputer.Display.fillCircle(x1, y1, 2, color);
-    }
+    M5Cardputer.Display.drawCircle(cx, cy, 7, color);
+    // 四叶扇页用三角形叠出，16x16 时比曲线更清楚。
+    M5Cardputer.Display.fillTriangle(cx, cy - 1, cx - 2, y + 2, cx + 2, y + 3, color);
+    M5Cardputer.Display.fillTriangle(cx + 1, cy, x + 13, cy - 2, x + 14, cy + 2, color);
+    M5Cardputer.Display.fillTriangle(cx, cy + 1, cx + 2, y + 14, cx - 2, y + 13, color);
+    M5Cardputer.Display.fillTriangle(cx - 1, cy, x + 2, cy + 2, x + 3, cy - 2, color);
     M5Cardputer.Display.fillCircle(cx, cy, 2, BLACK);
+    M5Cardputer.Display.drawCircle(cx, cy, 2, color);
 }
 
 // 绘制 16x16 净化器图标
@@ -45,6 +38,15 @@ static void drawMijiaIconPurifier(const int x, const int y, const uint16_t color
         M5Cardputer.Display.drawFastHLine(x + 5, ly, 6, color);
     }
     M5Cardputer.Display.fillRect(x + 6, y + 13, 4, 2, color);
+}
+
+// 绘制 16x16 空气炸锅图标
+static void drawMijiaIconAirFryer(const int x, const int y, const uint16_t color) {
+    M5Cardputer.Display.drawRoundRect(x + 3, y + 4, 10, 10, 2, color);
+    M5Cardputer.Display.fillRect(x + 5, y + 2, 6, 3, color);
+    M5Cardputer.Display.drawFastHLine(x + 5, y + 7, 6, color);
+    M5Cardputer.Display.fillRect(x + 6, y + 10, 4, 2, color);
+    M5Cardputer.Display.fillRect(x + 13, y + 7, 2, 4, color);
 }
 
 // 绘制 16x16 插座图标
@@ -72,6 +74,9 @@ void drawMijiaDeviceIcon(const MijiaDevKind kind, const int x, const int y,
             break;
         case MijiaDevKind::AIR_PURIFIER_F20:
             drawMijiaIconPurifier(x, y, color);
+            break;
+        case MijiaDevKind::AIR_FRYER:
+            drawMijiaIconAirFryer(x, y, color);
             break;
         case MijiaDevKind::PLUG:
             drawMijiaIconPlug(x, y, color);
@@ -244,6 +249,7 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
         }
 
         case MijiaDevKind::PLUG:
+        case MijiaDevKind::AIR_FRYER:
         default:
             return y;
     }
