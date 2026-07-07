@@ -562,10 +562,7 @@ void drawMijiaApp() {
     }
 
     const MijiaDevKind kind = mijiaClassifyModel(dev->model);
-    y = drawMijiaDeviceHeader(dev, kind, mijiaDeviceIdx, cfg.device_count, APP_CONTENT_X, y);
-    drawMijiaPowerTags(APP_CONTENT_X, y, mijiaUi.power_known, mijiaUi.power_on, mijiaUi.status);
-    y += MIJIA_TAG_H + 6;
-    drawMijiaDeviceControls(dev, kind, mijiaUi, APP_CONTENT_X, y);
+    drawMijiaDevicePanel(dev, kind, mijiaDeviceIdx, cfg.device_count, mijiaUi, APP_CONTENT_X, y);
 }
 
 void enterMijiaApp() {

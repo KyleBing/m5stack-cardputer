@@ -67,3 +67,13 @@ static constexpr int ICON_INFO_H = 24;
 void drawIconInfoChip(int x, int y, uint16_t color);
 void drawIconInfoStorage(int x, int y, uint16_t color);
 void drawIconInfoBattery(int x, int y, uint16_t color);
+// 指定边长绘制 Info 图标（Icons 展示页用）
+void drawIconInfoChipSized(int x, int y, uint16_t color, int size);
+void drawIconInfoStorageSized(int x, int y, uint16_t color, int size);
+void drawIconInfoBatterySized(int x, int y, uint16_t color, int size);
+
+// ===== 设备电源状态（IEC 电源符号：顶部开口圆环 + 竖线） =====
+static constexpr int ICON_POWER_W = 16;
+static constexpr int ICON_POWER_H = 16;
+
+void drawIconPower(int x, int y, uint16_t color, int size = ICON_POWER_H);

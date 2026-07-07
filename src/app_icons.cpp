@@ -299,48 +299,111 @@ void drawIconPageDots(const int x, const int cy, const int page, const int page_
 
 // ===== Info 列表图标 =====
 
-// CHIP
-void drawIconInfoChip(const int x, const int y, const uint16_t color) {
-    const int body_x = x + 5;
-    const int body_y = y + 5;
-    const int body_w = 14;
-    const int body_h = 14;
+static int infoIconS(const int v, const int size) {
+    return (v * size + ICON_INFO_H / 2) / ICON_INFO_H;
+}
 
-    // CPU 图标：四边短引脚 + 内部核心框，小尺寸也能看出是芯片。
-    M5Cardputer.Display.drawRoundRect(body_x, body_y, body_w, body_h, 2, color);
+void drawIconInfoChipSized(const int x, const int y, const uint16_t color, const int size) {
+    const int body_x = x + infoIconS(5, size);
+    const int body_y = y + infoIconS(5, size);
+    const int body_w = infoIconS(14, size);
+    const int body_h = infoIconS(14, size);
+
+    M5Cardputer.Display.drawRoundRect(body_x, body_y, body_w, body_h, infoIconS(2, size), color);
     for (int i = 0; i < 4; i++) {
-        const int p = 7 + i * 3;
-        M5Cardputer.Display.drawFastVLine(x + p, y + 2, 3, color);
-        M5Cardputer.Display.drawFastVLine(x + p, y + 19, 3, color);
-        M5Cardputer.Display.drawFastHLine(x + 2, y + p, 3, color);
-        M5Cardputer.Display.drawFastHLine(x + 19, y + p, 3, color);
+        const int p = infoIconS(7 + i * 3, size);
+        M5Cardputer.Display.drawFastVLine(x + p, y + infoIconS(2, size), infoIconS(3, size), color);
+        M5Cardputer.Display.drawFastVLine(x + p, y + infoIconS(19, size), infoIconS(3, size), color);
+        M5Cardputer.Display.drawFastHLine(x + infoIconS(2, size), y + p, infoIconS(3, size), color);
+        M5Cardputer.Display.drawFastHLine(x + infoIconS(19, size), y + p, infoIconS(3, size), color);
     }
-    M5Cardputer.Display.drawRect(x + 9, y + 9, 6, 6, color);
-    M5Cardputer.Display.drawPixel(x + 12, y + 12, color);
+    M5Cardputer.Display.drawRect(x + infoIconS(9, size), y + infoIconS(9, size),
+                                 infoIconS(6, size), infoIconS(6, size), color);
+    M5Cardputer.Display.drawPixel(x + infoIconS(12, size), y + infoIconS(12, size), color);
 }
 
-// STORAGE
+void drawIconInfoChip(const int x, const int y, const uint16_t color) {
+    drawIconInfoChipSized(x, y, color, ICON_INFO_H);
+}
+
+void drawIconInfoStorageSized(const int x, const int y, const uint16_t color, const int size) {
+    M5Cardputer.Display.drawRoundRect(x + infoIconS(5, size), y + infoIconS(3, size),
+                                      infoIconS(14, size), infoIconS(18, size), infoIconS(2, size),
+                                      color);
+    M5Cardputer.Display.fillRect(x + infoIconS(8, size), y + infoIconS(6, size),
+                                 infoIconS(8, size), infoIconS(3, size), color);
+    for (int i = 0; i < 3; i++) {
+        M5Cardputer.Display.drawFastHLine(x + infoIconS(8, size), y + infoIconS(11 + i * 3, size),
+                                          infoIconS(8, size), color);
+    }
+}
+
 void drawIconInfoStorage(const int x, const int y, const uint16_t color) {
-    M5Cardputer.Display.drawRoundRect(x + 5, y + 3, 14, 18, 2, color);
-    M5Cardputer.Display.fillRect(x + 8, y + 6, 8, 3, color);
+    drawIconInfoStorageSized(x, y, color, ICON_INFO_H);
+}
+
+void drawIconInfoBatterySized(const int x, const int y, const uint16_t color, const int size) {
+    const int body_x = x + infoIconS(3, size);
+    const int body_y = y + infoIconS(7, size);
+    const int body_w = infoIconS(16, size);
+    const int body_h = infoIconS(10, size);
+    const int head_x = body_x + body_w;
+    const int head_y = body_y + infoIconS(3, size);
+
+    M5Cardputer.Display.drawRect(body_x, body_y, body_w, body_h, color);
+    M5Cardputer.Display.fillRect(head_x, head_y, infoIconS(2, size), infoIconS(4, size), color);
     for (int i = 0; i < 3; i++) {
-        M5Cardputer.Display.drawFastHLine(x + 8, y + 11 + i * 3, 8, color);
+        M5Cardputer.Display.fillRect(body_x + infoIconS(2 + i * 5, size), body_y + infoIconS(2, size),
+                                     infoIconS(3, size), body_h - infoIconS(4, size), color);
     }
 }
 
-// BATTERY
 void drawIconInfoBattery(const int x, const int y, const uint16_t color) {
-    const int body_x = x + 3;
-    const int body_y = y + 7;
-    const int body_w = 16;
-    const int body_h = 10;
-    const int head_x = body_x + body_w;
-    const int head_y = body_y + 3;
+    drawIconInfoBatterySized(x, y, color, ICON_INFO_H);
+}
 
-    // 标准横向电池：右侧电池头 + 内部电量块。
-    M5Cardputer.Display.drawRect(body_x, body_y, body_w, body_h, color);
-    M5Cardputer.Display.fillRect(head_x, head_y, 2, 4, color);
-    for (int i = 0; i < 3; i++) {
-        M5Cardputer.Display.fillRect(body_x + 2 + i * 5, body_y + 2, 3, body_h - 4, color);
+// ===== 设备电源状态 =====
+
+// 平直粗竖线（无圆角端点）
+static void drawIconPowerStemFlat(const int cx, const int y0, const int y1, const int stroke,
+                                  const uint16_t color) {
+    const int top = min(y0, y1);
+    const int bottom = max(y0, y1);
+    const int half = stroke / 2;
+    for (int dx = -half; dx <= half; dx++) {
+        M5Cardputer.Display.drawFastVLine(cx + dx, top, bottom - top + 1, color);
+    }
+}
+
+// IEC 电源符号：顶部开口圆环 + 竖线（无圆角，竖线伸入环内约一半）
+void drawIconPower(const int x, const int y, const uint16_t color, const int size) {
+    // 24×24 设计稿坐标缩放
+    const auto s = [size](const int v) { return (v * size + 12) / 24; };
+    const int cx = x + s(12);
+    const int cy = y + s(13);
+    const int r = s(7);
+    const int stroke = max(2, s(2));
+    const int half = stroke / 2;
+
+    // 竖线：从环上方伸入，末端深入环内（中点再下移 5px）
+    const int stem_top = y + s(1);
+    const int stem_bottom = cy - r / 2 + 5;
+    drawIconPowerStemFlat(cx, stem_top, stem_bottom, stroke, color);
+
+    // 顶部留开口的圆环弧（约 48° 缺口），平直描边
+    constexpr int gap_deg = 48;
+    const int start_deg = 90 + gap_deg / 2;
+    const int end_deg = start_deg + (360 - gap_deg);
+    for (int deg = start_deg; deg < end_deg; deg++) {
+        const float rad0 = deg * 3.14159265f / 180.0f;
+        const float rad1 = (deg + 1) * 3.14159265f / 180.0f;
+        for (int dr = -half; dr <= half; dr++) {
+            const int rr = r + dr;
+            const int x0 = cx + static_cast<int>(rr * cosf(rad0) + 0.5f);
+            const int y0 = cy - static_cast<int>(rr * sinf(rad0) + 0.5f);
+            const int x1 = cx + static_cast<int>(rr * cosf(rad1) + 0.5f);
+            const int y1 = cy - static_cast<int>(rr * sinf(rad1) + 0.5f);
+            M5Cardputer.Display.drawLine(x0, y0, x1, y1, color);
+        }
     }
 }

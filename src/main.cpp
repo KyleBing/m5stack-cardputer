@@ -1022,38 +1022,89 @@ static bool rtcScreenReady = false;
 static char rtcLastTime[16] = "";
 static char rtcLastDate[20] = "";
 static char rtcLastSrc[8] = "";
-static constexpr int RTC_TIME_Y = APP_CONTENT_Y + 8;
-static constexpr int RTC_TIME_H = 26;
-static constexpr int RTC_DETAIL_Y = APP_CONTENT_Y + 38;
-static constexpr int RTC_DETAIL_TEXT_SIZE = 2;
-static constexpr int RTC_DETAIL_LINE_H = 16; // infoLineHeight(2)
+static constexpr int RTC_TIME_TEXT_SIZE = 3;
+static constexpr int RTC_DATE_TEXT_SIZE = 2;
+static constexpr int RTC_TIME_LINE_H = 8 * RTC_TIME_TEXT_SIZE;
+static constexpr int RTC_DATE_LINE_H = 8 * RTC_DATE_TEXT_SIZE;
+static constexpr int RTC_TIME_DATE_GAP = 6;
+static constexpr int RTC_SRC_TEXT_SIZE = 1;
+static constexpr int RTC_SRC_LINE_H = INFO_LINE_H;
+static constexpr uint16_t RTC_SRC_COLOR = APP_COLOR_LABEL; // 来源标识专用色
 
-// 仅重绘时分秒区域
+// 内容区高度（不含顶栏）
+static int rtcContentHeight() {
+    return M5Cardputer.Display.height() - APP_CONTENT_Y;
+}
+
+// 主时间垂直起始 y（时间+日期块在内容区居中，底部留给来源行）
+static int rtcTimeY() {
+    const int block_h = RTC_TIME_LINE_H + RTC_TIME_DATE_GAP + RTC_DATE_LINE_H;
+    const int avail_h = rtcContentHeight() - RTC_SRC_LINE_H - 4;
+    return APP_CONTENT_Y + (avail_h - block_h) / 2;
+}
+
+static int rtcDateY() {
+    return rtcTimeY() + RTC_TIME_LINE_H + RTC_TIME_DATE_GAP;
+}
+
+// 来源行贴近内容区左下角
+static int rtcSrcY() {
+    return M5Cardputer.Display.height() - RTC_SRC_LINE_H - 2;
+}
+
+// 按字号水平居中
+static int rtcCenteredX(const char* text, const int text_size) {
+    M5Cardputer.Display.setTextSize(text_size);
+    const int tw = M5Cardputer.Display.textWidth(text);
+    return (M5Cardputer.Display.width() - tw) / 2;
+}
+
+// 仅重绘居中时分秒
 void updateRtcTimeText(const char* time_buf) {
     if (strcmp(time_buf, rtcLastTime) == 0) {
         return;
     }
 
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, RTC_TIME_Y, 220, RTC_TIME_H, BLACK);
-    M5Cardputer.Display.setTextSize(3);
+    const int y = rtcTimeY();
+    M5Cardputer.Display.fillRect(0, y, M5Cardputer.Display.width(), RTC_TIME_LINE_H, BLACK);
+    M5Cardputer.Display.setTextSize(RTC_TIME_TEXT_SIZE);
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, RTC_TIME_Y);
+    M5Cardputer.Display.setCursor(rtcCenteredX(time_buf, RTC_TIME_TEXT_SIZE), y);
     M5Cardputer.Display.print(time_buf);
     strncpy(rtcLastTime, time_buf, sizeof(rtcLastTime) - 1);
     rtcLastTime[sizeof(rtcLastTime) - 1] = '\0';
 }
 
-// 日期或来源变化时重绘对应行
-void updateRtcDetailLine(const int y, const char* label, const char* value, char* cache,
-                         const size_t cache_size) {
-    if (strncmp(cache, value, cache_size) == 0 && cache[0] != '\0') {
+// 仅重绘居中日期
+void updateRtcDateText(const char* date_buf) {
+    if (strcmp(date_buf, rtcLastDate) == 0) {
         return;
     }
 
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, 220, RTC_DETAIL_LINE_H, BLACK);
-    drawInfoLineAt(APP_CONTENT_X, y, label, value, RTC_DETAIL_TEXT_SIZE);
-    strncpy(cache, value, cache_size - 1);
-    cache[cache_size - 1] = '\0';
+    const int y = rtcDateY();
+    M5Cardputer.Display.fillRect(0, y, M5Cardputer.Display.width(), RTC_DATE_LINE_H, BLACK);
+    M5Cardputer.Display.setTextSize(RTC_DATE_TEXT_SIZE);
+    M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
+    M5Cardputer.Display.setCursor(rtcCenteredX(date_buf, RTC_DATE_TEXT_SIZE), y);
+    M5Cardputer.Display.print(date_buf);
+    strncpy(rtcLastDate, date_buf, sizeof(rtcLastDate) - 1);
+    rtcLastDate[sizeof(rtcLastDate) - 1] = '\0';
+}
+
+// 左下角 1x 来源标识（NTP / RTC）
+void updateRtcSourceText(const char* source) {
+    if (strcmp(source, rtcLastSrc) == 0) {
+        return;
+    }
+
+    const int y = rtcSrcY();
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, 48, RTC_SRC_LINE_H, BLACK);
+    M5Cardputer.Display.setTextSize(RTC_SRC_TEXT_SIZE);
+    M5Cardputer.Display.setTextColor(RTC_SRC_COLOR, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.print(source);
+    strncpy(rtcLastSrc, source, sizeof(rtcLastSrc) - 1);
+    rtcLastSrc[sizeof(rtcLastSrc) - 1] = '\0';
 }
 
 // 时间界面中间状态（连接 WiFi / NTP 同步）
@@ -1156,20 +1207,10 @@ void drawRtcApp(const bool full_init) {
         rtcLastTime[0] = '\0';
         rtcLastDate[0] = '\0';
         rtcLastSrc[0] = '\0';
-        updateRtcTimeText(time_buf);
-        drawInfoLineAt(APP_CONTENT_X, RTC_DETAIL_Y, "date", date_buf, RTC_DETAIL_TEXT_SIZE);
-        strncpy(rtcLastDate, date_buf, sizeof(rtcLastDate) - 1);
-        rtcLastDate[sizeof(rtcLastDate) - 1] = '\0';
-        drawInfoLineAt(APP_CONTENT_X, RTC_DETAIL_Y + RTC_DETAIL_LINE_H, "src", source,
-                        RTC_DETAIL_TEXT_SIZE);
-        strncpy(rtcLastSrc, source, sizeof(rtcLastSrc) - 1);
-        rtcLastSrc[sizeof(rtcLastSrc) - 1] = '\0';
-    } else {
-        updateRtcTimeText(time_buf);
-        updateRtcDetailLine(RTC_DETAIL_Y, "date", date_buf, rtcLastDate, sizeof(rtcLastDate));
-        updateRtcDetailLine(RTC_DETAIL_Y + RTC_DETAIL_LINE_H, "src", source,
-                            rtcLastSrc, sizeof(rtcLastSrc));
     }
+    updateRtcTimeText(time_buf);
+    updateRtcDateText(date_buf);
+    updateRtcSourceText(source);
 }
 
 void enterRtcApp() {
@@ -1314,53 +1355,118 @@ struct IconDemoItem {
 
 static int iconDemoPage = 0;
 static constexpr int ICON_DEMO_ITEMS_PER_PAGE = 1;
+static constexpr int ICON_DEMO_SIZE = 64;
 
-static void drawDemoLogo(const int x, const int y) { drawAppLogo(x, y, 24); }
-static void drawDemoArrowLeft(const int x, const int y) { drawIconArrowLeft(x, y + 4, WHITE); }
-static void drawDemoArrowRight(const int x, const int y) { drawIconArrowRight(x, y + 4, WHITE); }
-static void drawDemoArrowUp(const int x, const int y) { drawIconArrowUp(x, y + 4, WHITE); }
-static void drawDemoArrowDown(const int x, const int y) { drawIconArrowDown(x, y + 4, WHITE); }
-static void drawDemoArrowLeftRight(const int x, const int y) { drawIconArrowLeftRight(x, y + 4, WHITE); }
-static void drawDemoArrowUpDown(const int x, const int y) { drawIconArrowUpDown(x, y + 7, WHITE); }
-static void drawDemoSignalBars(const int x, const int y) { drawSignalBars(x, y, -56, WHITE); }
-static void drawDemoWifi(const int x, const int y) { drawIconWifi(x, y, -56, WHITE); }
-static void drawDemoBle(const int x, const int y) { drawIconBle(x, y, WHITE); }
-static void drawDemoChargingBolt(const int x, const int y) { drawIconChargingBolt(x, y, 12); }
-static void drawDemoBattery(const int x, const int y) { drawIconBattery(x, y, 75, false); }
-static void drawDemoPageDots(const int x, const int y) { drawIconPageDots(x, y + 2, 1, 4); }
-static void drawDemoInfoChip(const int x, const int y) { drawIconInfoChip(x, y, WHITE); }
-static void drawDemoInfoStorage(const int x, const int y) { drawIconInfoStorage(x, y, WHITE); }
-static void drawDemoInfoBattery(const int x, const int y) { drawIconInfoBattery(x, y, WHITE); }
+// 将小图标居中绘制在 ICON_DEMO_SIZE 方框内
+static void drawDemoInBox(const int x, const int y, const int w, const int h,
+                          void (*draw)(int, int)) {
+    draw(x + (ICON_DEMO_SIZE - w) / 2, y + (ICON_DEMO_SIZE - h) / 2);
+}
+
+static void drawDemoLogo(const int x, const int y) { drawAppLogo(x, y, ICON_DEMO_SIZE); }
+static void drawDemoArrowLeft(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_ARROW_W, ICON_ARROW_H, [](const int bx, const int by) {
+        drawIconArrowLeft(bx, by + 4, WHITE);
+    });
+}
+static void drawDemoArrowRight(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_ARROW_W, ICON_ARROW_H, [](const int bx, const int by) {
+        drawIconArrowRight(bx, by + 4, WHITE);
+    });
+}
+static void drawDemoArrowUp(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_ARROW_W, ICON_ARROW_H, [](const int bx, const int by) {
+        drawIconArrowUp(bx, by + 4, WHITE);
+    });
+}
+static void drawDemoArrowDown(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_ARROW_W, ICON_ARROW_H, [](const int bx, const int by) {
+        drawIconArrowDown(bx, by + 4, WHITE);
+    });
+}
+static void drawDemoArrowLeftRight(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_ARROW_LR_W, ICON_ARROW_H, [](const int bx, const int by) {
+        drawIconArrowLeftRight(bx, by + 4, WHITE);
+    });
+}
+static void drawDemoArrowUpDown(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_ARROW_W, ICON_ARROW_UD_H, [](const int bx, const int by) {
+        drawIconArrowUpDown(bx, by + 7, WHITE);
+    });
+}
+static void drawDemoSignalBars(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_SIGNAL_W, ICON_SIGNAL_H, [](const int bx, const int by) {
+        drawSignalBars(bx, by, -56, WHITE);
+    });
+}
+static void drawDemoWifi(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_WIFI_W, ICON_WIFI_H, [](const int bx, const int by) {
+        drawIconWifi(bx, by, -56, WHITE);
+    });
+}
+static void drawDemoBle(const int x, const int y) {
+    drawDemoInBox(x, y, ICON_BLE_W, ICON_BLE_H,
+                  [](const int bx, const int by) { drawIconBle(bx, by, WHITE); });
+}
+static void drawDemoChargingBolt(const int x, const int y) {
+    drawDemoInBox(x, y, 6, 12, [](const int bx, const int by) { drawIconChargingBolt(bx, by, 12); });
+}
+static void drawDemoBattery(const int x, const int y) {
+    const int bw = getIconBatteryDisplayWidth(false);
+    const int bh = getIconBatteryBodyHeight();
+    drawDemoInBox(x, y, bw, bh,
+                  [](const int bx, const int by) { drawIconBattery(bx, by, 75, false); });
+}
+static void drawDemoPageDots(const int x, const int y) {
+    drawDemoInBox(x, y, 22, 4, [](const int bx, const int by) { drawIconPageDots(bx, by + 2, 1, 4); });
+}
+static void drawDemoInfoChip(const int x, const int y) {
+    drawIconInfoChipSized(x, y, WHITE, ICON_DEMO_SIZE);
+}
+static void drawDemoInfoStorage(const int x, const int y) {
+    drawIconInfoStorageSized(x, y, WHITE, ICON_DEMO_SIZE);
+}
+static void drawDemoInfoBattery(const int x, const int y) {
+    drawIconInfoBatterySized(x, y, WHITE, ICON_DEMO_SIZE);
+}
 static void drawDemoMijiaLight(const int x, const int y) {
-    drawMijiaDeviceIcon(MijiaDevKind::LIGHT, x + 4, y + 4, WHITE);
+    drawMijiaDeviceIcon(MijiaDevKind::LIGHT, x, y, WHITE, ICON_DEMO_SIZE);
 }
 static void drawDemoMijiaFan(const int x, const int y) {
-    drawMijiaDeviceIcon(MijiaDevKind::FAN_GENERIC, x + 4, y + 4, WHITE);
+    drawMijiaDeviceIcon(MijiaDevKind::FAN_GENERIC, x, y, WHITE, ICON_DEMO_SIZE);
 }
 static void drawDemoMijiaAirFryer(const int x, const int y) {
-    drawMijiaDeviceIcon(MijiaDevKind::AIR_FRYER, x + 4, y + 4, WHITE);
+    drawMijiaDeviceIcon(MijiaDevKind::AIR_FRYER, x, y, WHITE, ICON_DEMO_SIZE);
+}
+static void drawDemoPowerOn(const int x, const int y) {
+    drawIconPower(x, y, APP_COLOR_OK, ICON_DEMO_SIZE);
+}
+static void drawDemoPowerOff(const int x, const int y) {
+    drawIconPower(x, y, APP_COLOR_HINT, ICON_DEMO_SIZE);
 }
 
 static const IconDemoItem ICON_DEMO_ITEMS[] = {
-    {"app logo", 24, 24, drawDemoLogo},
-    {"arrow left", ICON_ARROW_W, ICON_ARROW_H, drawDemoArrowLeft},
-    {"arrow right", ICON_ARROW_W, ICON_ARROW_H, drawDemoArrowRight},
-    {"arrow up", ICON_ARROW_W, ICON_ARROW_H, drawDemoArrowUp},
-    {"arrow down", ICON_ARROW_W, ICON_ARROW_H, drawDemoArrowDown},
-    {"arrow left-right", ICON_ARROW_LR_W, ICON_ARROW_H, drawDemoArrowLeftRight},
-    {"arrow up-down", ICON_ARROW_W, ICON_ARROW_UD_H, drawDemoArrowUpDown},
-    {"signal bars", ICON_SIGNAL_W, ICON_SIGNAL_H, drawDemoSignalBars},
-    {"wifi", ICON_WIFI_W, ICON_WIFI_H, drawDemoWifi},
-    {"ble", ICON_BLE_W, ICON_BLE_H, drawDemoBle},
-    {"charging bolt", 6, 12, drawDemoChargingBolt},
-    {"battery", getIconBatteryDisplayWidth(false), getIconBatteryBodyHeight(), drawDemoBattery},
-    {"page dots", 22, 4, drawDemoPageDots},
-    {"info chip", ICON_INFO_W, ICON_INFO_H, drawDemoInfoChip},
-    {"info storage", ICON_INFO_W, ICON_INFO_H, drawDemoInfoStorage},
-    {"info battery", ICON_INFO_W, ICON_INFO_H, drawDemoInfoBattery},
-    {"mijia light", ICON_INFO_W, ICON_INFO_H, drawDemoMijiaLight},
-    {"mijia fan", ICON_INFO_W, ICON_INFO_H, drawDemoMijiaFan},
-    {"mijia fryer", ICON_INFO_W, ICON_INFO_H, drawDemoMijiaAirFryer},
+    {"app logo", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoLogo},
+    {"arrow left", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoArrowLeft},
+    {"arrow right", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoArrowRight},
+    {"arrow up", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoArrowUp},
+    {"arrow down", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoArrowDown},
+    {"arrow left-right", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoArrowLeftRight},
+    {"arrow up-down", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoArrowUpDown},
+    {"signal bars", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoSignalBars},
+    {"wifi", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoWifi},
+    {"ble", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoBle},
+    {"charging bolt", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoChargingBolt},
+    {"battery", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoBattery},
+    {"page dots", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPageDots},
+    {"info chip", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoChip},
+    {"info storage", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoStorage},
+    {"info battery", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoBattery},
+    {"mijia light", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaLight},
+    {"mijia fan", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaFan},
+    {"mijia fryer", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaAirFryer},
+    {"power on", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPowerOn},
+    {"power off", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPowerOff},
 };
 
 static int getIconDemoItemCount() {
@@ -1417,11 +1523,13 @@ static void drawIconDemoApp() {
         M5Cardputer.Display.setCursor(APP_CONTENT_X, row_y + INFO_LINE_H_2X);
         M5Cardputer.Display.printf("size %dx%d", item.width, item.height);
 
-        const int icon_x = APP_CONTENT_X + 170;
-        const int icon_y = row_y + 28;
+        const int icon_x = M5Cardputer.Display.width() - APP_CONTENT_X - ICON_DEMO_SIZE;
+        const int label_bottom = row_y + INFO_LINE_H_2X + INFO_LINE_H + 4;
+        const int avail_h = M5Cardputer.Display.height() - label_bottom - 4;
+        const int icon_y = label_bottom + (avail_h - ICON_DEMO_SIZE) / 2;
         item.draw(icon_x, icon_y);
 
-        y += 72;
+        y += ICON_DEMO_SIZE + INFO_LINE_H_2X + INFO_LINE_H + 16;
     }
 }
 
