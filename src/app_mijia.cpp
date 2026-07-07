@@ -2,6 +2,8 @@
 #include "app_common.h"
 #include "app_config.h"
 #include "app_header.h"
+#include "app_colors.h"
+#include "app_icons.h"
 #include "mijia_control.h"
 #include <cstring>
 
@@ -102,31 +104,50 @@ static void drawMijiaExtraLines(const MijiaDevice* dev, int& y) {
     }
 }
 
+// 第二行提示：R 刷新 + 方向键切换设备
+static void drawMijiaRefreshHint(const int x, const int y) {
+    int cx = x + drawKeyBadge(x, y, 'r', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+
+    const char* prefix = "refresh ";
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print(prefix);
+    cx += M5Cardputer.Display.textWidth(prefix);
+
+    const int arrow_cy = y + 4;
+    drawIconArrowLeft(cx, arrow_cy, APP_COLOR_HINT);
+    cx += ICON_ARROW_W + 2;
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print(" ");
+    cx += M5Cardputer.Display.textWidth(" ");
+    drawIconArrowRight(cx, arrow_cy, APP_COLOR_HINT);
+    cx += ICON_ARROW_W + 2;
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print("switch");
+}
+
 // 按设备类型绘制操作提示
 static void drawMijiaHints(const MijiaDevice* dev, int y) {
     const MijiaDevKind kind = mijiaClassifyModel(dev->model);
 
-    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("o on f off t toggle");
+    drawHintText(APP_CONTENT_X, y, "o on f off t toggle");
     y += INFO_LINE_H;
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("r refresh , . switch");
+    drawMijiaRefreshHint(APP_CONTENT_X, y);
     y += INFO_LINE_H;
 
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
     switch (kind) {
         case MijiaDevKind::LIGHT:
-            M5Cardputer.Display.println("-/+ bright");
+            drawHintText(APP_CONTENT_X, y, "-/+ bright");
             break;
         case MijiaDevKind::FAN_P5:
-            M5Cardputer.Display.println("9/0 spd w roll m mode");
+            drawHintText(APP_CONTENT_X, y, "9/0 spd w roll m mode");
             break;
         case MijiaDevKind::FAN_GENERIC:
-            M5Cardputer.Display.println("1-4 speed level");
+            drawHintText(APP_CONTENT_X, y, "1-4 speed level");
             break;
         case MijiaDevKind::AIR_PURIFIER_F20:
-            M5Cardputer.Display.println("1-5 mode 9/0 fan lv");
+            drawHintText(APP_CONTENT_X, y, "1-5 mode 9/0 fan lv");
             break;
         default:
             break;
@@ -148,7 +169,7 @@ void drawMijiaApp() {
     }
 
     char buf[40];
-    snprintf(buf, sizeof(buf), "%s [%d/%d]", dev->name, mijiaDeviceIdx + 1, cfg.device_count);
+    snprintf(buf, sizeof(buf), "%d/%d", mijiaDeviceIdx + 1, cfg.device_count);
     drawInfoLine(APP_CONTENT_X, y, "dev", buf);
 
     if (mijiaUi.power_known) {

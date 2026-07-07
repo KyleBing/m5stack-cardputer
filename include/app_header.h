@@ -8,10 +8,16 @@ static constexpr int APP_CONTENT_Y = APP_HEADER_H + 2;
 // 子界面 header：应用名 + BtnA(GO) 返回按钮
 void drawAppScreenHeader(const char* title);
 
-// 主菜单 header：Logo + 应用名 + 电量块 + 分页圆点
+// 主菜单 header：Logo + 应用名 + 电量/连接状态 + 分页圆点
 void drawMenuScreenHeader(const char* app_name, int page, int page_count);
 
-// 仅刷新主菜单 header 电量块（主菜单定时调用）
+// 刷新主菜单 header 状态区（电量 / WiFi / BLE）
+void updateMenuHeaderStatus(int page_count);
+
+// 刷新子界面 header 状态区（WiFi / BLE）
+void updateAppHeaderStatus();
+
+// 仅刷新主菜单 header 电量块（兼容旧调用）
 void updateMenuScreenBattery(int page_count);
 
 // 清屏并绘制子界面 header

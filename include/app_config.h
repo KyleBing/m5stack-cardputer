@@ -30,6 +30,9 @@ bool loadAppConfig();
 // 保存 JSON 到 /config.json 并重新加载
 bool saveAppConfigJson(const char* json);
 
+// 更新 WiFi 字段并写回（保留 devices 等其它配置）
+bool saveAppConfigWifi(const char* ssid, const char* password);
+
 // 读取原始 config.json 文本（用于 Web 展示）
 bool readAppConfigRaw(String& out);
 

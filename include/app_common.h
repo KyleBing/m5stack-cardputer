@@ -1,18 +1,37 @@
 #pragma once
 
 #include "M5Cardputer.h"
+#include "app_colors.h"
 #include <WString.h>
 
 static constexpr int INFO_LINE_H = 10;
-static constexpr uint16_t INFO_LABEL_COLOR = CYAN;
-static constexpr uint16_t INFO_VALUE_COLOR = WHITE;
+static constexpr uint16_t INFO_LABEL_COLOR = APP_COLOR_LABEL;
+static constexpr uint16_t INFO_VALUE_COLOR = APP_COLOR_VALUE;
+// 指定字号下的行高（默认字体每级 8px）
+constexpr int infoLineHeight(int text_size) { return 8 * text_size; }
 
-// ASCII 小字：label / value 分色
+// label / value 分色，固定 y，可指定字号倍率
+void drawInfoLineAt(int x, int y, const char* label, const char* value, int text_size = 1);
+
+// ASCII 小字：label / value 分色，自动递增 y
 void drawInfoLine(int x, int& y, const char* label, const char* value);
 void drawInfoLineInt(int x, int& y, const char* label, int value);
 
-// 使用 config 连接 WiFi（Mijia / Time 共用）
+// Cardputer 等 ADC 机型 isCharging() 可能返回 charge_unknown
+const char* getChargingStatusText();
+bool isBatteryCharging();
+
+// 绘制按键字母块（菜单键色底 + 黑字），text_size 仅支持 1 或 2，返回占用宽度（含右侧间距）
+int drawKeyBadge(int x, int y, char key, int text_size = 1);
+
+// 提示小字：',' 左箭头，'.' 右箭头
+void drawHintText(int x, int y, const char* text, int text_size = 1);
+
+// 使用 config 连接 WiFi（Mijia / Time 等按需调用）
 bool ensureConfigWifi();
+
+// 断开 WiFi 并关闭射频（离开应用或用完网络后调用）
+void releaseConfigWifi();
 
 // 获取当前按下的可打印字符
 String getPressedKey();

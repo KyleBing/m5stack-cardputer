@@ -1,6 +1,10 @@
 #include "app_wifi.h"
+#include "app_config.h"
 #include "app_header.h"
-#include "app_signal.h"
+#include "app_header.h"
+#include "app_icons.h"
+#include "app_common.h"
+#include "app_colors.h"
 #include <WiFi.h>
 #include <cstring>
 
@@ -97,42 +101,21 @@ static void truncateTextToWidth(const char* src, char* out, const size_t out_siz
     }
 }
 
-// 绘制左/右翻页小箭头（说明里替代 , . 键位）
-static void drawNavArrowLeft(const int x, const int cy, const uint16_t color) {
-    M5Cardputer.Display.fillTriangle(x, cy - 3, x + 5, cy, x, cy + 3, color);
-}
-
-static void drawNavArrowRight(const int x, const int cy, const uint16_t color) {
-    M5Cardputer.Display.fillTriangle(x + 5, cy - 3, x, cy, x + 5, cy + 3, color);
-}
-
 // 绘制说明行：',' 左箭头，'.' 右箭头
 static void drawWifiHintText(const int x, const int y, const char* text) {
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
-    int cx = x;
-    const int arrow_cy = y + 4;
-    for (const char* p = text; *p != '\0'; ++p) {
-        if (*p == ',') {
-            drawNavArrowLeft(cx, arrow_cy, LIGHTGREY);
-            cx += 8;
-        } else if (*p == '.') {
-            drawNavArrowRight(cx, arrow_cy, LIGHTGREY);
-            cx += 8;
-        } else {
-            M5Cardputer.Display.setCursor(cx, y);
-            const char ch[2] = {*p, '\0'};
-            M5Cardputer.Display.print(ch);
-            cx += M5Cardputer.Display.textWidth(ch);
-        }
-    }
+    drawHintText(x, y, text, 1);
 }
 
 static void drawWifiHints(const int y) {
     switch (wifiPhase) {
-        case WifiAppPhase::STATUS:
-            drawWifiHintText(APP_CONTENT_X, y, "s scan");
+        case WifiAppPhase::STATUS: {
+            const int badge_w = drawKeyBadge(APP_CONTENT_X, y, 's', 2);
+            M5Cardputer.Display.setTextSize(2);
+            M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+            M5Cardputer.Display.setCursor(APP_CONTENT_X + badge_w, y + 1);
+            M5Cardputer.Display.print("scan");
             break;
+        }
         case WifiAppPhase::LIST:
             drawWifiHintText(APP_CONTENT_X, y, "1-4 pick , . page");
             break;
@@ -174,8 +157,7 @@ static void drawWifiStatusScreen() {
         M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
         M5Cardputer.Display.print("rssi: ");
         M5Cardputer.Display.setTextColor(WHITE, BLACK);
-        M5Cardputer.Display.print(buf);
-        drawSignalBars(APP_CONTENT_X + 72, y - 1, rssi, WHITE);
+        M5Cardputer.Display.println(buf);
         y += WIFI_LIST_LINE_H + 4;
     } else {
         M5Cardputer.Display.setTextColor(WHITE, BLACK);
@@ -220,9 +202,9 @@ static void drawWifiListScreen() {
         const int rssi = WiFi.RSSI(i);
         const bool locked = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
 
-        // 右侧：信号图标贴边，RSSI 数值在其左侧
-        const int signal_x = content_right - SIGNAL_BAR_ICON_W;
-        drawSignalBars(signal_x, row_y + 4, rssi, WHITE);
+        // 右侧：扇形圆信号图标贴边，RSSI 数值在其左侧
+        const int signal_x = content_right - ICON_WIFI_W;
+        drawIconWifi(signal_x, row_y + 3, rssi, WHITE);
 
         char rssi_buf[8];
         snprintf(rssi_buf, sizeof(rssi_buf), "%d", rssi);
@@ -331,7 +313,7 @@ static void startWifiScan() {
     wifiStatus[0] = '\0';
 
     beginAppScreen("WiFi Scan");
-    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
     M5Cardputer.Display.println("scanning...");
 
@@ -412,7 +394,7 @@ void drawWifiApp() {
             break;
         case WifiAppPhase::SCANNING:
             beginAppScreen("WiFi Scan");
-            M5Cardputer.Display.setTextSize(1);
+            M5Cardputer.Display.setTextSize(2);
             M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
             M5Cardputer.Display.println("scanning...");
             break;
@@ -434,9 +416,14 @@ void updateWifiApp() {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-        strncpy(wifiStatus, "connected", sizeof(wifiStatus));
+        if (saveAppConfigWifi(WiFi.SSID().c_str(), wifiPassword)) {
+            strncpy(wifiStatus, "saved", sizeof(wifiStatus));
+        } else {
+            strncpy(wifiStatus, "connected", sizeof(wifiStatus));
+        }
         wifiPhase = WifiAppPhase::STATUS;
         drawWifiStatusScreen();
+        updateAppHeaderStatus();
         return;
     }
 

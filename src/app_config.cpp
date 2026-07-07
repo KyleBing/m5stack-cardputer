@@ -92,6 +92,40 @@ bool saveAppConfigJson(const char* json) {
     return loadAppConfig();
 }
 
+bool saveAppConfigWifi(const char* ssid, const char* password) {
+    if (ssid == nullptr || ssid[0] == '\0') {
+        return false;
+    }
+
+    JsonDocument doc;
+    if (LittleFS.exists(CONFIG_PATH)) {
+        File in = LittleFS.open(CONFIG_PATH, "r");
+        if (in) {
+            const DeserializationError err = deserializeJson(doc, in);
+            in.close();
+            if (err) {
+                doc.clear();
+            }
+        }
+    }
+
+    JsonObject wifi = doc["wifi"].to<JsonObject>();
+    wifi["ssid"] = ssid;
+    wifi["password"] = password == nullptr ? "" : password;
+
+    if (doc["devices"].isNull()) {
+        doc["devices"].to<JsonArray>();
+    }
+
+    File out = LittleFS.open(CONFIG_PATH, "w");
+    if (!out) {
+        return false;
+    }
+    serializeJsonPretty(doc, out);
+    out.close();
+    return loadAppConfig();
+}
+
 bool readAppConfigRaw(String& out) {
     out = "";
     if (!LittleFS.exists(CONFIG_PATH)) {

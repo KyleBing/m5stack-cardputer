@@ -7,10 +7,18 @@
 
 static constexpr const char* AP_SSID = "Cardputer-Setup";
 static constexpr const char* AP_PASS = "cardputer";
-static constexpr const char* WEB_URL = "http://192.168.4.1";
+static constexpr const char* AP_WEB_URL = "http://192.168.4.1";
+
+enum class ConfigWebMode {
+    NONE,
+    AP,
+    STA,
+};
 
 static WebServer g_server(80);
 static bool g_running = false;
+static ConfigWebMode g_mode = ConfigWebMode::NONE;
+static char g_web_url[32] = "";
 static char g_web_status[48] = "ready";
 
 // textarea 内容转义
@@ -112,11 +120,32 @@ static void handleExample() {
   sendHtmlPage(body);
 }
 
-bool startConfigWebServer() {
-    if (g_running) {
-        return true;
+// 注册 HTTP 路由
+static void registerWebRoutes() {
+    g_server.on("/", HTTP_GET, handleRoot);
+    g_server.on("/save", HTTP_POST, handleSave);
+    g_server.on("/example", HTTP_GET, handleExample);
+    g_server.onNotFound([]() { g_server.send(404, "text/plain", "not found"); });
+}
+
+// 已连路由器时直接在局域网 IP 上提供配置页
+static bool startStaConfigWebServer() {
+    if (WiFi.status() != WL_CONNECTED) {
+        return false;
     }
 
+    registerWebRoutes();
+    g_server.begin();
+
+    snprintf(g_web_url, sizeof(g_web_url), "http://%s", WiFi.localIP().toString().c_str());
+    g_mode = ConfigWebMode::STA;
+    g_running = true;
+    strncpy(g_web_status, "sta ok", sizeof(g_web_status));
+    return true;
+}
+
+// 未联网时开 AP 热点配网
+static bool startApConfigWebServer() {
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                       IPAddress(255, 255, 255, 0));
@@ -125,15 +154,32 @@ bool startConfigWebServer() {
         return false;
     }
 
-    g_server.on("/", HTTP_GET, handleRoot);
-    g_server.on("/save", HTTP_POST, handleSave);
-    g_server.on("/example", HTTP_GET, handleExample);
-    g_server.onNotFound([]() { g_server.send(404, "text/plain", "not found"); });
+    registerWebRoutes();
     g_server.begin();
 
+    strncpy(g_web_url, AP_WEB_URL, sizeof(g_web_url));
+    g_mode = ConfigWebMode::AP;
     g_running = true;
-    strncpy(g_web_status, "running", sizeof(g_web_status));
+    strncpy(g_web_status, "ap ok", sizeof(g_web_status));
     return true;
+}
+
+bool startConfigWebServer() {
+    if (g_running) {
+        return true;
+    }
+
+    // WiFi 默认关闭，有配置时先尝试连路由器再走局域网
+    const AppConfig& cfg = getAppConfig();
+    if (WiFi.status() != WL_CONNECTED && cfg.loaded && cfg.wifi_ssid[0] != '\0') {
+        ensureConfigWifi();
+    }
+
+    // 优先走局域网 IP，手机无需切热点
+    if (startStaConfigWebServer()) {
+        return true;
+    }
+    return startApConfigWebServer();
 }
 
 void stopConfigWebServer() {
@@ -141,9 +187,15 @@ void stopConfigWebServer() {
         return;
     }
     g_server.stop();
-    WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_OFF);
+
+    if (g_mode == ConfigWebMode::AP) {
+        WiFi.softAPdisconnect(true);
+    }
+    releaseConfigWifi();
+
     g_running = false;
+    g_mode = ConfigWebMode::NONE;
+    g_web_url[0] = '\0';
     strncpy(g_web_status, "stopped", sizeof(g_web_status));
 }
 
@@ -166,7 +218,11 @@ const char* getConfigWebApPass() {
 }
 
 const char* getConfigWebUrl() {
-    return WEB_URL;
+    return g_web_url[0] != '\0' ? g_web_url : AP_WEB_URL;
+}
+
+bool isConfigWebStaMode() {
+    return g_running && g_mode == ConfigWebMode::STA;
 }
 
 const char* getConfigWebStatus() {
@@ -184,9 +240,15 @@ void drawWebApp() {
         return;
     }
 
-    drawInfoLine(APP_CONTENT_X, y, "ap", getConfigWebApSsid());
-    drawInfoLine(APP_CONTENT_X, y, "pass", getConfigWebApPass());
-    drawInfoLine(APP_CONTENT_X, y, "url", getConfigWebUrl());
+    if (isConfigWebStaMode()) {
+        drawInfoLine(APP_CONTENT_X, y, "mode", "lan");
+        drawInfoLine(APP_CONTENT_X, y, "url", getConfigWebUrl());
+    } else {
+        drawInfoLine(APP_CONTENT_X, y, "mode", "ap");
+        drawInfoLine(APP_CONTENT_X, y, "ap", getConfigWebApSsid());
+        drawInfoLine(APP_CONTENT_X, y, "pass", getConfigWebApPass());
+        drawInfoLine(APP_CONTENT_X, y, "url", getConfigWebUrl());
+    }
     drawInfoLine(APP_CONTENT_X, y, "state", getConfigWebStatus());
 
     const AppConfig& cfg = getAppConfig();
@@ -200,10 +262,14 @@ void drawWebApp() {
 
     M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
     M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("phone connect AP");
-    y += INFO_LINE_H;
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("open url in browser");
+    if (isConfigWebStaMode()) {
+        M5Cardputer.Display.println("same wifi open url");
+    } else {
+        M5Cardputer.Display.println("phone connect AP");
+        y += INFO_LINE_H;
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+        M5Cardputer.Display.println("open url in browser");
+    }
 }
 
 void enterWebApp() {

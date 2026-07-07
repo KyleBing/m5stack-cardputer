@@ -1,50 +1,18 @@
 #include "app_header.h"
-#include "app_logo.h"
+#include "app_icons.h"
+#include "app_common.h"
+#include "app_connectivity.h"
 #include "M5Cardputer.h"
 
 static constexpr int MENU_LOGO_SIZE = 24;
-static constexpr int BATTERY_SEGMENTS = 5;
-static constexpr int BATTERY_SEG_W = 4;
-static constexpr int BATTERY_SEG_H = 10;
-static constexpr int BATTERY_SEG_GAP = 2;
-static constexpr int BATTERY_BORDER = 1;
-static constexpr int BATTERY_INNER_GAP = 2;
-static constexpr int BATTERY_HEAD_W = 2;
-static constexpr int BATTERY_HEAD_H = 6;
-static constexpr int BOLT_ZONE_W = 7;
-static constexpr int BOLT_BATTERY_GAP = 2;
+static constexpr int HEADER_STATUS_GAP = 4;
+static constexpr int APP_GO_BTN_W = 36;
 
-// 边框内侧到电池节的间距（四边各 2px）
-static int getBatteryInset() {
-    return BATTERY_BORDER + BATTERY_INNER_GAP;
+static int headerStatusIconY(const int icon_h) {
+    return (APP_HEADER_H - icon_h) / 2;
 }
 
-// 内部 5 格总宽
-static int getBatteryInnerWidth() {
-    return BATTERY_SEGMENTS * BATTERY_SEG_W + (BATTERY_SEGMENTS - 1) * BATTERY_SEG_GAP;
-}
-
-// 带 1px 边框的电池主体宽高
-static int getBatteryBodyWidth() {
-    return getBatteryInnerWidth() + getBatteryInset() * 2;
-}
-
-static int getBatteryBodyHeight() {
-    return BATTERY_SEG_H + getBatteryInset() * 2;
-}
-
-// 含左侧电池头的总宽（不含充电闪电区域）
-static int getBatteryIndicatorWidth() {
-    return BATTERY_HEAD_W + getBatteryBodyWidth();
-}
-
-// 显示总宽（充电时左侧预留闪电区域）
-static int getBatteryDisplayWidth(const bool charging) {
-    return getBatteryIndicatorWidth() + (charging ? BOLT_ZONE_W + BOLT_BATTERY_GAP : 0);
-}
-
-// 主菜单 header 右侧：分页圆点左侧的电量块起始 x
-static int getMenuBatteryX(const int screen_w, const int page_count, const bool charging) {
+static int getMenuStatusRightX(const int screen_w, const int page_count) {
     int right = screen_w - 4;
     if (page_count > 1) {
         constexpr int dot_r = 2;
@@ -52,65 +20,59 @@ static int getMenuBatteryX(const int screen_w, const int page_count, const bool 
         const int dots_w = page_count * dot_r * 2 + (page_count - 1) * dot_gap;
         right -= dots_w + 6;
     }
-    return right - getBatteryDisplayWidth(charging);
+    return right;
 }
 
-// 充电时在电池左前方（外侧）画黄色闪电
-static void drawChargingBolt(const int zone_x, const int y, const int body_h) {
-    const int cx = zone_x + BOLT_ZONE_W / 2;
-    const int cy = y + body_h / 2;
-    M5Cardputer.Display.fillTriangle(cx + 2, cy - 5, cx - 3, cy + 2, cx, cy + 2, YELLOW);
-    M5Cardputer.Display.fillTriangle(cx - 2, cy + 5, cx + 3, cy - 2, cx, cy - 2, YELLOW);
-}
-
-// 电池外形：左头 + 1px 外框 + 内部分格（电量从左侧消耗，剩余格靠右显示）
-static void drawBatteryIndicator(const int x, const int y, const int level, const bool charging) {
-    const int body_w = getBatteryBodyWidth();
-    const int body_h = getBatteryBodyHeight();
-    const int bolt_offset = charging ? BOLT_ZONE_W + BOLT_BATTERY_GAP : 0;
-    const int battery_x = x + bolt_offset;
-    const int body_x = battery_x + BATTERY_HEAD_W;
-    const int total_w = getBatteryIndicatorWidth();
-    const uint16_t accent = charging ? GREEN : WHITE;
-
-    M5Cardputer.Display.fillRect(x - 1, y - 1, bolt_offset + total_w + 2, body_h + 2, BLACK);
-
-    if (charging) {
-        drawChargingBolt(x, y, body_h);
+static int getHeaderStatusWidth(const bool include_battery, const bool wifi, const bool ble,
+                                const bool charging) {
+    int w = 0;
+    if (include_battery) {
+        w += getIconBatteryDisplayWidth(charging);
     }
-
-    // 左侧电池头（正极凸起）
-    const int head_y = y + (body_h - BATTERY_HEAD_H) / 2;
-    M5Cardputer.Display.fillRect(battery_x, head_y, BATTERY_HEAD_W, BATTERY_HEAD_H, accent);
-
-    // 外层 1px 边框
-    M5Cardputer.Display.drawRect(body_x, y, body_w, body_h, accent);
-
-    const int inset = getBatteryInset();
-    const int seg_x0 = body_x + inset;
-    const int seg_y = y + inset;
-    const int filled = constrain((level + 19) / 20, 0, BATTERY_SEGMENTS);
-    const int fill_start = BATTERY_SEGMENTS - filled;
-    for (int i = 0; i < BATTERY_SEGMENTS; i++) {
-        const int sx = seg_x0 + i * (BATTERY_SEG_W + BATTERY_SEG_GAP);
-        if (i >= fill_start) {
-            M5Cardputer.Display.fillRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, accent);
-        } else {
-            M5Cardputer.Display.drawRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, DARKGREY);
-        }
+    if (wifi) {
+        w += (w > 0 ? HEADER_STATUS_GAP : 0) + ICON_WIFI_W;
     }
+    if (ble) {
+        w += (w > 0 ? HEADER_STATUS_GAP : 0) + ICON_BLE_W;
+    }
+    return w;
 }
 
-static void drawMenuBatteryIndicator(const int screen_w, const int page_count) {
-    const bool charging = M5Cardputer.Power.isCharging();
-    const int x = getMenuBatteryX(screen_w, page_count, charging);
-    const int y = (APP_HEADER_H - getBatteryBodyHeight()) / 2;
-    drawBatteryIndicator(x, y, M5Cardputer.Power.getBatteryLevel(), charging);
+// 从右向左绘制连接状态图标，在 header 内垂直居中
+static int drawHeaderStatusIcons(const int right_x, const bool include_battery) {
+    const bool wifi = isWifiStaConnected();
+    const bool ble = isBleConnected();
+    const bool charging = isBatteryCharging();
+    const int body_h = getIconBatteryBodyHeight();
+
+    int x = right_x;
+    if (include_battery) {
+        x -= getIconBatteryDisplayWidth(charging);
+        drawIconBattery(x, headerStatusIconY(body_h), M5Cardputer.Power.getBatteryLevel(),
+                        charging);
+    }
+    if (wifi) {
+        x -= HEADER_STATUS_GAP + ICON_WIFI_W;
+        drawIconWifi(x, headerStatusIconY(ICON_WIFI_H), getWifiStaRssi(), WHITE);
+    }
+    if (ble) {
+        x -= HEADER_STATUS_GAP + ICON_BLE_W;
+        drawIconBle(x, headerStatusIconY(ICON_BLE_H), WHITE);
+    }
+    return x;
+}
+
+// 仅清除分割线以上区域，避免盖住底边线
+static void clearHeaderStatusArea(const int left_x, const int right_x) {
+    if (right_x <= left_x) {
+        return;
+    }
+    M5Cardputer.Display.fillRect(left_x, 0, right_x - left_x, APP_HEADER_H - 1, BLACK);
 }
 
 // 绘制右侧 BtnA(GO) 返回按钮样式
 static void drawBackButton(const int screen_w) {
-    constexpr int btn_w = 36;
+    constexpr int btn_w = APP_GO_BTN_W;
     constexpr int btn_h = 18;
     constexpr int btn_r = 4;
     const int btn_x = screen_w - btn_w - 2;
@@ -123,7 +85,6 @@ static void drawBackButton(const int screen_w) {
     M5Cardputer.Display.drawCenterString("GO", btn_x + btn_w / 2, btn_y + 5);
 }
 
-// 绘制底部分隔线
 static void drawHeaderDivider(const int screen_w) {
     M5Cardputer.Display.drawFastHLine(0, APP_HEADER_H - 1, screen_w, DARKGREY);
 }
@@ -132,15 +93,15 @@ void drawAppScreenHeader(const char* title) {
     const int screen_w = M5Cardputer.Display.width();
     M5Cardputer.Display.fillRect(0, 0, screen_w, APP_HEADER_H, BLACK);
 
-    // 应用名 2 倍字号，GO 按钮保持 1 倍
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
     M5Cardputer.Display.setCursor(4, (APP_HEADER_H - 16) / 2);
     M5Cardputer.Display.print(title);
 
+    const int status_right = screen_w - 2 - APP_GO_BTN_W - 4;
+    drawHeaderStatusIcons(status_right, false);
     drawBackButton(screen_w);
     drawHeaderDivider(screen_w);
-    // GO 按钮会设置 DARKGREY 背景色，子界面绘制前恢复
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
 }
 
@@ -156,29 +117,47 @@ void drawMenuScreenHeader(const char* app_name, const int page, const int page_c
     M5Cardputer.Display.setCursor(2 + MENU_LOGO_SIZE + 4, logo_y + 4);
     M5Cardputer.Display.print(app_name);
 
-    drawMenuBatteryIndicator(screen_w, page_count);
+    const int status_right = getMenuStatusRightX(screen_w, page_count);
+    drawHeaderStatusIcons(status_right, true);
 
     if (page_count > 1) {
         constexpr int dot_r = 2;
         constexpr int dot_gap = 6;
         const int dots_w = page_count * dot_r * 2 + (page_count - 1) * dot_gap;
-        int dot_x = screen_w - dots_w - 4;
-        const int dot_cy = APP_HEADER_H / 2;
-        for (int i = 0; i < page_count; i++) {
-            const int cx = dot_x + dot_r + i * (dot_r * 2 + dot_gap);
-            if (i == page) {
-                M5Cardputer.Display.fillCircle(cx, dot_cy, dot_r, WHITE);
-            } else {
-                M5Cardputer.Display.drawCircle(cx, dot_cy, dot_r, DARKGREY);
-            }
-        }
+        const int dot_x = screen_w - dots_w - 4;
+        drawIconPageDots(dot_x, APP_HEADER_H / 2, page, page_count);
     }
 
     drawHeaderDivider(screen_w);
 }
 
+void updateMenuHeaderStatus(const int page_count) {
+    const int screen_w = M5Cardputer.Display.width();
+    const int status_right = getMenuStatusRightX(screen_w, page_count);
+    const bool wifi = isWifiStaConnected();
+    const bool ble = isBleConnected();
+    const bool charging = isBatteryCharging();
+    const int width = getHeaderStatusWidth(true, wifi, ble, charging);
+    const int left_x = status_right - width;
+    clearHeaderStatusArea(left_x, status_right);
+    drawHeaderStatusIcons(status_right, true);
+    drawHeaderDivider(screen_w);
+}
+
+void updateAppHeaderStatus() {
+    const int screen_w = M5Cardputer.Display.width();
+    const int status_right = screen_w - 2 - APP_GO_BTN_W - 4;
+    const bool wifi = isWifiStaConnected();
+    const bool ble = isBleConnected();
+    const int width = getHeaderStatusWidth(false, wifi, ble, false);
+    const int left_x = status_right - width;
+    clearHeaderStatusArea(left_x, status_right);
+    drawHeaderStatusIcons(status_right, false);
+    drawHeaderDivider(screen_w);
+}
+
 void updateMenuScreenBattery(const int page_count) {
-    drawMenuBatteryIndicator(M5Cardputer.Display.width(), page_count);
+    updateMenuHeaderStatus(page_count);
 }
 
 void beginAppScreen(const char* title) {

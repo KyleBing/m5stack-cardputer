@@ -1,11 +1,12 @@
 #include "M5Cardputer.h"
 #include "app_config.h"
-#include "app_logo.h"
+#include "app_icons.h"
 #include "app_header.h"
 #include "app_common.h"
 #include "app_web.h"
 #include "app_wifi.h"
 #include "app_mijia.h"
+#include "app_connectivity.h"
 #include <BLEDevice.h>
 #include <WiFi.h>
 #include <esp_chip_info.h>
@@ -102,7 +103,7 @@ bool enterAppByKey(const char key) {
 
 // ===== MENU =====
 
-static constexpr const char* APP_NAME = "Cardputer";
+static constexpr const char* APP_NAME = "Sparks";
 
 // 按 AppState 取菜单长名（用于子界面 header）
 const char* getMenuItemNameFull(const AppState state) {
@@ -116,7 +117,8 @@ const char* getMenuItemNameFull(const AppState state) {
 static constexpr int MENU_COLS = 3;
 static constexpr int MENU_ROWS_PER_PAGE = 5;
 static constexpr int MENU_ITEMS_PER_PAGE = MENU_COLS * MENU_ROWS_PER_PAGE;
-static constexpr int MENU_LINE_H = 16;
+static constexpr int MENU_KEY_TEXT_SIZE = 2;
+static constexpr int MENU_LINE_H = 18; // 与 2 倍按键块高度一致
 
 static int menuPage = 0;
 
@@ -146,12 +148,13 @@ int getMenuNavDelta(const Keyboard_Class::KeysState& status) {
     return 0;
 }
 
-// 绘制单个菜单项：触发字母与菜单名各用一种固定颜色
-void drawMenuItem(const MenuItem& item) {
-    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
-    M5Cardputer.Display.printf("%c.", toupper(item.key));
-    M5Cardputer.Display.setTextColor(WHITE, BLACK);
-    M5Cardputer.Display.printf("%s", item.name);
+// 绘制单个菜单项：按键块 + 名称
+static void drawMenuItemAt(const int x, const int y, const MenuItem& item) {
+    const int badge_w = drawKeyBadge(x, y, item.key, MENU_KEY_TEXT_SIZE);
+    M5Cardputer.Display.setTextSize(MENU_KEY_TEXT_SIZE);
+    M5Cardputer.Display.setTextColor(APP_COLOR_TEXT, BLACK);
+    M5Cardputer.Display.setCursor(x + badge_w, y + 1);
+    M5Cardputer.Display.print(item.name);
 }
 
 // 绘制主菜单当前页
@@ -161,19 +164,18 @@ void drawMenuPage() {
                            ? startIdx + MENU_ITEMS_PER_PAGE
                            : MENU_ITEM_COUNT;
 
-    M5Cardputer.Display.setTextSize(2);
+    const int screen_w = M5Cardputer.Display.width();
+    const int col_w = (screen_w - APP_CONTENT_X * 2) / MENU_COLS;
+
     int row = 0;
     for (int i = startIdx; i < endIdx; i += MENU_COLS) {
-        const int y = APP_CONTENT_Y + row * (MENU_LINE_H + GAP_VERTICAL );
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-        drawMenuItem(MENU_ITEMS[i]);
-        if (i + 1 < endIdx) {
-            M5Cardputer.Display.print(" ");
-            drawMenuItem(MENU_ITEMS[i + 1]);
-        }
-        if (i + 2 < endIdx) {
-            M5Cardputer.Display.print(" ");
-            drawMenuItem(MENU_ITEMS[i + 2]);
+        const int y = APP_CONTENT_Y + row * (MENU_LINE_H + GAP_VERTICAL);
+        for (int col = 0; col < MENU_COLS; ++col) {
+            const int idx = i + col;
+            if (idx >= endIdx) {
+                break;
+            }
+            drawMenuItemAt(APP_CONTENT_X + col * col_w, y, MENU_ITEMS[idx]);
         }
         row++;
     }
@@ -182,6 +184,7 @@ void drawMenuPage() {
 // 绘制主菜单（header + 可翻页菜单区）
 void showMenu() {
     stopConfigWebServer();
+    releaseConfigWifi();
     currentState = AppState::MENU;
     const int pageCount = getMenuPageCount();
     if (menuPage >= pageCount) {
@@ -761,15 +764,84 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
 
 // ===== POWER =====
 
-// 电源信息
-void drawPowerApp() {
-    beginAppScreen("Pwr");
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-    M5Cardputer.Display.printf("bat: %d%%\n", M5Cardputer.Power.getBatteryLevel());
-    M5Cardputer.Display.printf("volt: %dmV\n", M5Cardputer.Power.getBatteryVoltage());
-    M5Cardputer.Display.printf("curr: %dmA\n", M5Cardputer.Power.getBatteryCurrent());
-    M5Cardputer.Display.printf("chg: %s\n", M5Cardputer.Power.isCharging() ? "ON" : "OFF");
-    M5Cardputer.Display.printf("vbus: %dmV\n", M5Cardputer.Power.getVBUSVoltage());
+static bool powerScreenReady = false;
+static char powerLastBat[8] = "";
+static char powerLastVolt[12] = "";
+static char powerLastCurr[12] = "";
+static char powerLastChg[8] = "";
+static char powerLastVbus[12] = "";
+static constexpr int POWER_TEXT_SIZE = 2;
+static constexpr int POWER_LINE_H = 16; // infoLineHeight(2)
+
+// 仅重绘变化的电源信息行
+static void updatePowerLine(const int y, const char* label, const char* value, char* cache,
+                            const size_t cache_size) {
+    if (strncmp(cache, value, cache_size) == 0 && cache[0] != '\0') {
+        return;
+    }
+
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, 220, POWER_LINE_H, BLACK);
+    drawInfoLineAt(APP_CONTENT_X, y, label, value, POWER_TEXT_SIZE);
+    strncpy(cache, value, cache_size - 1);
+    cache[cache_size - 1] = '\0';
+}
+
+// 电源信息：首帧全屏，之后只刷新内容区
+void drawPowerApp(const bool full_init) {
+    char bat[8];
+    char volt[12];
+    char curr[12];
+    char chg[8];
+    char vbus[12];
+
+    snprintf(bat, sizeof(bat), "%d%%", M5Cardputer.Power.getBatteryLevel());
+    snprintf(volt, sizeof(volt), "%dmV", M5Cardputer.Power.getBatteryVoltage());
+
+    const int32_t curr_ma = M5Cardputer.Power.getBatteryCurrent();
+    const int16_t vbus_mv = M5Cardputer.Power.getVBUSVoltage();
+    const bool pwr_detail_supported = vbus_mv >= 0;
+
+    if (pwr_detail_supported) {
+        snprintf(curr, sizeof(curr), "%dmA", static_cast<int>(curr_ma));
+        snprintf(vbus, sizeof(vbus), "%dmV", vbus_mv);
+    } else {
+        strncpy(curr, "N/A", sizeof(curr));
+        strncpy(vbus, "N/A", sizeof(vbus));
+    }
+
+    strncpy(chg, getChargingStatusText(), sizeof(chg));
+    chg[sizeof(chg) - 1] = '\0';
+
+    if (full_init || !powerScreenReady) {
+        beginAppScreen("Pwr");
+        powerScreenReady = true;
+        powerLastBat[0] = '\0';
+        powerLastVolt[0] = '\0';
+        powerLastCurr[0] = '\0';
+        powerLastChg[0] = '\0';
+        powerLastVbus[0] = '\0';
+    }
+
+    int y = APP_CONTENT_Y;
+    updatePowerLine(y, "bat", bat, powerLastBat, sizeof(powerLastBat));
+    y += POWER_LINE_H;
+    updatePowerLine(y, "volt", volt, powerLastVolt, sizeof(powerLastVolt));
+    y += POWER_LINE_H;
+    updatePowerLine(y, "curr", curr, powerLastCurr, sizeof(powerLastCurr));
+    y += POWER_LINE_H;
+    updatePowerLine(y, "chg", chg, powerLastChg, sizeof(powerLastChg));
+    y += POWER_LINE_H;
+    updatePowerLine(y, "vbus", vbus, powerLastVbus, sizeof(powerLastVbus));
+}
+
+void enterPowerApp() {
+    powerScreenReady = false;
+    powerLastBat[0] = '\0';
+    powerLastVolt[0] = '\0';
+    powerLastCurr[0] = '\0';
+    powerLastChg[0] = '\0';
+    powerLastVbus[0] = '\0';
+    drawPowerApp(true);
 }
 
 // ===== SPEAKER =====
@@ -805,18 +877,8 @@ static char rtcLastSrc[8] = "";
 static constexpr int RTC_TIME_Y = APP_CONTENT_Y + 8;
 static constexpr int RTC_TIME_H = 26;
 static constexpr int RTC_DETAIL_Y = APP_CONTENT_Y + 38;
-static constexpr int RTC_DETAIL_LINE_H = 16;
-
-// Time 页小字（2 号字）
-void drawRtcDetailLine(const int x, int y, const char* label, const char* value) {
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
-    M5Cardputer.Display.setCursor(x, y);
-    M5Cardputer.Display.print(label);
-    M5Cardputer.Display.print(": ");
-    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
-    M5Cardputer.Display.println(value);
-}
+static constexpr int RTC_DETAIL_TEXT_SIZE = 2;
+static constexpr int RTC_DETAIL_LINE_H = 16; // infoLineHeight(2)
 
 // 仅重绘时分秒区域
 void updateRtcTimeText(const char* time_buf) {
@@ -841,18 +903,27 @@ void updateRtcDetailLine(const int y, const char* label, const char* value, char
     }
 
     M5Cardputer.Display.fillRect(APP_CONTENT_X, y, 220, RTC_DETAIL_LINE_H, BLACK);
-    drawRtcDetailLine(APP_CONTENT_X, y, label, value);
+    drawInfoLineAt(APP_CONTENT_X, y, label, value, RTC_DETAIL_TEXT_SIZE);
     strncpy(cache, value, cache_size - 1);
     cache[cache_size - 1] = '\0';
 }
 
-// 通过 NTP 同步系统时间，并写回硬件 RTC
+// 时间界面中间状态（连接 WiFi / NTP 同步）
+static void drawRtcBusyScreen(const char* msg) {
+    beginAppScreen("Time");
+    rtcScreenReady = true;
+    rtcLastTime[0] = '\0';
+    rtcLastDate[0] = '\0';
+    rtcLastSrc[0] = '\0';
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
+    M5Cardputer.Display.println(msg);
+}
+
+// 通过 NTP 同步系统时间，并写回硬件 RTC（调用前须已连 WiFi）
 static bool trySyncNtpTime() {
-    const AppConfig& cfg = getAppConfig();
-    if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
-        return false;
-    }
-    if (!ensureConfigWifi()) {
+    if (WiFi.status() != WL_CONNECTED) {
         return false;
     }
 
@@ -912,12 +983,15 @@ void drawRtcApp(const bool full_init) {
         rtcScreenReady = true;
         rtcLastTime[0] = '\0';
         rtcLastDate[0] = '\0';
+        rtcLastSrc[0] = '\0';
         int y = APP_CONTENT_Y;
         drawInfoLine(APP_CONTENT_X, y, "time", "not set");
-        drawInfoLine(APP_CONTENT_X, y, "hint", "need WiFi sync");
-        M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-        M5Cardputer.Display.println("enter again after WiFi");
+        const AppConfig& cfg = getAppConfig();
+        if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
+            drawInfoLine(APP_CONTENT_X, y, "hint", "set WiFi cfg");
+        } else {
+            drawInfoLine(APP_CONTENT_X, y, "hint", "wifi/ntp fail");
+        }
         return;
     }
 
@@ -935,10 +1009,11 @@ void drawRtcApp(const bool full_init) {
         rtcLastDate[0] = '\0';
         rtcLastSrc[0] = '\0';
         updateRtcTimeText(time_buf);
-        drawRtcDetailLine(APP_CONTENT_X, RTC_DETAIL_Y, "date", date_buf);
+        drawInfoLineAt(APP_CONTENT_X, RTC_DETAIL_Y, "date", date_buf, RTC_DETAIL_TEXT_SIZE);
         strncpy(rtcLastDate, date_buf, sizeof(rtcLastDate) - 1);
         rtcLastDate[sizeof(rtcLastDate) - 1] = '\0';
-        drawRtcDetailLine(APP_CONTENT_X, RTC_DETAIL_Y + RTC_DETAIL_LINE_H, "src", source);
+        drawInfoLineAt(APP_CONTENT_X, RTC_DETAIL_Y + RTC_DETAIL_LINE_H, "src", source,
+                        RTC_DETAIL_TEXT_SIZE);
         strncpy(rtcLastSrc, source, sizeof(rtcLastSrc) - 1);
         rtcLastSrc[sizeof(rtcLastSrc) - 1] = '\0';
     } else {
@@ -954,7 +1029,17 @@ void enterRtcApp() {
     rtcLastTime[0] = '\0';
     rtcLastDate[0] = '\0';
     rtcLastSrc[0] = '\0';
-    trySyncNtpTime();
+
+    const AppConfig& cfg = getAppConfig();
+    if (cfg.loaded && cfg.wifi_ssid[0] != '\0') {
+        drawRtcBusyScreen("wifi connecting...");
+        if (ensureConfigWifi()) {
+            drawRtcBusyScreen("ntp syncing...");
+            trySyncNtpTime();
+        }
+        releaseConfigWifi();
+    }
+
     drawRtcApp(true);
 }
 
@@ -1011,16 +1096,13 @@ void drawI2cScanApp(m5::I2C_Class& bus, const char* title) {
 
 // BLE 状态
 void drawBleApp() {
-    static bool bleReady = false;
-    if (!bleReady) {
-        BLEDevice::init("Cardputer");
-        bleReady = true;
-    }
+    ensureBleStack();
 
     beginAppScreen("BLE");
     M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
     M5Cardputer.Display.printf("addr:\n%s\n", BLEDevice::getAddress().toString().c_str());
     M5Cardputer.Display.println("name: Cardputer");
+    M5Cardputer.Display.println(isBleConnected() ? "client: yes" : "client: no");
 }
 
 // ===== DISP =====
@@ -1127,7 +1209,7 @@ void enterApp(const AppState state) {
             drawMicApp();
             break;
         case AppState::POWER:
-            drawPowerApp();
+            enterPowerApp();
             break;
         case AppState::SPEAKER:
             drawSpeakerApp("");
@@ -1180,6 +1262,7 @@ void setup() {
     } else {
         Serial.println("config: LittleFS mount failed");
     }
+    WiFi.mode(WIFI_OFF);
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.setBrightness(30);
     showMenu();
@@ -1207,14 +1290,18 @@ void loop() {
 
     const uint32_t now = millis();
 
-    // BMI 实时刷新，不使用 delay 以免触发 idle sleep
-    if (currentState == AppState::MENU) {
-        static uint32_t lastMenuBatMs = 0;
-        if (now - lastMenuBatMs >= 2000) {
-            lastMenuBatMs = now;
-            updateMenuScreenBattery(getMenuPageCount());
+    // 主菜单 / 子界面 header 状态定时刷新
+    static uint32_t lastHeaderStatusMs = 0;
+    if (now - lastHeaderStatusMs >= 2000) {
+        lastHeaderStatusMs = now;
+        if (currentState == AppState::MENU) {
+            updateMenuHeaderStatus(getMenuPageCount());
+        } else if (currentState != AppState::SLEEP) {
+            updateAppHeaderStatus();
         }
-    } else if (currentState == AppState::BMI) {
+    }
+
+    if (currentState == AppState::BMI) {
         static uint32_t lastBmiUpdateMs = 0;
         if (now - lastBmiUpdateMs >= 100) {
             lastBmiUpdateMs = now;
@@ -1230,7 +1317,7 @@ void loop() {
         static uint32_t lastPowerUpdateMs = 0;
         if (now - lastPowerUpdateMs >= 500) {
             lastPowerUpdateMs = now;
-            drawPowerApp();
+            drawPowerApp(false);
         }
     } else if (currentState == AppState::WIFI) {
         updateWifiApp();

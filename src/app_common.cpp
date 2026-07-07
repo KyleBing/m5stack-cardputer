@@ -1,17 +1,85 @@
 #include "app_common.h"
 #include "app_config.h"
+#include "app_icons.h"
 #include <WiFi.h>
+#include <cctype>
 #include <cstring>
 
-void drawInfoLine(const int x, int& y, const char* label, const char* value) {
-    M5Cardputer.Display.setTextSize(1);
+// 绘制按键字母块（黄底黑字）
+int drawKeyBadge(const int x, const int y, char key, const int text_size) {
+    const int size = (text_size == 2) ? 2 : 1;
+    const char letter = static_cast<char>(toupper(static_cast<unsigned char>(key)));
+    const char str[2] = {letter, '\0'};
+
+    M5Cardputer.Display.setTextSize(size);
+    const int tw = M5Cardputer.Display.textWidth(str);
+    const int th = 8 * size;
+    constexpr int pad_x = 2;
+    constexpr int pad_y = 1;
+    const int bw = tw + pad_x * 2;
+    const int bh = th + pad_y * 2;
+
+    M5Cardputer.Display.fillRoundRect(x, y, bw, bh, 2, APP_COLOR_MENU_KEY);
+    M5Cardputer.Display.setTextColor(APP_COLOR_KEY_TEXT, APP_COLOR_MENU_KEY);
+    M5Cardputer.Display.setCursor(x + pad_x, y + pad_y);
+    M5Cardputer.Display.print(str);
+
+    constexpr int gap = 3;
+    return bw + gap;
+}
+
+// 提示小字：',' 左箭头，'.' 右箭头
+void drawHintText(const int x, const int y, const char* text, const int text_size) {
+    const int size = (text_size == 2) ? 2 : 1;
+    M5Cardputer.Display.setTextSize(size);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    int cx = x;
+    const int arrow_cy = y + 4 * size;
+    for (const char* p = text; *p != '\0'; ++p) {
+        if (*p == ',') {
+            drawIconArrowLeft(cx, arrow_cy, APP_COLOR_HINT);
+            cx += ICON_ARROW_W + 2;
+        } else if (*p == '.') {
+            drawIconArrowRight(cx, arrow_cy, APP_COLOR_HINT);
+            cx += ICON_ARROW_W + 2;
+        } else {
+            M5Cardputer.Display.setCursor(cx, y);
+            const char ch[2] = {*p, '\0'};
+            M5Cardputer.Display.print(ch);
+            cx += M5Cardputer.Display.textWidth(ch);
+        }
+    }
+}
+
+void drawInfoLineAt(const int x, const int y, const char* label, const char* value,
+                    const int text_size) {
+    M5Cardputer.Display.setTextSize(text_size);
     M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
     M5Cardputer.Display.setCursor(x, y);
     M5Cardputer.Display.print(label);
     M5Cardputer.Display.print(": ");
     M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
     M5Cardputer.Display.println(value);
+}
+
+void drawInfoLine(const int x, int& y, const char* label, const char* value) {
+    drawInfoLineAt(x, y, label, value, 1);
     y += INFO_LINE_H;
+}
+
+const char* getChargingStatusText() {
+    switch (M5Cardputer.Power.isCharging()) {
+        case m5::Power_Class::is_charging_t::is_charging:
+            return "ON";
+        case m5::Power_Class::is_charging_t::is_discharging:
+            return "OFF";
+        default:
+            return "N/A";
+    }
+}
+
+bool isBatteryCharging() {
+    return M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging_t::is_charging;
 }
 
 void drawInfoLineInt(const int x, int& y, const char* label, const int value) {
@@ -39,6 +107,11 @@ bool ensureConfigWifi() {
         delay(200);
     }
     return WiFi.status() == WL_CONNECTED;
+}
+
+void releaseConfigWifi() {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
 }
 
 String getPressedKey() {
