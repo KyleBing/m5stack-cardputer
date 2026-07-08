@@ -148,6 +148,30 @@ String getPressedKey() {
     return key;
 }
 
+// 排空键盘/BtnA：等待全部松开，再吞掉唤醒/松开产生的边沿事件
+void flushCardputerInput() {
+    constexpr uint32_t kReleaseTimeoutMs = 3000;
+    const uint32_t start = millis();
+    while (millis() - start < kReleaseTimeoutMs) {
+        M5Cardputer.update();
+        const bool any_down =
+            M5Cardputer.BtnA.isPressed() || M5Cardputer.Keyboard.isPressed() != 0;
+        if (!any_down) {
+            break;
+        }
+        delay(10);
+    }
+
+    // 吞掉 isChange / wasPressed，避免休眠期间按键在醒来后触发菜单
+    for (int i = 0; i < 8; i++) {
+        M5Cardputer.update();
+        (void)M5Cardputer.Keyboard.isChange();
+        (void)M5Cardputer.BtnA.wasPressed();
+        (void)M5Cardputer.BtnA.wasReleased();
+        delay(10);
+    }
+}
+
 // 检测翻页键：-1 上一页，0 无，1 下一页
 int getMenuNavDelta(const Keyboard_Class::KeysState& status) {
     for (const uint8_t hid : status.hid_keys) {

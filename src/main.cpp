@@ -13,6 +13,8 @@
 #include "app_countdown.h"
 #include "app_stopwatch.h"
 #include <WiFi.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 #include <esp_chip_info.h>
 #include <esp_system.h>
 #include <time.h>
@@ -1586,21 +1588,77 @@ static void handleIconDemoNav(const Keyboard_Class::KeysState& status) {
 
 enum class SleepPhase {
     NONE,
-    PROMPT,
-    ASLEEP,
+    PROMPT_LIGHT,
+    PROMPT_DEEP,
 };
 
 static SleepPhase sleepPhase = SleepPhase::NONE;
 static uint32_t sleepPromptMs = 0;
 static int sleepPromptLastSec = -1;
-static bool displayAsleep = false;
+static uint8_t sleepSavedBrightness = 30;
 
-// 休眠前提示：倒计时 + 唤醒键说明
-static void drawSleepPrompt(const int seconds_left) {
+// Cardputer BtnA (GO) = GPIO0，RTC 引脚，支持 ext0 唤醒
+static constexpr gpio_num_t SLEEP_WAKE_PIN = GPIO_NUM_0;
+static constexpr uint32_t SLEEP_PROMPT_MS = 5000;
+
+// 入睡前断开无线
+static void shutdownRadiosForSleep() {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    stopBleStack();
+}
+
+// 等 BtnA 松开并配置低电平唤醒
+static void prepareBtnAWake() {
+    pinMode(SLEEP_WAKE_PIN, INPUT_PULLUP);
+    while (digitalRead(SLEEP_WAKE_PIN) == LOW) {
+        delay(10);
+    }
+
+    rtc_gpio_init(SLEEP_WAKE_PIN);
+    rtc_gpio_set_direction(SLEEP_WAKE_PIN, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pullup_en(SLEEP_WAKE_PIN);
+    rtc_gpio_pulldown_dis(SLEEP_WAKE_PIN);
+
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    esp_sleep_enable_ext0_wakeup(SLEEP_WAKE_PIN, 0);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_AUTO);
+}
+
+// 浅休眠：关屏后 CPU 暂停，BtnA 唤醒并回到主菜单（不重启）
+static void enterLightSleep() {
+    sleepSavedBrightness = M5Cardputer.Display.getBrightness();
+    M5Cardputer.Display.sleep();
+    M5Cardputer.Display.waitDisplay();
+    M5Cardputer.Display.setBrightness(0);
+    shutdownRadiosForSleep();
+    flushCardputerInput();
+    prepareBtnAWake();
+    esp_light_sleep_start();
+
+    flushCardputerInput();
+    sleepPhase = SleepPhase::NONE;
+    M5Cardputer.Display.wakeup();
+    M5Cardputer.Display.setBrightness(sleepSavedBrightness);
+    showMenu();
+}
+
+// 深度休眠：关屏关无线后 CPU 断电，仅 BtnA 可唤醒（唤醒后重启）
+static void enterDeepSleep() {
+    M5Cardputer.Display.sleep();
+    M5Cardputer.Display.waitDisplay();
+    M5Cardputer.Display.setBrightness(0);
+    shutdownRadiosForSleep();
+    prepareBtnAWake();
+    esp_deep_sleep_start();
+}
+
+// 浅休眠提示：默认路径，倒计时内按 s 可切到深度休眠
+static void drawLightSleepPrompt(const int seconds_left) {
     beginAppScreen("Sleep");
 
     int y = APP_CONTENT_Y + 8;
-    drawInfoLineAt(APP_CONTENT_X, y, "SLEEP", "IN", 2);
+    drawInfoLineAt(APP_CONTENT_X, y, "LIGHT", "SLEEP", 2);
     y += INFO_LINE_H_2X + 4;
 
     char buf[8];
@@ -1615,41 +1673,82 @@ static void drawSleepPrompt(const int seconds_left) {
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
     M5Cardputer.Display.println("wake: BtnA (GO)");
+    y += INFO_LINE_H_2X + 2;
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("press s again for deep sleep");
 }
 
-// 进入休眠提示流程（5 秒后再关屏）
+// 深度休眠提示
+static void drawDeepSleepPrompt(const int seconds_left) {
+    beginAppScreen("Sleep");
+
+    int y = APP_CONTENT_Y + 8;
+    drawInfoLineAt(APP_CONTENT_X, y, "DEEP", "SLEEP", 2);
+    y += INFO_LINE_H_2X + 4;
+
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%ds", seconds_left);
+    M5Cardputer.Display.setTextSize(3);
+    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.print(buf);
+    y += 30;
+
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("wake: BtnA (GO)");
+    y += INFO_LINE_H_2X + 2;
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.println("reboot on wake");
+}
+
+// 进入浅休眠提示流程（5 秒后进 light sleep）
 static void enterSleepApp() {
     currentState = AppState::SLEEP;
-    sleepPhase = SleepPhase::PROMPT;
+    sleepPhase = SleepPhase::PROMPT_LIGHT;
     sleepPromptMs = millis();
     sleepPromptLastSec = -1;
     M5Cardputer.Display.clear();
-    drawSleepPrompt(5);
+    drawLightSleepPrompt(5);
 }
 
-// 真正关屏休眠
-static void enterDisplaySleep() {
-    sleepPhase = SleepPhase::ASLEEP;
-    displayAsleep = true;
-    M5Cardputer.Display.sleep();
+// 浅休眠提示中按 s：切换为深度休眠倒计时
+static void switchToDeepSleepPrompt() {
+    sleepPhase = SleepPhase::PROMPT_DEEP;
+    sleepPromptMs = millis();
+    sleepPromptLastSec = -1;
+    drawDeepSleepPrompt(5);
 }
 
-// loop 内处理休眠提示倒计时
+// 倒计时结束后进入对应休眠（light sleep 唤醒后会返回）
 static void updateSleepPrompt() {
-    if (sleepPhase != SleepPhase::PROMPT) {
+    if (sleepPhase != SleepPhase::PROMPT_LIGHT && sleepPhase != SleepPhase::PROMPT_DEEP) {
         return;
     }
 
     const uint32_t elapsed = millis() - sleepPromptMs;
-    if (elapsed >= 5000) {
-        enterDisplaySleep();
+    if (elapsed >= SLEEP_PROMPT_MS) {
+        if (sleepPhase == SleepPhase::PROMPT_DEEP) {
+            enterDeepSleep();
+        } else {
+            enterLightSleep();
+        }
         return;
     }
 
     const int sec_left = 5 - static_cast<int>(elapsed / 1000);
     if (sec_left != sleepPromptLastSec) {
         sleepPromptLastSec = sec_left;
-        drawSleepPrompt(sec_left);
+        if (sleepPhase == SleepPhase::PROMPT_DEEP) {
+            drawDeepSleepPrompt(sec_left);
+        } else {
+            drawLightSleepPrompt(sec_left);
+        }
     }
 }
 
@@ -1738,6 +1837,9 @@ void setup() {
     const auto cfg = M5.config();
     M5Cardputer.begin(cfg);
     Serial.begin(115200);
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+        Serial.println("wake: BtnA from deep sleep");
+    }
     if (initAppConfigFs()) {
         if (loadAppConfig()) {
             Serial.printf("config: %d mijia device(s)\n", getAppConfig().device_count);
@@ -1750,6 +1852,7 @@ void setup() {
     WiFi.mode(WIFI_OFF);
     M5Cardputer.Display.setRotation(1);
     M5Cardputer.Display.setBrightness(30);
+    flushCardputerInput();
     showMenu();
 }
 
@@ -1757,22 +1860,18 @@ void loop() {
     M5Cardputer.update();
 
     // 休眠提示倒计时
-    if (sleepPhase == SleepPhase::PROMPT) {
+    if (sleepPhase == SleepPhase::PROMPT_LIGHT || sleepPhase == SleepPhase::PROMPT_DEEP) {
         updateSleepPrompt();
         if (M5Cardputer.BtnA.wasPressed()) {
             sleepPhase = SleepPhase::NONE;
             showMenu();
+            return;
         }
-        return;
-    }
-
-    // 休眠中只处理 BtnA 唤醒
-    if (displayAsleep) {
-        if (M5Cardputer.BtnA.wasPressed()) {
-            M5Cardputer.Display.wakeup();
-            displayAsleep = false;
-            sleepPhase = SleepPhase::NONE;
-            showMenu();
+        if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+            const String key = getPressedKey();
+            if (key == "s" && sleepPhase == SleepPhase::PROMPT_LIGHT) {
+                switchToDeepSleepPrompt();
+            }
         }
         return;
     }

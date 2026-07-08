@@ -46,5 +46,8 @@ void releaseConfigWifi();
 // 获取当前按下的可打印字符
 String getPressedKey();
 
+// 排空键盘/BtnA 状态：等全部松开后吞掉 isChange / wasPressed 边沿（休眠唤醒后用）
+void flushCardputerInput();
+
 // 翻页键：-1 上一页，0 无，1 下一页（方向键 / ; , . / / [ ]）
 int getMenuNavDelta(const Keyboard_Class::KeysState& status);
