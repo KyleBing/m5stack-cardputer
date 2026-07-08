@@ -7,6 +7,7 @@
 #include "app_wifi.h"
 #include "app_mijia.h"
 #include "app_mijia_ui.h"
+#include "app_device_icons.h"
 #include "app_ble.h"
 #include "app_connectivity.h"
 #include "app_countdown.h"
@@ -1455,6 +1456,18 @@ static void drawDemoMijiaFan(const int x, const int y) {
 static void drawDemoMijiaAirFryer(const int x, const int y) {
     drawMijiaDeviceIcon(MijiaDevKind::AIR_FRYER, x, y, WHITE, ICON_DEMO_SIZE / MIJIA_ICON_BASE);
 }
+static void drawDemoPngFan(const int x, const int y) {
+    drawDevicePngFile("/img/fan@2x.png", x, y, ICON_DEMO_SIZE);
+}
+static void drawDemoPngPurifier(const int x, const int y) {
+    drawDevicePngFile("/img/air_normal@2x.png", x, y, ICON_DEMO_SIZE);
+}
+static void drawDemoPngPlug(const int x, const int y) {
+    drawDevicePngFile("/img/switch_on@2x.png", x, y, ICON_DEMO_SIZE);
+}
+static void drawDemoPngDefault(const int x, const int y) {
+    drawDevicePngFile("/img/default@2x.png", x, y, ICON_DEMO_SIZE);
+}
 static void drawDemoPowerOn(const int x, const int y) {
     drawIconPower(x, y, APP_COLOR_OK, ICON_DEMO_SIZE);
 }
@@ -1482,6 +1495,10 @@ static const IconDemoItem ICON_DEMO_ITEMS[] = {
     {"mijia light", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaLight},
     {"mijia fan", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaFan},
     {"mijia fryer", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaAirFryer},
+    {"png fan", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPngFan},
+    {"png purifier", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPngPurifier},
+    {"png plug", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPngPlug},
+    {"png default", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPngDefault},
     {"power on", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPowerOn},
     {"power off", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPowerOff},
 };

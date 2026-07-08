@@ -3,6 +3,7 @@
 #include "app_common.h"
 #include "app_header.h"
 #include "app_icons.h"
+#include "app_device_icons.h"
 #include "M5Cardputer.h"
 #include <cstring>
 
@@ -106,6 +107,11 @@ static void drawMijiaIconGeneric(const int x, const int y, const int scale, cons
 
 void drawMijiaDeviceIcon(const MijiaDevKind kind, const int x, const int y, const uint16_t color,
                          const int scale) {
+    const int px = mijiaIconPx(scale);
+    // 优先使用 LittleFS 中的 PNG 图标
+    if (drawDevicePngIcon(kind, x, y, px)) {
+        return;
+    }
     switch (kind) {
         case MijiaDevKind::LIGHT:
             drawMijiaIconLight(x, y, scale, color);

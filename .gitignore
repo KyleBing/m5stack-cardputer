@@ -6,4 +6,5 @@
 **/ipch
 .idea/
 data/config.json
+data/img/
 mijia-devices.json
