@@ -7,6 +7,7 @@
 #include "app_mijia_ui.h"
 #include "app_device_icons.h"
 #include "mijia_control.h"
+#include <WiFi.h>
 #include <cctype>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
@@ -24,6 +25,18 @@ static volatile bool mijiaNeedRedraw = false;
 static uint32_t mijiaRefreshDeadlineMs = 0;
 
 static constexpr uint32_t MIJIA_REFRESH_TIMEOUT_MS = 1000;
+static constexpr uint32_t MIJIA_WIFI_TIMEOUT_MS = 12000;
+
+enum class MijiaWifiPhase : uint8_t {
+    IDLE,
+    CONNECTING, // 联网中，不计入设备查询超时
+    READY,
+    FAILED,
+};
+
+static MijiaWifiPhase mijiaWifiPhase = MijiaWifiPhase::IDLE;
+static uint32_t mijiaWifiDeadlineMs = 0;
+static char mijiaNetStatus[32] = "";
 
 struct MijiaRefreshJob {
     int gen;
@@ -33,7 +46,78 @@ struct MijiaRefreshJob {
 };
 
 static void scheduleMijiaRefresh();
+static void requestMijiaRefresh();
 static void drawMijiaHelpPage();
+
+// 是否已连上 config 中的 WiFi
+static bool isMijiaConfigWifiConnected() {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
+        return false;
+    }
+    return WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid;
+}
+
+// 联网阶段在 UI 上显示的网络状态（nullptr 表示不显示）
+static const char* getMijiaNetworkStatusForUi() {
+    if (mijiaUi.power_known || mijiaNetStatus[0] == '\0') {
+        return nullptr;
+    }
+    return mijiaNetStatus;
+}
+
+// 进入米家后先非阻塞联网，成功后再启动设备查询
+static void startMijiaWifiConnect() {
+    const AppConfig& cfg = getAppConfig();
+    mijiaNetStatus[0] = '\0';
+
+    if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
+        mijiaWifiPhase = MijiaWifiPhase::FAILED;
+        strncpy(mijiaUi.status, "未配置WiFi", sizeof(mijiaUi.status));
+        strncpy(mijiaNetStatus, "未配置WiFi", sizeof(mijiaNetStatus));
+        mijiaNeedRedraw = true;
+        return;
+    }
+
+    if (isMijiaConfigWifiConnected()) {
+        mijiaWifiPhase = MijiaWifiPhase::READY;
+        strncpy(mijiaNetStatus, "已连接", sizeof(mijiaNetStatus));
+        requestMijiaRefresh();
+        return;
+    }
+
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
+    mijiaWifiPhase = MijiaWifiPhase::CONNECTING;
+    mijiaWifiDeadlineMs = millis() + MIJIA_WIFI_TIMEOUT_MS;
+    strncpy(mijiaUi.status, "正在连接网络", sizeof(mijiaUi.status));
+    strncpy(mijiaNetStatus, "正在连接网络", sizeof(mijiaNetStatus));
+    mijiaRefreshDeadlineMs = 0;
+    mijiaNeedRedraw = true;
+}
+
+// 主循环轮询 WiFi，联网成功后再开始设备查询（不计入设备超时）
+static void updateMijiaWifiConnect() {
+    if (mijiaWifiPhase != MijiaWifiPhase::CONNECTING) {
+        return;
+    }
+
+    if (isMijiaConfigWifiConnected()) {
+        mijiaWifiPhase = MijiaWifiPhase::READY;
+        strncpy(mijiaNetStatus, "已连接", sizeof(mijiaNetStatus));
+        requestMijiaRefresh();
+        return;
+    }
+
+    if (static_cast<int32_t>(millis() - mijiaWifiDeadlineMs) >= 0) {
+        mijiaWifiPhase = MijiaWifiPhase::FAILED;
+        strncpy(mijiaUi.status, "连接失败", sizeof(mijiaUi.status));
+        strncpy(mijiaNetStatus, "连接失败", sizeof(mijiaNetStatus));
+        mijiaRefreshDeadlineMs = 0;
+        mijiaNeedRedraw = true;
+    }
+}
 
 // 按当前模式重绘控制页或帮助页
 static void redrawMijiaScreen() {
@@ -81,7 +165,7 @@ static void mijiaRefreshTaskFn(void* arg) {
         return;
     }
 
-    if (!ensureConfigWifi()) {
+    if (!isMijiaConfigWifiConnected()) {
         if (job_gen == mijiaRefreshGen && job_idx == mijiaDeviceIdx) {
             strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
             mijiaUi.power_known = false;
@@ -119,6 +203,7 @@ static void mijiaRefreshTaskFn(void* arg) {
     } else if (!job_timed_out && job_gen == mijiaRefreshGen && job_idx == mijiaDeviceIdx) {
         mijiaUi = temp;
         mijiaRefreshDeadlineMs = 0;
+        mijiaNetStatus[0] = '\0';
         mijiaNeedRedraw = true;
     }
 
@@ -158,8 +243,12 @@ static void scheduleMijiaRefresh() {
     }
 }
 
-// 请求刷新当前设备（不阻塞按键处理）
+// 请求刷新当前设备（不阻塞按键处理；需 WiFi 已就绪）
 static void requestMijiaRefresh() {
+    if (mijiaWifiPhase != MijiaWifiPhase::READY && !isMijiaConfigWifiConnected()) {
+        return;
+    }
+    mijiaWifiPhase = MijiaWifiPhase::READY;
     mijiaRefreshTimedOut = false;
     mijiaRefreshGen++;
     mijiaRefreshDeadlineMs = millis() + MIJIA_REFRESH_TIMEOUT_MS;
@@ -226,10 +315,10 @@ static void drawMijiaOverviewItem(const MijiaDevice& entry, const int x, const i
                                   const bool selected) {
     const MijiaDevKind kind = mijiaClassifyModel(entry.model);
     const uint16_t name_color = selected ? APP_COLOR_OK : APP_COLOR_VALUE;
-    const int icon_px = deviceIconDrawPx(&entry, kind, MIJIA_ICON_SCALE_LIST);
+    const int icon_px = deviceIconDrawPx(&entry);
     const int icon_y = y + (MIJIA_LIST_ITEM_H - icon_px) / 2;
     drawMijiaDeviceIconFor(&entry, kind, x, icon_y, selected ? APP_COLOR_OK : APP_COLOR_HINT,
-                           MIJIA_ICON_SCALE_LIST);
+                           false, MIJIA_ICON_SCALE_LIST);
 
     const int text_x = x + icon_px + 6;
 
@@ -416,15 +505,16 @@ static int mijiaCountHelpRows(const MijiaDevKind kind, const int max_w, const in
 
     switch (kind) {
         case MijiaDevKind::LIGHT: {
+            static const KeyHintItem bright_items[] = {{'-', "bright-"}, {'=', "bright+"}};
             static const KeyHintItem percent_items[] = {{'1', "10%"}, {'9', "90%"}, {'0', "100%"}};
-            rows += 1;
+            rows += mijiaCountWrappedRows(bright_items, 2, text_size, max_w);
             rows += mijiaCountWrappedRows(percent_items, 3, text_size, max_w);
             break;
         }
         case MijiaDevKind::FAN_P5: {
             static const KeyHintItem fan_items[] = {
-                {'9', "spd-"},
-                {'0', "spd+"},
+                {'-', "spd-"},
+                {'=', "spd+"},
                 {'w', "roll"},
                 {'m', "mode"},
             };
@@ -449,7 +539,7 @@ static int mijiaCountHelpRows(const MijiaDevKind kind, const int max_w, const in
                 {'4', "mode4"},
                 {'5', "mode5"},
             };
-            static const KeyHintItem fan_items[] = {{'9', "fan-"}, {'0', "fan+"}};
+            static const KeyHintItem fan_items[] = {{'-', "fan-"}, {'=', "fan+"}};
             rows += mijiaCountWrappedRows(mode_items, 5, text_size, max_w);
             rows += mijiaCountWrappedRows(fan_items, 2, text_size, max_w);
             break;
@@ -527,20 +617,12 @@ static void drawMijiaRefreshHelpRow(const int x, const int row, const int total_
 // 灯：亮度调节说明
 static int drawMijiaLightHelpRows(const int start_row, const int total_rows, const int text_size,
                                   const int max_w) {
-    const int y = mijiaHelpRowY(start_row, total_rows, text_size);
-    int cx = APP_CONTENT_X + drawKeyBadge(APP_CONTENT_X, y, '[', text_size);
-    M5Cardputer.Display.setTextSize(text_size);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, y);
-    M5Cardputer.Display.print("/");
-    cx += M5Cardputer.Display.textWidth("/");
-    cx += drawKeyBadge(cx, y, ']', text_size);
-    M5Cardputer.Display.setCursor(cx, y);
-    M5Cardputer.Display.print(" bright");
-
+    static const KeyHintItem bright_items[] = {{'-', "bright-"}, {'=', "bright+"}};
     static const KeyHintItem percent_items[] = {{'1', "10%"}, {'9', "90%"}, {'0', "100%"}};
-    return drawKeyHintsWrapped(APP_CONTENT_X, start_row + 1, total_rows, percent_items, 3,
-                               text_size, APP_COLOR_HINT, max_w);
+    int row = drawKeyHintsWrapped(APP_CONTENT_X, start_row, total_rows, bright_items, 2, text_size,
+                                  APP_COLOR_HINT, max_w);
+    return drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, percent_items, 3, text_size,
+                               APP_COLOR_HINT, max_w);
 }
 
 // 按设备类型绘制操作帮助（text_size=2，垂直空间均分）
@@ -570,8 +652,8 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
             break;
         case MijiaDevKind::FAN_P5: {
             static const KeyHintItem fan_items[] = {
-                {'9', "spd-"},
-                {'0', "spd+"},
+                {'-', "spd-"},
+                {'=', "spd+"},
                 {'w', "roll"},
                 {'m', "mode"},
             };
@@ -598,7 +680,7 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
                 {'4', "mode4"},
                 {'5', "mode5"},
             };
-            static const KeyHintItem fan_items[] = {{'9', "fan-"}, {'0', "fan+"}};
+            static const KeyHintItem fan_items[] = {{'-', "fan-"}, {'=', "fan+"}};
             row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, mode_items, 5, text_size,
                                       APP_COLOR_HINT, max_w);
             row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, fan_items, 2, text_size,
@@ -637,7 +719,8 @@ void drawMijiaApp() {
     }
 
     const MijiaDevKind kind = mijiaClassifyModel(dev->model);
-    drawMijiaDevicePanel(dev, kind, mijiaDeviceIdx, cfg.device_count, mijiaUi, APP_CONTENT_X, y);
+    drawMijiaDevicePanel(dev, kind, mijiaDeviceIdx, cfg.device_count, mijiaUi, APP_CONTENT_X, y,
+                         getMijiaNetworkStatusForUi());
 }
 
 void enterMijiaApp() {
@@ -645,13 +728,17 @@ void enterMijiaApp() {
     mijiaOverviewMode = false;
     mijiaHelpVisible = false;
     mijiaOverviewScrollIdx = 0;
+    mijiaWifiPhase = MijiaWifiPhase::IDLE;
+    mijiaWifiDeadlineMs = 0;
+    mijiaRefreshDeadlineMs = 0;
+    mijiaNetStatus[0] = '\0';
     mijiaResetUiState(mijiaUi);
-    strncpy(mijiaUi.status, "connecting", sizeof(mijiaUi.status));
     drawMijiaApp();
-    requestMijiaRefresh();
+    startMijiaWifiConnect();
 }
 
 void updateMijiaApp() {
+    updateMijiaWifiConnect();
     updateMijiaRefreshTimeout();
     if (mijiaNeedRedraw) {
         mijiaNeedRedraw = false;
@@ -715,21 +802,25 @@ void handleMijiaApp(const String& key) {
             setMijiaPower(!mijiaUi.power_on);
         }
     } else if (key == "r") {
-        redrawMijiaScreen();
-        requestMijiaRefresh();
+        if (mijiaWifiPhase == MijiaWifiPhase::FAILED || mijiaWifiPhase == MijiaWifiPhase::IDLE) {
+            startMijiaWifiConnect();
+        } else {
+            redrawMijiaScreen();
+            requestMijiaRefresh();
+        }
     } else if (key == "," || key == ";") {
         switchMijiaDevice(-1, cfg.device_count);
         return;
     } else if (key == "." || key == "/") {
         switchMijiaDevice(1, cfg.device_count);
         return;
-    } else if (kind == MijiaDevKind::LIGHT && key == "[") {
+    } else if (kind == MijiaDevKind::LIGHT && key == "-") {
         if (!ensureConfigWifi()) {
             strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
         } else {
             mijiaAdjustBright(dev, mijiaUi, -10);
         }
-    } else if (kind == MijiaDevKind::LIGHT && key == "]") {
+    } else if (kind == MijiaDevKind::LIGHT && (key == "=" || key == "+")) {
         if (!ensureConfigWifi()) {
             strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
         } else {
@@ -745,9 +836,9 @@ void handleMijiaApp(const String& key) {
     } else if (kind == MijiaDevKind::FAN_P5) {
         if (!ensureConfigWifi()) {
             strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
-        } else if (key == "9") {
+        } else if (key == "-") {
             mijiaAdjustFanP5Speed(dev, mijiaUi, -10);
-        } else if (key == "0") {
+        } else if (key == "=" || key == "+") {
             mijiaAdjustFanP5Speed(dev, mijiaUi, 10);
         } else if (key == "w") {
             mijiaToggleFanP5Roll(dev, mijiaUi);
@@ -768,9 +859,9 @@ void handleMijiaApp(const String& key) {
             strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
         } else if (key.length() == 1 && key[0] >= '1' && key[0] <= '5') {
             mijiaSetPurifierMode(dev, mijiaUi, key[0] - '1');
-        } else if (key == "9") {
+        } else if (key == "-") {
             mijiaAdjustPurifierFanLevel(dev, mijiaUi, -1);
-        } else if (key == "0") {
+        } else if (key == "=" || key == "+") {
             mijiaAdjustPurifierFanLevel(dev, mijiaUi, 1);
         } else {
             handled = false;

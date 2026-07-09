@@ -3,7 +3,7 @@
 // 全局 header 高度与内容区起始坐标
 static constexpr int APP_HEADER_H = 28;
 static constexpr int APP_CONTENT_X = 4;
-static constexpr int APP_CONTENT_Y = APP_HEADER_H + 2;
+static constexpr int APP_CONTENT_Y = APP_HEADER_H + 5;
 
 // 子界面 header：应用名 + BtnA(GO) 返回按钮
 void drawAppScreenHeader(const char* title);

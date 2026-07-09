@@ -75,7 +75,7 @@ static const MenuItem MENU_ITEMS[] = {
     {'o', "Set", "Settings", AppState::SETTINGS},
     {'p', "Pwr", "Power", AppState::POWER},
     {'l', "Spk", "Speaker", AppState::SPEAKER},
-    {'s', "Slp", "Sleep", AppState::SLEEP},
+    {'`', "Slp", "Sleep", AppState::SLEEP},
     {'t', "Time", "Time", AppState::RTC},
     {'n', "InI2", "InI2", AppState::IN_I2C},
     {'e', "ExI2", "ExI2", AppState::EX_I2C},
@@ -87,7 +87,7 @@ static const MenuItem MENU_ITEMS[] = {
     {'c', "Circ", "Circle", AppState::CIRCLE},
     {'a', "Icn", "Icons", AppState::ICONS},
     {'q', "Cd", "Countdown", AppState::COUNTDOWN},
-    {'f', "Sw", "Stopwatch", AppState::STOPWATCH},
+    {'s', "Sw", "Stopwatch", AppState::STOPWATCH},
 };
 
 static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
@@ -1026,11 +1026,11 @@ static bool rtcSyncTimedOut = false;
 static char rtcLastTime[16] = "";
 static char rtcLastDate[20] = "";
 static char rtcLastSrc[8] = "";
-static constexpr int RTC_TIME_TEXT_SIZE = 3;
+static constexpr int RTC_TIME_TEXT_SIZE = 4;       // 时间主体 4 倍字体
 static constexpr int RTC_DATE_TEXT_SIZE = 2;
 static constexpr int RTC_TIME_LINE_H = 8 * RTC_TIME_TEXT_SIZE;
 static constexpr int RTC_DATE_LINE_H = 8 * RTC_DATE_TEXT_SIZE;
-static constexpr int RTC_TIME_DATE_GAP = 6;
+static constexpr int RTC_TIME_BOTTOM_MARGIN = 5;   // 时间主体下方间距
 static constexpr int RTC_SRC_TEXT_SIZE = 1;
 static constexpr int RTC_SRC_LINE_H = INFO_LINE_H;
 static constexpr int RTC_FAIL_TEXT_SIZE = 2;
@@ -1044,13 +1044,13 @@ static int rtcContentHeight() {
 
 // 主时间垂直起始 y（时间+日期块在内容区居中，底部留给来源行）
 static int rtcTimeY() {
-    const int block_h = RTC_TIME_LINE_H + RTC_TIME_DATE_GAP + RTC_DATE_LINE_H;
+    const int block_h = RTC_TIME_LINE_H + RTC_TIME_BOTTOM_MARGIN + RTC_DATE_LINE_H;
     const int avail_h = rtcContentHeight() - RTC_SRC_LINE_H - 4;
     return APP_CONTENT_Y + (avail_h - block_h) / 2;
 }
 
 static int rtcDateY() {
-    return rtcTimeY() + RTC_TIME_LINE_H + RTC_TIME_DATE_GAP;
+    return rtcTimeY() + RTC_TIME_LINE_H + RTC_TIME_BOTTOM_MARGIN;
 }
 
 // 来源行贴近内容区左下角
@@ -1449,49 +1449,36 @@ static void drawDemoInfoStorage(const int x, const int y) {
 static void drawDemoInfoBattery(const int x, const int y) {
     drawIconInfoBatterySized(x, y, WHITE, ICON_DEMO_SIZE);
 }
-static void drawDemoMijiaLight(const int x, const int y) {
-    drawMijiaDeviceIcon(MijiaDevKind::LIGHT, x, y, WHITE, ICON_DEMO_SIZE / MIJIA_ICON_BASE);
+
+static constexpr int DEVICE_ICON_DEMO_GAP = 8;
+static constexpr int DEVICE_ICON_DEMO_PAIR_W =
+    DEVICE_ICON_NATIVE_PX * 2 + DEVICE_ICON_DEMO_GAP;
+
+// 并排展示 off / on 两种原生设备图标
+static void drawDemoDevicePair(const char* basename, const int x, const int y) {
+    char path[48];
+    snprintf(path, sizeof(path), "/icon/device/%s.png", basename);
+    drawDevicePngNative(path, x, y);
+    snprintf(path, sizeof(path), "/icon/device/%s_active.png", basename);
+    drawDevicePngNative(path, x + DEVICE_ICON_NATIVE_PX + DEVICE_ICON_DEMO_GAP, y);
 }
-static void drawDemoMijiaFan(const int x, const int y) {
-    drawMijiaDeviceIcon(MijiaDevKind::FAN_GENERIC, x, y, WHITE, ICON_DEMO_SIZE / MIJIA_ICON_BASE);
-}
-static void drawDemoMijiaAirFryer(const int x, const int y) {
-    drawMijiaDeviceIcon(MijiaDevKind::AIR_FRYER, x, y, WHITE, ICON_DEMO_SIZE / MIJIA_ICON_BASE);
-}
-static void drawDemoPngFan(const int x, const int y) {
-    drawDevicePngFile("/img/fan@2x.png", x, y, ICON_DEMO_SIZE);
-}
-static void drawDemoPngPurifier(const int x, const int y) {
-    drawDevicePngFile("/img/air_normal@2x.png", x, y, ICON_DEMO_SIZE);
-}
-static void drawDemoPngPlug(const int x, const int y) {
-    drawDevicePngFile("/img/switch_on@2x.png", x, y, ICON_DEMO_SIZE);
-}
-static void drawDemoPngDefault(const int x, const int y) {
-    drawDevicePngFile("/img/default@2x.png", x, y, ICON_DEMO_SIZE);
-}
-// 米家设备原生 PNG（52×52，不缩放，居中展示）
-static void drawDemoNativeLamp(const int x, const int y) {
-    drawDemoInBox(x, y, DEVICE_ICON_NATIVE_PX, DEVICE_ICON_NATIVE_PX, [](const int bx, const int by) {
-        drawDevicePngNative("/icon/device/lamp.png", bx, by);
-    });
-}
-static void drawDemoNativeBedlight(const int x, const int y) {
-    drawDemoInBox(x, y, DEVICE_ICON_NATIVE_PX, DEVICE_ICON_NATIVE_PX, [](const int bx, const int by) {
-        drawDevicePngNative("/icon/device/bedlight.png", bx, by);
-    });
-}
-static void drawDemoNativeBlumb(const int x, const int y) {
-    drawDemoInBox(x, y, DEVICE_ICON_NATIVE_PX, DEVICE_ICON_NATIVE_PX, [](const int bx, const int by) {
-        drawDevicePngNative("/icon/device/blumb.png", bx, by);
-    });
-}
-static void drawDemoPowerOn(const int x, const int y) {
-    drawIconPower(x, y, APP_COLOR_OK, ICON_DEMO_SIZE);
-}
-static void drawDemoPowerOff(const int x, const int y) {
-    drawIconPower(x, y, APP_COLOR_HINT, ICON_DEMO_SIZE);
-}
+
+#define DEFINE_DEVICE_ICON_DEMO(name) \
+    static void drawDemoDevice_##name(const int x, const int y) { \
+        drawDemoDevicePair(#name, x, y); \
+    }
+
+DEFINE_DEVICE_ICON_DEMO(airpurifier)
+DEFINE_DEVICE_ICON_DEMO(bslamp2)
+DEFINE_DEVICE_ICON_DEMO(camera)
+DEFINE_DEVICE_ICON_DEMO(cooker)
+DEFINE_DEVICE_ICON_DEMO(fan)
+DEFINE_DEVICE_ICON_DEMO(fryer)
+DEFINE_DEVICE_ICON_DEMO(juicer)
+DEFINE_DEVICE_ICON_DEMO(lamp2)
+DEFINE_DEVICE_ICON_DEMO(plug)
+DEFINE_DEVICE_ICON_DEMO(wifispeaker)
+DEFINE_DEVICE_ICON_DEMO(default)
 
 static const IconDemoItem ICON_DEMO_ITEMS[] = {
     {"app logo", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoLogo},
@@ -1510,18 +1497,18 @@ static const IconDemoItem ICON_DEMO_ITEMS[] = {
     {"info chip", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoChip},
     {"info storage", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoStorage},
     {"info battery", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoBattery},
-    {"mijia light", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaLight},
-    {"mijia fan", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaFan},
-    {"mijia fryer", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoMijiaAirFryer},
-    {"device lamp", DEVICE_ICON_NATIVE_PX, DEVICE_ICON_NATIVE_PX, drawDemoNativeLamp},
-    {"device bedlight", DEVICE_ICON_NATIVE_PX, DEVICE_ICON_NATIVE_PX, drawDemoNativeBedlight},
-    {"device blumb", DEVICE_ICON_NATIVE_PX, DEVICE_ICON_NATIVE_PX, drawDemoNativeBlumb},
-    {"png fan", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPngFan},
-    {"png purifier", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPngPurifier},
-    {"png plug", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPngPlug},
-    {"png default", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPngDefault},
-    {"power on", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPowerOn},
-    {"power off", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPowerOff},
+    {"device airpurifier", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_airpurifier},
+    {"device bslamp2", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_bslamp2},
+    {"device camera", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_camera},
+    {"device cooker", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_cooker},
+    {"device fan", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_fan},
+    {"device fryer", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_fryer},
+    {"device juicer", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_juicer},
+    {"device lamp2", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_lamp2},
+    {"device plug", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_plug},
+    {"device wifispeaker", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX,
+     drawDemoDevice_wifispeaker},
+    {"device default", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_default},
 };
 
 static int getIconDemoItemCount() {
@@ -1568,23 +1555,31 @@ static void drawIconDemoApp() {
     for (int i = start; i < end; i++) {
         const IconDemoItem& item = ICON_DEMO_ITEMS[i];
         const int row_y = y;
+        const bool large_icon = item.height > ICON_DEMO_SIZE;
+        const int title_size = large_icon ? 1 : 2;
+        const int title_line_h = title_size == 2 ? INFO_LINE_H_2X : INFO_LINE_H;
 
-        M5Cardputer.Display.setTextSize(2);
+        M5Cardputer.Display.setTextSize(title_size);
         M5Cardputer.Display.setTextColor(WHITE, BLACK);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, row_y);
         M5Cardputer.Display.printf("%02d %s", i + 1, item.name);
 
+        M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, row_y + INFO_LINE_H_2X);
-        M5Cardputer.Display.printf("size %dx%d", item.width, item.height);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, row_y + title_line_h);
+        if (large_icon) {
+            M5Cardputer.Display.printf("off | on  %dx%d", item.width, item.height);
+        } else {
+            M5Cardputer.Display.printf("size %dx%d", item.width, item.height);
+        }
 
-        const int icon_x = M5Cardputer.Display.width() - APP_CONTENT_X - ICON_DEMO_SIZE;
-        const int label_bottom = row_y + INFO_LINE_H_2X + INFO_LINE_H + 4;
+        const int label_bottom = row_y + title_line_h + INFO_LINE_H + 4;
         const int avail_h = M5Cardputer.Display.height() - label_bottom - 4;
-        const int icon_y = label_bottom + (avail_h - ICON_DEMO_SIZE) / 2;
+        const int icon_x = M5Cardputer.Display.width() - APP_CONTENT_X - item.width;
+        const int icon_y = label_bottom + (avail_h - item.height) / 2;
         item.draw(icon_x, icon_y);
 
-        y += ICON_DEMO_SIZE + INFO_LINE_H_2X + INFO_LINE_H + 16;
+        y += title_line_h + INFO_LINE_H + item.height + 12;
     }
 }
 
@@ -1696,7 +1691,7 @@ static void drawLightSleepPrompt(const int seconds_left) {
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
     M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("press s again for deep sleep");
+    M5Cardputer.Display.println("press ` again for deep sleep");
 }
 
 // 深度休眠提示
@@ -1888,7 +1883,7 @@ void loop() {
         }
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             const String key = getPressedKey();
-            if (key == "s" && sleepPhase == SleepPhase::PROMPT_LIGHT) {
+            if (key == "`" && sleepPhase == SleepPhase::PROMPT_LIGHT) {
                 switchToDeepSleepPrompt();
             }
         }
