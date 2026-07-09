@@ -248,21 +248,22 @@ int drawMijiaDevicePanel(const MijiaDevice* dev, const MijiaDevKind kind, const 
                            MIJIA_ICON_SCALE_DEFAULT);
     const int left_bottom = icon_y + icon_px;
 
-    // 内容区右上角 1x 分页
+    // 内容区最右上角分页（与设备名垂直位置无关）
     char pager[12];
     snprintf(pager, sizeof(pager), "%d/%d", device_idx + 1, device_count);
 
     M5Cardputer.Display.setTextSize(1);
     const int pager_w = M5Cardputer.Display.textWidth(pager);
-    const int pager_x = screen_w - APP_CONTENT_X - pager_w;
+    const int content_right = screen_w - APP_CONTENT_X;
+    const int pager_x = content_right - pager_w;
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(pager_x, y);
+    M5Cardputer.Display.setCursor(pager_x, APP_CONTENT_Y);
     M5Cardputer.Display.print(pager);
 
     const int name_y = y + MIJIA_DEVICE_NAME_TOP_MARGIN;
 
     M5Cardputer.Display.setTextSize(MIJIA_PANEL_NAME_TEXT_SIZE);
-    const int name_max_w = info_w;
+    const int name_max_w = max(0, pager_x - info_x - 6);
     M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
     M5Cardputer.Display.setCursor(info_x, name_y);
     if (dev != nullptr && dev->name[0] != '\0') {
