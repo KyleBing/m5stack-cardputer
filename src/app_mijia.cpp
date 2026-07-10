@@ -17,6 +17,7 @@ static int mijiaDeviceIdx = 0;
 static bool mijiaOverviewMode = false;
 static bool mijiaHelpVisible = false;
 static int mijiaOverviewScrollIdx = 0;
+static int mijiaOverviewEntryDeviceIdx = 0;
 static MijiaUiState mijiaUi{};
 static int mijiaRefreshGen = 0;
 static volatile bool mijiaRefreshTaskRunning = false;
@@ -303,22 +304,71 @@ static void setMijiaPower(const bool on) {
     mijiaSetDevicePower(dev, mijiaUi, on);
 }
 
-// 概览列表每屏可见项数
+// 概览列表每屏固定显示 2 项
 static int getMijiaOverviewVisibleCount() {
-    const int hint_h = 12;
-    const int avail_h = M5Cardputer.Display.height() - APP_CONTENT_Y - hint_h;
-    return avail_h / (MIJIA_LIST_ITEM_H + MIJIA_LIST_ITEM_GAP);
+    return MIJIA_LIST_VISIBLE_COUNT;
 }
 
-// 绘制单项：左图标（与三行文字同高）+ 右名称/IP/型号
+// 滚动窗口对齐当前选中设备；循环切换时首尾跳页
+static void syncMijiaOverviewScrollToSelection(const int device_count, const int delta) {
+    const int visible = getMijiaOverviewVisibleCount();
+    const int max_scroll = device_count > visible ? device_count - visible : 0;
+
+    if (delta > 0 && mijiaDeviceIdx == 0) {
+        mijiaOverviewScrollIdx = 0;
+        return;
+    }
+    if (delta < 0 && mijiaDeviceIdx == device_count - 1) {
+        mijiaOverviewScrollIdx = max_scroll;
+        return;
+    }
+
+    if (mijiaDeviceIdx < mijiaOverviewScrollIdx) {
+        mijiaOverviewScrollIdx = mijiaDeviceIdx;
+    } else if (mijiaDeviceIdx >= mijiaOverviewScrollIdx + visible) {
+        mijiaOverviewScrollIdx = mijiaDeviceIdx - visible + 1;
+    }
+    if (mijiaOverviewScrollIdx > max_scroll) {
+        mijiaOverviewScrollIdx = max_scroll;
+    }
+    if (mijiaOverviewScrollIdx < 0) {
+        mijiaOverviewScrollIdx = 0;
+    }
+}
+
+// 绘制概览底栏按键提示（drawKeyBadge）
+static void drawMijiaOverviewHints(const AppConfig& cfg) {
+    const int hint_y = M5Cardputer.Display.height() - 12;
+    int cx = APP_CONTENT_X;
+
+    if (cfg.loaded && cfg.device_count > 1) {
+        char pos_buf[16];
+        snprintf(pos_buf, sizeof(pos_buf), "%d/%d", mijiaDeviceIdx + 1, cfg.device_count);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, hint_y);
+        M5Cardputer.Display.print(pos_buf);
+        cx += M5Cardputer.Display.textWidth(pos_buf) + 6;
+    }
+
+    static const KeyHintItem nav_items[] = {
+        {',', "prev"},
+        {'.', "next"},
+        {'i', "back"},
+    };
+    drawKeyHintsRow(cx, hint_y, nav_items, 3, 1, APP_COLOR_HINT);
+}
+
+// 绘制单项：左图标（缩放）+ 右名称/IP/型号
 static void drawMijiaOverviewItem(const MijiaDevice& entry, const int x, const int y,
                                   const bool selected) {
     const MijiaDevKind kind = mijiaClassifyModel(entry.model);
     const uint16_t name_color = selected ? APP_COLOR_OK : APP_COLOR_VALUE;
-    const int icon_px = deviceIconDrawPx(&entry);
+    const int icon_px = MIJIA_LIST_ICON_PX;
+    const float png_scale = static_cast<float>(MIJIA_LIST_ICON_PX) / DEVICE_ICON_NATIVE_PX;
     const int icon_y = y + (MIJIA_LIST_ITEM_H - icon_px) / 2;
     drawMijiaDeviceIconFor(&entry, kind, x, icon_y, selected ? APP_COLOR_OK : APP_COLOR_HINT,
-                           false, MIJIA_ICON_SCALE_LIST);
+                           false, MIJIA_ICON_SCALE_LIST, png_scale);
 
     const int text_x = x + icon_px + 6;
 
@@ -351,7 +401,12 @@ static void drawMijiaOverview(int& y) {
     if (!cfg.loaded || cfg.device_count == 0) {
         drawInfoLine(APP_CONTENT_X, y, "total", "0");
         drawInfoLine(APP_CONTENT_X, y, "hint", "press u web");
-        drawHintText(APP_CONTENT_X, M5Cardputer.Display.height() - 12, "i back");
+        static const KeyHintItem empty_items[] = {
+            {'u', "web"},
+            {'i', "back"},
+        };
+        drawKeyHintsRow(APP_CONTENT_X, M5Cardputer.Display.height() - 12, empty_items, 2, 1,
+                        APP_COLOR_HINT);
         return;
     }
 
@@ -374,36 +429,18 @@ static void drawMijiaOverview(int& y) {
         item_y += MIJIA_LIST_ITEM_H + MIJIA_LIST_ITEM_GAP;
     }
     y = item_y;
-
-    if (cfg.device_count > visible) {
-        char hint[32];
-        snprintf(hint, sizeof(hint), "%d/%d  , . [ ] scroll  i back", mijiaOverviewScrollIdx + 1,
-                 max_scroll + 1);
-        drawHintText(APP_CONTENT_X, M5Cardputer.Display.height() - 12, hint);
-    } else {
-        drawHintText(APP_CONTENT_X, M5Cardputer.Display.height() - 12, "i back");
-    }
+    drawMijiaOverviewHints(cfg);
 }
 
-// 概览列表翻页：-1 上一页，1 下一页
+// 概览列表循环切换设备
 static bool handleMijiaOverviewNav(const int delta) {
     const AppConfig& cfg = getAppConfig();
-    if (!cfg.loaded || cfg.device_count == 0) {
+    if (!cfg.loaded || cfg.device_count <= 1) {
         return false;
     }
 
-    const int visible = getMijiaOverviewVisibleCount();
-    if (cfg.device_count <= visible) {
-        return false;
-    }
-
-    const int max_scroll = cfg.device_count - visible;
-    const int next = mijiaOverviewScrollIdx + delta;
-    if (next < 0 || next > max_scroll) {
-        return false;
-    }
-
-    mijiaOverviewScrollIdx = next;
+    mijiaDeviceIdx = (mijiaDeviceIdx + delta + cfg.device_count) % cfg.device_count;
+    syncMijiaOverviewScrollToSelection(cfg.device_count, delta);
     redrawMijiaScreen();
     return true;
 }
@@ -759,9 +796,15 @@ void handleMijiaApp(const String& key) {
     }
 
     if (key == "i") {
+        const bool was_overview = mijiaOverviewMode;
         mijiaOverviewMode = !mijiaOverviewMode;
         if (mijiaOverviewMode) {
-            mijiaOverviewScrollIdx = 0;
+            mijiaOverviewEntryDeviceIdx = mijiaDeviceIdx;
+            syncMijiaOverviewScrollToSelection(getAppConfig().device_count, 0);
+        } else if (was_overview && mijiaDeviceIdx != mijiaOverviewEntryDeviceIdx) {
+            mijiaResetUiState(mijiaUi);
+            strncpy(mijiaUi.status, "query...", sizeof(mijiaUi.status));
+            requestMijiaRefresh();
         }
         redrawMijiaScreen();
         return;

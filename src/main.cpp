@@ -14,6 +14,8 @@
 #include "app_rtc.h"
 #include "app_icon_demo.h"
 #include "app_cursor.h"
+#include "app_morse.h"
+#include "app_font_demo.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
@@ -41,7 +43,6 @@ enum class AppState {
     INFO,
     MIC,
     SETTINGS,
-    POWER,
     SPEAKER,
     RTC,
     IN_I2C,
@@ -49,7 +50,6 @@ enum class AppState {
     WIFI,
     BLE,
     DISP,
-    CIRCLE,
     ICONS,
     SLEEP,
     MIJIA,
@@ -57,6 +57,8 @@ enum class AppState {
     COUNTDOWN,
     STOPWATCH,
     CURSOR,
+    MORSE,
+    FONT_DEMO,
 };
 
 struct MenuItem {
@@ -75,7 +77,6 @@ static const MenuItem MENU_ITEMS[] = {
     {'i', "Info", "Info", AppState::INFO},
     {'r', "Mic", "Mic", AppState::MIC},
     {'o', "Set", "Settings", AppState::SETTINGS},
-    {'p', "Pwr", "Power", AppState::POWER},
     {'l', "Spk", "Speaker", AppState::SPEAKER},
     {'s', "Slp", "Sleep", AppState::SLEEP},
     {'t', "Time", "Time", AppState::RTC},
@@ -86,11 +87,12 @@ static const MenuItem MENU_ITEMS[] = {
     {'u', "Cfg", "Config Setup", AppState::WEB},
     {'b', "BLE", "BLE", AppState::BLE},
     {'d', "Disp", "Display", AppState::DISP},
-    {'c', "Circ", "Circle", AppState::CIRCLE},
+    {'c', "Cur", "Cursor", AppState::CURSOR},
     {'a', "Icn", "Icons", AppState::ICONS},
     {'q', "Cd", "Countdown", AppState::COUNTDOWN},
     {'h', "Sw", "Stopwatch", AppState::STOPWATCH},
-    {'x', "Cur", "Cursor", AppState::CURSOR},
+    {'f', "Fnt", "Font", AppState::FONT_DEMO},
+    {'j', "Mor", "Morse", AppState::MORSE},
 };
 
 static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
@@ -536,6 +538,11 @@ static constexpr int INFO_ICON_SIZE = ICON_INFO_H;
 static constexpr int INFO_CARD_LINE_H = 8;
 static constexpr int INFO_CARD_GAP = 6;
 static int infoScrollIdx = 0;
+static bool infoPowerCardVisible = false;
+static int infoPowerCardY = -1;
+static char infoLastBat[8] = "";
+static char infoLastVolt[12] = "";
+static char infoLastChg[8] = "";
 
 struct InfoListItem {
     void (*draw_icon)(int x, int y, uint16_t color);
@@ -556,6 +563,21 @@ static void drawInfoCardLine(const int x, const int y, const char* label, const 
     M5Cardputer.Display.print(": ");
     M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
     M5Cardputer.Display.print(value);
+}
+
+static void resetInfoPowerCache() {
+    infoLastBat[0] = '\0';
+    infoLastVolt[0] = '\0';
+    infoLastChg[0] = '\0';
+}
+
+static void copyInfoPowerCache(const InfoListItem& item) {
+    strncpy(infoLastBat, item.l1_value, sizeof(infoLastBat) - 1);
+    infoLastBat[sizeof(infoLastBat) - 1] = '\0';
+    strncpy(infoLastVolt, item.l2_value, sizeof(infoLastVolt) - 1);
+    infoLastVolt[sizeof(infoLastVolt) - 1] = '\0';
+    strncpy(infoLastChg, item.l3_value, sizeof(infoLastChg) - 1);
+    infoLastChg[sizeof(infoLastChg) - 1] = '\0';
 }
 
 // 绘制单项：左图标 + 右三行
@@ -629,6 +651,8 @@ void drawInfoApp() {
     }
 
     beginAppScreen("Info");
+    infoPowerCardVisible = false;
+    infoPowerCardY = -1;
     int y = APP_CONTENT_Y;
     for (int i = 0; i < visible; i++) {
         const int idx = infoScrollIdx + i;
@@ -636,6 +660,11 @@ void drawInfoApp() {
             break;
         }
         drawInfoCardItem(items[idx], APP_CONTENT_X, y);
+        if (idx == 2) {
+            infoPowerCardVisible = true;
+            infoPowerCardY = y;
+            copyInfoPowerCache(items[idx]);
+        }
         y += INFO_ICON_SIZE + INFO_CARD_GAP;
     }
 
@@ -668,7 +697,42 @@ bool handleInfoPageNav(const Keyboard_Class::KeysState& status) {
 
 void enterInfoApp() {
     infoScrollIdx = 0;
+    resetInfoPowerCache();
     drawInfoApp();
+}
+
+// Info 页只局部刷新会变化的电源行，避免整屏闪烁
+static void updateInfoPowerLine(const int y, const char* label, const char* value, char* cache,
+                                const size_t cache_size) {
+    if (strncmp(cache, value, cache_size) == 0 && cache[0] != '\0') {
+        return;
+    }
+
+    const int text_x = APP_CONTENT_X + INFO_ICON_SIZE + 6;
+    const int w = M5Cardputer.Display.width() - text_x - APP_CONTENT_X;
+    M5Cardputer.Display.fillRect(text_x, y, w, INFO_CARD_LINE_H, BLACK);
+    drawInfoCardLine(text_x, y, label, value);
+    strncpy(cache, value, cache_size - 1);
+    cache[cache_size - 1] = '\0';
+}
+
+void updateInfoApp() {
+    if (!infoPowerCardVisible || infoPowerCardY < 0) {
+        return;
+    }
+
+    InfoListItem items[6];
+    if (buildInfoListItems(items, 6) < 3) {
+        return;
+    }
+
+    const InfoListItem& power = items[2];
+    updateInfoPowerLine(infoPowerCardY, power.l1_label, power.l1_value, infoLastBat,
+                        sizeof(infoLastBat));
+    updateInfoPowerLine(infoPowerCardY + INFO_CARD_LINE_H, power.l2_label, power.l2_value,
+                        infoLastVolt, sizeof(infoLastVolt));
+    updateInfoPowerLine(infoPowerCardY + INFO_CARD_LINE_H * 2, power.l3_label, power.l3_value,
+                        infoLastChg, sizeof(infoLastChg));
 }
 
 // ===== MIC =====
@@ -1076,61 +1140,143 @@ void drawI2cScanApp(m5::I2C_Class& bus, const char* title) {
 
 // ===== DISP =====
 
-// 屏幕色彩测试
-void drawDisplayApp(const int colorIndex) {
-    static const uint16_t colors[] = {RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE};
-    static const char* names[] = {"RED", "GREEN", "BLUE", "YEL", "CYAN", "MAG", "WHT"};
-    static const int colorCount = 7;
+static int dispPatternIndex = 0;
 
-    const int idx = colorIndex % colorCount;
-    M5Cardputer.Display.fillScreen(colors[idx]);
-    drawAppScreenHeader("Disp");
-    M5Cardputer.Display.setTextColor(BLACK, colors[idx]);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.printf("color: %s\n", names[idx]);
-    M5Cardputer.Display.println("1-7 switch");
-    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+enum class DispPattern {
+    RED,
+    GREEN,
+    BLUE,
+    YELLOW,
+    CYAN,
+    MAGENTA,
+    WHITE,
+    CHK_2X2,
+    CHK_1X1,
+    H_LINE_1PX,
+    V_LINE_1PX,
+    COUNT,
+};
+
+static const char* dispPatternName(const DispPattern p) {
+    switch (p) {
+        case DispPattern::RED:
+            return "RED";
+        case DispPattern::GREEN:
+            return "GREEN";
+        case DispPattern::BLUE:
+            return "BLUE";
+        case DispPattern::YELLOW:
+            return "YEL";
+        case DispPattern::CYAN:
+            return "CYAN";
+        case DispPattern::MAGENTA:
+            return "MAG";
+        case DispPattern::WHITE:
+            return "WHT";
+        case DispPattern::CHK_2X2:
+            return "chk 2x2";
+        case DispPattern::CHK_1X1:
+            return "chk 1x1";
+        case DispPattern::H_LINE_1PX:
+            return "h 1px";
+        case DispPattern::V_LINE_1PX:
+            return "v 1px";
+        default:
+            return "?";
+    }
+}
+
+// 2x2 黑白相间格
+static void drawDispChecker2x2(const int x, const int y, const int w, const int h) {
+    M5Cardputer.Display.fillScreen(BLACK);
+    for (int py = y; py < y + h; py += 2) {
+        for (int px = x; px < x + w; px += 2) {
+            const bool white = (((px - x) / 2) + ((py - y) / 2)) % 2 == 0;
+            const int rw = (px + 2 <= x + w) ? 2 : (x + w - px);
+            const int rh = (py + 2 <= y + h) ? 2 : (y + h - py);
+            M5Cardputer.Display.fillRect(px, py, rw, rh, white ? WHITE : BLACK);
+        }
+    }
+}
+
+// 1x1 黑白相间格
+static void drawDispChecker1x1(const int x, const int y, const int w, const int h) {
+    M5Cardputer.Display.fillScreen(BLACK);
+    for (int py = y; py < y + h; py++) {
+        for (int px = x; px < x + w; px++) {
+            const bool white = ((px - x) + (py - y)) % 2 == 0;
+            M5Cardputer.Display.drawPixel(px, py, white ? WHITE : BLACK);
+        }
+    }
+}
+
+// 横向 1 像素间隔线
+static void drawDispHLines1px(const int x, const int y, const int w, const int h) {
+    M5Cardputer.Display.fillScreen(BLACK);
+    for (int py = y; py < y + h; py += 2) {
+        M5Cardputer.Display.drawFastHLine(x, py, w, WHITE);
+    }
+}
+
+// 纵向 1 像素间隔线
+static void drawDispVLines1px(const int x, const int y, const int w, const int h) {
+    M5Cardputer.Display.fillScreen(BLACK);
+    for (int px = x; px < x + w; px += 2) {
+        M5Cardputer.Display.drawFastVLine(px, y, h, WHITE);
+    }
+}
+
+// 屏幕验证图案（无 header，全屏图案 + 底部说明）
+void drawDisplayApp(const int patternIndex) {
+    static const uint16_t solid_colors[] = {RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE};
+    const int count = static_cast<int>(DispPattern::COUNT);
+    dispPatternIndex = ((patternIndex % count) + count) % count;
+    const DispPattern pattern = static_cast<DispPattern>(dispPatternIndex);
+
+    const int screen_w = M5Cardputer.Display.width();
+    const int screen_h = M5Cardputer.Display.height();
+    constexpr int hint_h = 12;
+    const int area_h = screen_h - hint_h;
+
+    if (static_cast<int>(pattern) < 7) {
+        M5Cardputer.Display.fillScreen(solid_colors[static_cast<int>(pattern)]);
+    } else {
+        switch (pattern) {
+            case DispPattern::CHK_2X2:
+                drawDispChecker2x2(0, 0, screen_w, area_h);
+                break;
+            case DispPattern::CHK_1X1:
+                drawDispChecker1x1(0, 0, screen_w, area_h);
+                break;
+            case DispPattern::H_LINE_1PX:
+                drawDispHLines1px(0, 0, screen_w, area_h);
+                break;
+            case DispPattern::V_LINE_1PX:
+                drawDispVLines1px(0, 0, screen_w, area_h);
+                break;
+            default:
+                M5Cardputer.Display.fillScreen(BLACK);
+                break;
+        }
+    }
+
+    M5Cardputer.Display.fillRect(0, screen_h - hint_h, screen_w, hint_h, BLACK);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(4, screen_h - hint_h);
+    M5Cardputer.Display.printf("%s  ", dispPatternName(pattern));
+    const KeyHintItem items[] = {
+        {'[', "prev"},
+        {']', "next"},
+    };
+    drawKeyHintsRow(M5Cardputer.Display.getCursorX(), screen_h - hint_h, items, 2, 1, APP_COLOR_HINT);
 }
 
 void handleDisplayApp(const String& key) {
-    if (key.length() != 1 || key[0] < '1' || key[0] > '7') {
-        return;
-    }
-    drawDisplayApp(key[0] - '1');
-}
-
-// ===== CIRCLE =====
-
-static int circleRadius = 30;
-
-// 像素比例测试：正圆 + 十字线，+/- 调整半径
-void drawCircleTestApp() {
-    M5Cardputer.Display.clear();
-
-    const int cx = M5Cardputer.Display.width() / 2;
-    const int cy = (M5Cardputer.Display.height() + APP_HEADER_H) / 2;
-
-    M5Cardputer.Display.drawCircle(cx, cy, circleRadius, WHITE);
-    M5Cardputer.Display.drawFastHLine(cx - circleRadius, cy, circleRadius * 2 + 1, DARKGREY);
-    M5Cardputer.Display.drawFastVLine(cx, cy - circleRadius, circleRadius * 2 + 1, DARKGREY);
-
-    drawAppScreenHeader("Circ");
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setTextColor(WHITE, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-    M5Cardputer.Display.printf("r=%d\n", circleRadius);
-    M5Cardputer.Display.println("+/- size");
-}
-
-// +/- 调整圆半径
-void handleCircleApp(const String& key) {
-    if (key == "+" || key == "=") {
-        circleRadius = min(circleRadius + 2, 55);
-        drawCircleTestApp();
-    } else if (key == "-") {
-        circleRadius = max(circleRadius - 2, 5);
-        drawCircleTestApp();
+    if (key == "[") {
+        drawDisplayApp(dispPatternIndex - 1);
+    } else if (key == "]") {
+        drawDisplayApp(dispPatternIndex + 1);
     }
 }
 
@@ -1146,6 +1292,11 @@ static SleepPhase sleepPhase = SleepPhase::NONE;
 static uint32_t sleepPromptMs = 0;
 static int sleepPromptLastSec = -1;
 static uint8_t sleepSavedBrightness = 30;
+// 倒计时数字区布局（局部刷新用）
+static int sleepCountX = 0;
+static int sleepCountY = 0;
+static int sleepCountW = 0;
+static int sleepCountH = 0;
 
 // Cardputer BtnA (GO) = GPIO0，RTC 引脚，支持 ext0 唤醒
 static constexpr gpio_num_t SLEEP_WAKE_PIN = GPIO_NUM_0;
@@ -1203,6 +1354,22 @@ static void enterDeepSleep() {
     esp_deep_sleep_start();
 }
 
+// 仅刷新倒计时数字
+static void drawSleepCountdownOnly(const int seconds_left) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%ds", seconds_left);
+    M5Cardputer.Display.setTextSize(3);
+    if (sleepCountW > 0) {
+        M5Cardputer.Display.fillRect(sleepCountX, sleepCountY, sleepCountW, sleepCountH, BLACK);
+    }
+    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, sleepCountY);
+    M5Cardputer.Display.print(buf);
+    sleepCountW = M5Cardputer.Display.textWidth(buf);
+    sleepCountH = 24;
+    sleepCountX = APP_CONTENT_X;
+}
+
 // 浅休眠提示：默认路径，倒计时内按 s 可切到深度休眠
 static void drawLightSleepPrompt(const int seconds_left) {
     beginAppScreen("Sleep");
@@ -1211,12 +1378,10 @@ static void drawLightSleepPrompt(const int seconds_left) {
     drawInfoLineAt(APP_CONTENT_X, y, "LIGHT", "SLEEP", 2);
     y += INFO_LINE_H_2X + 4;
 
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%ds", seconds_left);
-    M5Cardputer.Display.setTextSize(3);
-    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.print(buf);
+    sleepCountY = y;
+    sleepCountX = APP_CONTENT_X;
+    sleepCountW = 0;
+    drawSleepCountdownOnly(seconds_left);
     y += 30;
 
     M5Cardputer.Display.setTextSize(2);
@@ -1238,12 +1403,10 @@ static void drawDeepSleepPrompt(const int seconds_left) {
     drawInfoLineAt(APP_CONTENT_X, y, "DEEP", "SLEEP", 2);
     y += INFO_LINE_H_2X + 4;
 
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%ds", seconds_left);
-    M5Cardputer.Display.setTextSize(3);
-    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.print(buf);
+    sleepCountY = y;
+    sleepCountX = APP_CONTENT_X;
+    sleepCountW = 0;
+    drawSleepCountdownOnly(seconds_left);
     y += 30;
 
     M5Cardputer.Display.setTextSize(2);
@@ -1294,11 +1457,7 @@ static void updateSleepPrompt() {
     const int sec_left = 5 - static_cast<int>(elapsed / 1000);
     if (sec_left != sleepPromptLastSec) {
         sleepPromptLastSec = sec_left;
-        if (sleepPhase == SleepPhase::PROMPT_DEEP) {
-            drawDeepSleepPrompt(sec_left);
-        } else {
-            drawLightSleepPrompt(sec_left);
-        }
+        drawSleepCountdownOnly(sec_left);
     }
 }
 
@@ -1333,9 +1492,6 @@ void enterApp(const AppState state) {
             micHeaderReady = false;
             drawMicApp();
             break;
-        case AppState::POWER:
-            enterPowerApp();
-            break;
         case AppState::SPEAKER:
             drawSpeakerApp("");
             break;
@@ -1355,10 +1511,8 @@ void enterApp(const AppState state) {
             enterBleApp();
             break;
         case AppState::DISP:
+            dispPatternIndex = 0;
             drawDisplayApp(0);
-            break;
-        case AppState::CIRCLE:
-            drawCircleTestApp();
             break;
         case AppState::ICONS:
             enterIconDemoApp();
@@ -1380,6 +1534,12 @@ void enterApp(const AppState state) {
             break;
         case AppState::CURSOR:
             enterCursorApp();
+            break;
+        case AppState::MORSE:
+            enterMorseApp();
+            break;
+        case AppState::FONT_DEMO:
+            enterFontDemoApp();
             break;
         default:
             break;
@@ -1444,7 +1604,7 @@ void loop() {
         lastHeaderStatusMs = now;
         if (currentState == AppState::MENU) {
             updateMenuHeaderStatus(getMenuPageCount());
-        } else if (currentState != AppState::SLEEP) {
+        } else if (currentState != AppState::SLEEP && currentState != AppState::DISP) {
             updateAppHeaderStatus();
         }
     }
@@ -1461,11 +1621,11 @@ void loop() {
             lastMicUpdateMs = now;
             drawMicApp();
         }
-    } else if (currentState == AppState::POWER) {
-        static uint32_t lastPowerUpdateMs = 0;
-        if (now - lastPowerUpdateMs >= 500) {
-            lastPowerUpdateMs = now;
-            drawPowerApp(false);
+    } else if (currentState == AppState::INFO) {
+        static uint32_t lastInfoUpdateMs = 0;
+        if (now - lastInfoUpdateMs >= 1000) {
+            lastInfoUpdateMs = now;
+            updateInfoApp();
         }
     } else if (currentState == AppState::WIFI) {
         updateWifiApp();
@@ -1485,6 +1645,8 @@ void loop() {
         updateStopwatchApp();
     } else if (currentState == AppState::CURSOR) {
         updateCursorApp();
+    } else if (currentState == AppState::MORSE) {
+        updateMorseApp();
     }
 
     if (currentState == AppState::RTC) {
@@ -1526,11 +1688,6 @@ void loop() {
             case AppState::DISP:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleDisplayApp(getPressedKey());
-                }
-                break;
-            case AppState::CIRCLE:
-                if (M5Cardputer.Keyboard.isPressed()) {
-                    handleCircleApp(getPressedKey());
                 }
                 break;
             case AppState::INFO:
@@ -1577,6 +1734,16 @@ void loop() {
             case AppState::CURSOR:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleCursorApp(getPressedKey());
+                }
+                break;
+            case AppState::MORSE:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleMorseApp(M5Cardputer.Keyboard.keysState());
+                }
+                break;
+            case AppState::FONT_DEMO:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleFontDemoNav(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             default:

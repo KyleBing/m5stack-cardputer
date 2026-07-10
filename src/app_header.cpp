@@ -5,7 +5,7 @@
 #include "M5Cardputer.h"
 
 static constexpr int MENU_LOGO_SIZE = 24;
-static constexpr int HEADER_STATUS_GAP = 4;
+static constexpr int HEADER_STATUS_GAP = 5;
 static constexpr int APP_BACK_BTN_W = ICON_BACK_W;
 static constexpr int HEADER_STATUS_CLEAR_PAD = 2;
 

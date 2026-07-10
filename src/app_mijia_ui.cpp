@@ -137,8 +137,8 @@ void drawMijiaDeviceIcon(const MijiaDevKind kind, const int x, const int y, cons
 
 void drawMijiaDeviceIconFor(const MijiaDevice* dev, const MijiaDevKind kind, const int x,
                             const int y, const uint16_t color, const bool active,
-                            const int scale) {
-    if (drawDeviceIconFor(dev, x, y, active)) {
+                            const int scale, const float png_scale) {
+    if (drawDeviceIconForScaled(dev, x, y, active, png_scale)) {
         return;
     }
     drawMijiaDeviceIconVector(kind, x, y, color, scale);

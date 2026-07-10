@@ -82,48 +82,58 @@ bool deviceIconsAvailable() {
     return LittleFS.exists("/icon/device/default.png");
 }
 
-bool drawDevicePngNative(const char* path, const int x, const int y) {
+// 按倍数缩放绘制 PNG（scale=1 为原生 70px）
+static bool drawDevicePngNativeScaled(const char* path, const int x, const int y,
+                                      const float scale) {
     if (path == nullptr || path[0] == '\0') {
         return false;
     }
     if (!LittleFS.exists(path)) {
         return false;
     }
-    // maxWidth/maxHeight=0 且 scale=1 表示按 PNG 原始尺寸绘制
-    return M5Cardputer.Display.drawPngFile(LittleFS, path, x, y, 0, 0, 0, 0, 1.0f, 1.0f,
+    return M5Cardputer.Display.drawPngFile(LittleFS, path, x, y, 0, 0, 0, 0, scale, scale,
                                            lgfx::v1::datum_t::top_left);
 }
 
-static bool drawDevicePngPath(const char* path, const int x, const int y) {
-    if (drawDevicePngNative(path, x, y)) {
+bool drawDevicePngNative(const char* path, const int x, const int y) {
+    return drawDevicePngNativeScaled(path, x, y, 1.0f);
+}
+
+static bool drawDevicePngPath(const char* path, const int x, const int y, const float scale) {
+    if (drawDevicePngNativeScaled(path, x, y, scale)) {
         return true;
     }
     return false;
 }
 
 bool drawDeviceIconDefault(const int x, const int y, const bool active) {
-    const char* path = deviceIconPathForModel(nullptr, active);
-    if (drawDevicePngPath(path, x, y)) {
-        return true;
-    }
-    if (active) {
-        return drawDevicePngPath(deviceIconPathForModel(nullptr, false), x, y);
-    }
-    return false;
+    return drawDeviceIconForScaled(nullptr, x, y, active, 1.0f);
 }
 
 bool drawDeviceIconFor(const MijiaDevice* dev, const int x, const int y, const bool active) {
+    return drawDeviceIconForScaled(dev, x, y, active, 1.0f);
+}
+
+bool drawDeviceIconForScaled(const MijiaDevice* dev, const int x, const int y, const bool active,
+                             const float scale) {
     const char* model = dev != nullptr ? dev->model : nullptr;
     const char* path = deviceIconPathForModel(model, active);
-    if (drawDevicePngPath(path, x, y)) {
+    if (drawDevicePngPath(path, x, y, scale)) {
         return true;
     }
     // active 图缺失时回退普通图
     if (active) {
         path = deviceIconPathForModel(model, false);
-        if (drawDevicePngPath(path, x, y)) {
+        if (drawDevicePngPath(path, x, y, scale)) {
             return true;
         }
     }
-    return drawDeviceIconDefault(x, y, active);
+    const char* default_path = deviceIconPathForModel(nullptr, active);
+    if (drawDevicePngPath(default_path, x, y, scale)) {
+        return true;
+    }
+    if (active) {
+        return drawDevicePngPath(deviceIconPathForModel(nullptr, false), x, y, scale);
+    }
+    return false;
 }

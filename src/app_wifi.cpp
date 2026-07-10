@@ -30,6 +30,15 @@ static char wifiStatus[48] = "";
 static uint32_t wifiConnectDeadline = 0;
 static bool wifiConnectFromConfig = false;
 
+// 是否已连上 config 中保存的 WiFi
+static bool isWifiConfigConnected() {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
+        return false;
+    }
+    return WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid;
+}
+
 static int getWifiListPageCount() {
     if (wifiScanCount <= 0) {
         return 1;
@@ -307,7 +316,7 @@ static void drawWifiConnectingScreen() {
     drawWifiHints(M5Cardputer.Display.height() - INFO_LINE_H_2X);
 }
 
-// 使用 config 中已保存的 WiFi 发起连接
+// 使用 config 中已保存的 WiFi 发起连接（与米家应用一致：不反复 disconnect）
 static void startWifiConfigConnect() {
     const AppConfig& cfg = getAppConfig();
     if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
@@ -317,8 +326,17 @@ static void startWifiConfigConnect() {
         return;
     }
 
+    if (isWifiConfigConnected()) {
+        wifiConnectFromConfig = false;
+        wifiPhase = WifiAppPhase::STATUS;
+        wifiStatus[0] = '\0';
+        drawWifiStatusScreen();
+        updateAppHeaderStatus();
+        return;
+    }
+
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
+    WiFi.setSleep(false);
     WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
 
     wifiSelectedIdx = -1;
@@ -355,7 +373,11 @@ static void startWifiConnect(const char* password) {
 
     const String ssid = WiFi.SSID(wifiSelectedIdx);
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
+    WiFi.setSleep(false);
+    // 切换 SSID 时才断开，避免频繁 disconnect 导致连接超时
+    if (WiFi.status() == WL_CONNECTED && WiFi.SSID() != ssid) {
+        WiFi.disconnect();
+    }
     WiFi.begin(ssid.c_str(), password);
 
     wifiConnectFromConfig = false;
@@ -410,11 +432,10 @@ void enterWifiApp() {
     wifiConnectFromConfig = false;
 
     const AppConfig& cfg = getAppConfig();
-    WiFi.mode(WIFI_STA);
 
     // 有已保存 WiFi 时自动连接并显示状态
     if (cfg.loaded && cfg.wifi_ssid[0] != '\0') {
-        if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid) {
+        if (isWifiConfigConnected()) {
             wifiPhase = WifiAppPhase::STATUS;
         } else {
             startWifiConfigConnect();
@@ -454,7 +475,8 @@ void updateWifiApp() {
         return;
     }
 
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED &&
+        (!wifiConnectFromConfig || isWifiConfigConnected())) {
         if (!wifiConnectFromConfig &&
             saveAppConfigWifi(WiFi.SSID().c_str(), wifiPassword)) {
             strncpy(wifiStatus, "saved", sizeof(wifiStatus));

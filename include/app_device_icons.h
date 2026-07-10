@@ -25,6 +25,9 @@ bool drawDevicePngNative(const char* path, int x, int y);
 // 绘制设备图标：按 model 匹配 PNG，active 为开关态；失败返回 false
 bool drawDeviceIconFor(const MijiaDevice* dev, int x, int y, bool active);
 
+// 按 scale 缩放绘制 PNG 设备图标（1.0 为原生 70px）
+bool drawDeviceIconForScaled(const MijiaDevice* dev, int x, int y, bool active, float scale);
+
 // 无设备信息时绘制默认图标
 bool drawDeviceIconDefault(int x, int y, bool active);
 

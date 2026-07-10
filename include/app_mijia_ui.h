@@ -6,15 +6,17 @@
 
 static constexpr int MIJIA_ICON_BASE = 16; // 16x16 设计基准
 static constexpr int MIJIA_ICON_SCALE_DEFAULT = 1;
-static constexpr int MIJIA_ICON_SCALE_LIST = 2;        // 概览列表 2x
+static constexpr int MIJIA_ICON_SCALE_LIST = 2;        // 概览列表矢量图标倍数
+static constexpr int MIJIA_LIST_VISIBLE_COUNT = 2;     // 概览每页设备数
+static constexpr int MIJIA_LIST_ICON_PX = 36;          // 概览列表图标边长
 static constexpr int MIJIA_TAG_H = 12;
 static constexpr int MIJIA_TAG_H_2X = 20;              // 2x 字号 tag 高度
 static constexpr int MIJIA_PANEL_TEXT_SIZE = 1;        // 控制页右栏控制项字号
 static constexpr int MIJIA_PANEL_NAME_TEXT_SIZE = 2;   // 控制页设备名字号
 static constexpr int MIJIA_DEVICE_NAME_TOP_MARGIN = 10; // 设备名距内容区顶部
 static constexpr int MIJIA_PANEL_BAR_TEXT_SIZE = 2;    // 进度条说明与数值字号
-// 列表项高度：原生 70px 图标 + 间距（名称 2x + IP 1x + 型号 1x）
-static constexpr int MIJIA_LIST_ITEM_H = 76;
+// 列表项高度：缩放图标 + 三行文字
+static constexpr int MIJIA_LIST_ITEM_H = 42;
 static constexpr int MIJIA_LIST_ITEM_GAP = 6;
 
 // 倍数换算为像素边长
@@ -27,7 +29,7 @@ void drawMijiaDeviceIcon(MijiaDevKind kind, int x, int y, uint16_t color,
 // 按 model 匹配 PNG；active 为开关态，失败时回退矢量图标
 void drawMijiaDeviceIconFor(const MijiaDevice* dev, MijiaDevKind kind, int x, int y,
                             uint16_t color, bool active,
-                            int scale = MIJIA_ICON_SCALE_DEFAULT);
+                            int scale = MIJIA_ICON_SCALE_DEFAULT, float png_scale = 1.0f);
 
 // 圆角 tag，active 时高亮；返回占用宽度（含间距）
 int drawMijiaStatusTag(int x, int y, const char* text, bool active, uint16_t active_bg,

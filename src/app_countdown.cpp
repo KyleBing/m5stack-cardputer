@@ -96,6 +96,21 @@ static int getCountdownFieldDelta(const Keyboard_Class::KeysState& status) {
     return 0;
 }
 
+// 0-9 数字键（word 或 HID 数字行）
+static int getCountdownDigit(const Keyboard_Class::KeysState& status) {
+    for (const char c : status.word) {
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        }
+    }
+    for (const uint8_t hid : status.hid_keys) {
+        if (hid >= 0x1E && hid <= 0x27) {
+            return (hid == 0x27) ? 0 : (hid - 0x1E + 1);
+        }
+    }
+    return -1;
+}
+
 // 上增下减
 static int getCountdownAdjustDelta(const Keyboard_Class::KeysState& status) {
     for (const uint8_t hid : status.hid_keys) {
@@ -171,7 +186,7 @@ static void drawCountdownTime(const int y, const int h, const bool force) {
         const int main_w = cdDigitW * 3 + cdColonW * 2;
         cdMainH = 8 * cdTs;
         cdMainX = margin + (avail_w - main_w) / 2;
-        cdMainY = y + (h - cdMainH) / 2;
+        cdMainY = y + (h - cdMainH) / 2 - 6;  // 时间区略偏上
         cdHx = cdMainX;
         cdMx = cdMainX + cdDigitW + cdColonW;
         cdSx = cdMainX + cdDigitW * 2 + cdColonW * 2;
@@ -247,11 +262,12 @@ static void drawCountdownHints() {
     if (cdPhase == CountdownPhase::SETUP) {
         const KeyHintItem items[] = {
             {',', "field"},
+            {'0', "digit"},
             {';', "up"},
             {'.', "down"},
             {'g', "start"},
         };
-        drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 4, 1, APP_COLOR_HINT);
+        drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 5, 1, APP_COLOR_HINT);
         return;
     }
 
@@ -317,6 +333,24 @@ static void cdAdjustField(const int delta) {
             break;
         default:
             cdSeconds = constrain(cdSeconds + delta, 0, 59);
+            break;
+    }
+}
+
+// 数字键左移填入（如按 1 再按 5 → 15）
+static void cdInputDigit(const int digit) {
+    if (cdPhase != CountdownPhase::SETUP || digit < 0 || digit > 9) {
+        return;
+    }
+    switch (cdField) {
+        case 0:
+            cdHours = constrain(cdHours * 10 + digit, 0, 99);
+            break;
+        case 1:
+            cdMinutes = constrain(cdMinutes * 10 + digit, 0, 59);
+            break;
+        default:
+            cdSeconds = constrain(cdSeconds * 10 + digit, 0, 59);
             break;
     }
 }
@@ -416,6 +450,13 @@ void handleCountdownApp(const Keyboard_Class::KeysState& status) {
         const int field_delta = getCountdownFieldDelta(status);
         if (field_delta != 0) {
             cdField = (cdField + field_delta + 3) % 3;
+            drawCountdownApp(false);
+            return;
+        }
+
+        const int digit = getCountdownDigit(status);
+        if (digit >= 0) {
+            cdInputDigit(digit);
             drawCountdownApp(false);
             return;
         }
