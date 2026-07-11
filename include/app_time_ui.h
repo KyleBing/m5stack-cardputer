@@ -16,8 +16,11 @@ void drawTimeBottomHints(const KeyHintItem* action_items, int action_count,
 // 底栏右侧 h help/back
 void drawTimeHelpHintRight(const char* help_label = "help");
 
-// 大字时间区
+// 大字时间区（含 tag / 底栏提示）
 void getTimeDisplayArea(int& area_y, int& area_h);
+
+// Pure 模式：整屏内容区
+void getTimePureDisplayArea(int& area_y, int& area_h);
 
 struct BigTimeState {
     int ts = 1;

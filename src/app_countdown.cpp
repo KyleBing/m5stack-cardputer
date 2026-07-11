@@ -2,6 +2,7 @@
 #include "app_colors.h"
 #include "app_common.h"
 #include "app_header.h"
+#include "app_rtc.h"
 #include "app_time_ui.h"
 #include <cstring>
 
@@ -222,7 +223,11 @@ static void drawCountdownTime(const int y, const int h, const bool force) {
 static void drawCountdownStateBanner() {
     int area_y = 0;
     int area_h = 0;
-    getTimeDisplayArea(area_y, area_h);
+    if (isTimePureMode()) {
+        getTimePureDisplayArea(area_y, area_h);
+    } else {
+        getTimeDisplayArea(area_y, area_h);
+    }
 
     M5Cardputer.Display.fillRect(APP_CONTENT_X, area_y + area_h - 10,
                                  M5Cardputer.Display.width() - APP_CONTENT_X * 2, 10, BLACK);
@@ -267,7 +272,14 @@ static void drawCountdownSetupBottomHints() {
     cx += drawKeyBadge(cx, y, 'g', 1);
     M5Cardputer.Display.setCursor(cx, y);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-    M5Cardputer.Display.print("start");
+    M5Cardputer.Display.print("start ");
+    cx += M5Cardputer.Display.textWidth("start ");
+
+    cx += drawKeyBadge(cx, y, 'p', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print("pure");
 
     drawTimeHelpHintRight("help");
 }
@@ -290,11 +302,18 @@ static void drawCountdownActionHints() {
     const KeyHintItem items[] = {
         {'g', g_text},
         {'r', "reset"},
+        {'p', "pure"},
     };
-    drawTimeBottomHints(items, 2);
+    drawTimeBottomHints(items, 3);
 }
 
 static void drawCountdownChrome() {
+    if (isTimePureMode()) {
+        if (cdPhase != CountdownPhase::SETUP) {
+            drawCountdownStateBanner();
+        }
+        return;
+    }
     drawTimeModeTag("CD");
     drawCountdownStateBanner();
     drawCountdownActionHints();
@@ -310,9 +329,24 @@ static void cdInvalidateTimeCache() {
 static void drawCountdownApp(const bool full_init) {
     int area_y = 0;
     int area_h = 0;
-    getTimeDisplayArea(area_y, area_h);
+    if (isTimePureMode()) {
+        getTimePureDisplayArea(area_y, area_h);
+    } else {
+        getTimeDisplayArea(area_y, area_h);
+    }
 
     if (full_init || !cdScreenReady) {
+        if (isTimePureMode()) {
+            if (full_init) {
+                M5Cardputer.Display.fillScreen(BLACK);
+            }
+            cdScreenReady = true;
+            cdInvalidateTimeCache();
+            cdTs = 0;
+            drawCountdownChrome();
+            drawCountdownTime(area_y, area_h, true);
+            return;
+        }
         beginAppScreen("Time");
         cdScreenReady = true;
         cdInvalidateTimeCache();

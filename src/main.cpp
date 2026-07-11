@@ -313,14 +313,81 @@ static void drawFireworkBurst(const int cx, const int cy, const uint16_t color,
     }
 }
 
-// Version 页背景烟花（logo 四色 + 白，避开 logo 区域）
-static void drawVersionFireworks() {
+// Version 页 UI 避让区（logo 圆 + 文字矩形，与 drawVersionOverlay 布局一致）
+struct VersionPageLayout {
+    int logo_cx;
+    int logo_cy;
+    int logo_avoid_r;
+    int text_x;
+    int text_y;
+    int text_w;
+    int text_h;
+};
+
+static VersionPageLayout getVersionPageLayout() {
+    const VersionInfo info = getVersionInfo();
     const int screen_w = M5Cardputer.Display.width();
+
+    constexpr int logo_px = APP_LOGO_60_PX;
+    const int logo_y = APP_CONTENT_Y;
+    const int logo_bottom = logo_y + logo_px;
+    const int text_y = logo_bottom + 10;
+    constexpr int line_h = 12;
+    constexpr int text_line_h = 8;
+
+    M5Cardputer.Display.setTextSize(1);
+    const String line1 = "date: " + info.update_time;
+    const String line2 = "auth: " + info.author + "  v" + info.version;
+    const int text_w =
+        max(M5Cardputer.Display.textWidth(line1.c_str()),
+            M5Cardputer.Display.textWidth(line2.c_str())) +
+        16;
+
+    return VersionPageLayout{
+        screen_w / 2,
+        logo_y + logo_px / 2,
+        logo_px / 2 + 14,
+        (screen_w - text_w) / 2,
+        text_y - 4,
+        text_w,
+        line_h + text_line_h + 8,
+    };
+}
+
+// 烟花落点是否避开 logo / 文字（含烟花半径余量）
+static bool versionFireworkSpotOk(const int cx, const int cy, const VersionPageLayout& layout,
+                                  const int burst_margin) {
+    const int dx = cx - layout.logo_cx;
+    const int dy = cy - layout.logo_cy;
+    const int logo_r = layout.logo_avoid_r + burst_margin;
+    if (dx * dx + dy * dy < logo_r * logo_r) {
+        return false;
+    }
+
+    return cx < layout.text_x - burst_margin || cx >= layout.text_x + layout.text_w + burst_margin ||
+           cy < layout.text_y - burst_margin || cy >= layout.text_y + layout.text_h + burst_margin;
+}
+
+// 随机选取避开 UI 的烟花落点
+static bool pickVersionFireworkSpot(const int y_min, const int y_max, const VersionPageLayout& layout,
+                                    const int burst_margin, int& cx, int& cy) {
+    const int screen_w = M5Cardputer.Display.width();
+    for (int attempt = 0; attempt < 24; attempt++) {
+        cx = random(screen_w);
+        cy = random(y_min, y_max);
+        if (versionFireworkSpotOk(cx, cy, layout, burst_margin)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Version 页背景烟花（logo 四色 + 白，避开 logo / 文字区域）
+static void drawVersionFireworks() {
     const int screen_h = M5Cardputer.Display.height();
     const int y_min = APP_CONTENT_Y;
-    const int logo_cx = screen_w / 2;
-    const int logo_cy = y_min + 4 + APP_LOGO_60_PX / 2;
-    const int avoid_r = APP_LOGO_60_PX / 2 + 14;
+    const VersionPageLayout layout = getVersionPageLayout();
+    constexpr int burst_margin = 26;
 
     static const uint32_t palette[] = {0x30D158, 0x3CD3FE, 0xFF4245, 0xFFD600, 0xFFFFFF};
 
@@ -328,14 +395,8 @@ static void drawVersionFireworks() {
     for (int i = 0; i < burst_count; i++) {
         int cx = 0;
         int cy = 0;
-        for (int attempt = 0; attempt < 10; attempt++) {
-            cx = random(screen_w);
-            cy = random(y_min, screen_h);
-            const int dx = cx - logo_cx;
-            const int dy = cy - logo_cy;
-            if (dx * dx + dy * dy >= avoid_r * avoid_r) {
-                break;
-            }
+        if (!pickVersionFireworkSpot(y_min, screen_h, layout, burst_margin, cx, cy)) {
+            continue;
         }
         const int ci = random(5);
         const uint16_t color = versionColor565(palette[ci]);
@@ -343,9 +404,13 @@ static void drawVersionFireworks() {
         drawFireworkBurst(cx, cy, color, glow);
     }
 
+    constexpr int spark_margin = 8;
     for (int i = 0; i < random(8, 14); i++) {
-        const int cx = random(screen_w);
-        const int cy = random(y_min, screen_h);
+        int cx = 0;
+        int cy = 0;
+        if (!pickVersionFireworkSpot(y_min, screen_h, layout, spark_margin, cx, cy)) {
+            continue;
+        }
         const uint16_t color = versionColor565(palette[random(5)]);
         const int rays = random(3, 6);
         for (int r = 0; r < rays; r++) {
@@ -358,15 +423,13 @@ static void drawVersionFireworks() {
     }
 }
 
-// 绘制 Version 页面
-void drawVersionApp() {
+// Version 页 logo + 版本信息（叠在烟花背景上）
+static void drawVersionOverlay() {
     const VersionInfo info = getVersionInfo();
-    beginAppScreen(("v" + info.version).c_str(), false);
-    drawVersionFireworks();
 
     constexpr int logo_px = APP_LOGO_60_PX;
     const int logoX = (M5Cardputer.Display.width() - logo_px) / 2;
-    const int logoY = APP_CONTENT_Y + 4;
+    const int logoY = APP_CONTENT_Y;
     int logo_bottom = logoY + logo_px;
     if (!drawAppLogo60(logoX, logoY, 1.0f)) {
         constexpr int fallback_size = APP_LOGO_DESIGN_SIZE;
@@ -385,7 +448,30 @@ void drawVersionApp() {
         ("date: " + info.update_time).c_str(), centerX, textY);
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
     M5Cardputer.Display.drawCenterString(
-        ("auth: " + info.author).c_str(), centerX, textY + lineH);
+        ("auth: " + info.author + "  v" + info.version).c_str(), centerX, textY + lineH);
+}
+
+// 全屏重绘 Version 页（header + 烟花 + 前景）
+static void refreshVersionFireworks() {
+    beginAppScreen(APP_NAME, false);
+    drawVersionFireworks();
+    drawVersionOverlay();
+}
+
+// 绘制 Version 页面
+void drawVersionApp() {
+    refreshVersionFireworks();
+}
+
+// R 键刷新背景烟花
+void handleVersionApp(const Keyboard_Class::KeysState& status) {
+    String key;
+    for (const char c : status.word) {
+        key += c;
+    }
+    if (key == "r" || key == "R") {
+        refreshVersionFireworks();
+    }
 }
 
 // ===== KEYBOARD =====
@@ -1800,6 +1886,11 @@ void loop() {
             case AppState::SETTINGS:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleSettingsApp(M5Cardputer.Keyboard.keysState());
+                }
+                break;
+            case AppState::VERSION:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleVersionApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             case AppState::SPEAKER:

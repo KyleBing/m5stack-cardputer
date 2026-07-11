@@ -31,6 +31,7 @@ static char rtcLastDate[20] = "";
 static char rtcLastSrc[8] = "";
 static char pureLastDate[20] = "";
 static BigTimeState uptimeTimeState{};
+static BigTimeState uptimePureTimeState{};
 static BigTimeState pureTimeState{};
 static constexpr int RTC_TIME_TEXT_SIZE = 4;
 static constexpr int RTC_DATE_TEXT_SIZE = 2;
@@ -47,6 +48,8 @@ static constexpr uint32_t UPTIME_UPDATE_MS = 1000;       // 更新间隔 1 secon
 static void drawUptimeApp(const bool full_init);
 static void drawRtcApp(const bool full_init);
 static void drawRtcPureApp(const bool full_init);
+static void drawUptimePureApp(const bool full_init);
+static void drawTimePureApp(const bool full_init);
 
 static int clockContentHeight() {
     int area_y = 0;
@@ -220,8 +223,8 @@ static void drawTimeHelpScreen() {
     int row = drawTimeHelpX2KeyHints(APP_CONTENT_X, 0, x2_rows, modes, 5, ts, APP_COLOR_HINT,
                                      max_w);
 
-    static const KeyHintItem clock_items[] = {{'p', "pure"}};
-    drawTimeHelpX2KeyHints(APP_CONTENT_X, row, x2_rows, clock_items, 1, ts, APP_COLOR_HINT,
+    static const KeyHintItem pure_items[] = {{'p', "pure"}};
+    drawTimeHelpX2KeyHints(APP_CONTENT_X, row, x2_rows, pure_items, 1, ts, APP_COLOR_HINT,
                            max_w);
 
     constexpr int hint_ts = 1;
@@ -371,6 +374,42 @@ static bool syncClockTimeIfNeeded(const bool force) {
     return hasValidClockTime();
 }
 
+static void drawUptimePureApp(const bool full_init) {
+    if (full_init) {
+        M5Cardputer.Display.fillScreen(BLACK);
+        uptimePureTimeState = BigTimeState{};
+    }
+
+    int hours = 0;
+    int minutes = 0;
+    int seconds = 0;
+    int frac = 0;
+    splitTimeMs(millis(), hours, minutes, seconds, frac);
+
+    int area_y = 0;
+    int area_h = 0;
+    getTimePureDisplayArea(area_y, area_h);
+    drawBigTimeDisplay(uptimePureTimeState, area_y, area_h, hours, minutes, seconds, frac, false,
+                       full_init || uptimePureTimeState.ts <= 0);
+}
+
+static void drawTimePureApp(const bool full_init) {
+    switch (timeMode) {
+        case TimeMode::UPTIME:
+            drawUptimePureApp(full_init);
+            break;
+        case TimeMode::CLOCK:
+            drawRtcPureApp(full_init);
+            break;
+        case TimeMode::COUNTDOWN:
+            redrawCountdownApp();
+            break;
+        case TimeMode::STOPWATCH:
+            redrawStopwatchApp();
+            break;
+    }
+}
+
 static void drawRtcPureApp(const bool full_init) {
     struct tm timeinfo{};
     const char* source = "none";
@@ -477,7 +516,8 @@ static void drawUptimeApp(const bool full_init) {
         rtcScreenReady = false;
         uptimeTimeState = BigTimeState{};
         drawTimeModeTag("UP");
-        drawTimeBottomHints(nullptr, 0);
+        const KeyHintItem items[] = {{'p', "pure"}};
+        drawTimeBottomHints(items, 1);
     }
 
     drawBigTimeDisplay(uptimeTimeState, area_y, area_h, hours, minutes, seconds, frac, false,
@@ -529,11 +569,30 @@ void updateRtcApp() {
     if (timeHelpVisible) {
         return;
     }
-    if (timePureVisible && timeMode == TimeMode::CLOCK) {
-        static uint32_t last_pure_ms = 0;
-        if (millis() - last_pure_ms >= UPTIME_UPDATE_MS) {
-            last_pure_ms = millis();
-            drawRtcPureApp(false);
+    if (timePureVisible) {
+        switch (timeMode) {
+            case TimeMode::UPTIME: {
+                static uint32_t last_pure_uptime_ms = 0;
+                if (millis() - last_pure_uptime_ms >= UPTIME_UPDATE_MS) {
+                    last_pure_uptime_ms = millis();
+                    drawUptimePureApp(false);
+                }
+                break;
+            }
+            case TimeMode::CLOCK: {
+                static uint32_t last_pure_clock_ms = 0;
+                if (millis() - last_pure_clock_ms >= UPTIME_UPDATE_MS) {
+                    last_pure_clock_ms = millis();
+                    drawRtcPureApp(false);
+                }
+                break;
+            }
+            case TimeMode::COUNTDOWN:
+                updateCountdownApp();
+                break;
+            case TimeMode::STOPWATCH:
+                updateStopwatchApp();
+                break;
         }
         return;
     }
@@ -569,7 +628,40 @@ void handleTimeApp(const Keyboard_Class::KeysState& status) {
     if (timePureVisible) {
         if (key == 'p') {
             timePureVisible = false;
-            drawRtcApp(true);
+            redrawCurrentTimeMode();
+            return;
+        }
+        if (key == 'h') {
+            timePureVisible = false;
+            timeHelpVisible = true;
+            drawTimeHelpScreen();
+            return;
+        }
+        if (key == 'u') {
+            enterTimeMode(TimeMode::UPTIME);
+            return;
+        }
+        if (key == 't') {
+            enterTimeMode(TimeMode::CLOCK);
+            return;
+        }
+        if (key == 'c') {
+            enterTimeMode(TimeMode::COUNTDOWN);
+            return;
+        }
+        if (key == 's') {
+            enterTimeMode(TimeMode::STOPWATCH);
+            return;
+        }
+        if (key == 'r' && timeMode == TimeMode::CLOCK) {
+            syncClockTimeIfNeeded(true);
+            drawRtcPureApp(true);
+            return;
+        }
+        if (timeMode == TimeMode::COUNTDOWN) {
+            handleCountdownApp(status);
+        } else if (timeMode == TimeMode::STOPWATCH) {
+            handleStopwatchApp(status);
         }
         return;
     }
@@ -613,9 +705,9 @@ void handleTimeApp(const Keyboard_Class::KeysState& status) {
         enterClockMode(true);
         return;
     }
-    if (key == 'p' && timeMode == TimeMode::CLOCK) {
+    if (key == 'p') {
         timePureVisible = true;
-        drawRtcPureApp(true);
+        drawTimePureApp(true);
         return;
     }
 

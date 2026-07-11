@@ -83,6 +83,11 @@ void getTimeDisplayArea(int& area_y, int& area_h) {
     area_h = screen_h - area_y - TIME_HINT_ROW_H;
 }
 
+void getTimePureDisplayArea(int& area_y, int& area_h) {
+    area_y = 0;
+    area_h = M5Cardputer.Display.height();
+}
+
 void splitTimeMs(const uint32_t elapsed_ms, int& hours, int& minutes, int& seconds, int& frac) {
     frac = static_cast<int>(elapsed_ms % 1000u);
     const uint32_t total_sec = elapsed_ms / 1000u;
