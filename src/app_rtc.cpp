@@ -41,8 +41,8 @@ static constexpr int RTC_TIME_LINE_H = 8 * RTC_TIME_TEXT_SIZE;
 static constexpr int RTC_DATE_LINE_H = 8 * RTC_DATE_TEXT_SIZE;
 static constexpr int RTC_TIME_BOTTOM_MARGIN = 5;
 static constexpr int RTC_FAIL_TEXT_SIZE = 2;
-static constexpr uint32_t RTC_SYNC_TIMEOUT_MS = 5000;
-static constexpr uint32_t UPTIME_UPDATE_MS = 1000;
+static constexpr uint32_t RTC_SYNC_TIMEOUT_MS = 10000;  // 超时时间 10 seconds
+static constexpr uint32_t UPTIME_UPDATE_MS = 1000;       // 更新间隔 1 second
 
 static void drawUptimeApp(const bool full_init);
 static void drawRtcApp(const bool full_init);

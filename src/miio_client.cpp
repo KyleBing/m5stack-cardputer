@@ -2,6 +2,8 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/md5.h>
 #include <cstring>
@@ -9,6 +11,11 @@
 static constexpr uint16_t MIIO_PORT = 54321;
 static constexpr int MIIO_TIMEOUT_MS = 2000;
 static constexpr int MIIO_QUERY_TIMEOUT_MS = 1000;
+static uint32_t g_query_timeout_override_ms = 0;
+
+static uint32_t miioQueryTimeoutMs() {
+    return g_query_timeout_override_ms > 0 ? g_query_timeout_override_ms : MIIO_QUERY_TIMEOUT_MS;
+}
 
 static uint32_t g_query_deadline_ms = 0;
 
@@ -27,6 +34,29 @@ static uint8_t g_device_id[4];
 static uint32_t g_device_ts = 0;
 static uint32_t g_msg_id = 1;
 static char g_last_error[32] = "ok";
+static SemaphoreHandle_t g_miio_mutex = nullptr;
+
+// 串行化 miIO UDP 访问，避免后台查询与前台控制并发
+static void miioEnsureMutex() {
+    if (g_miio_mutex == nullptr) {
+        g_miio_mutex = xSemaphoreCreateMutex();
+    }
+}
+
+class MiioSessionLock {
+public:
+    MiioSessionLock() {
+        miioEnsureMutex();
+        if (g_miio_mutex != nullptr) {
+            xSemaphoreTake(g_miio_mutex, portMAX_DELAY);
+        }
+    }
+    ~MiioSessionLock() {
+        if (g_miio_mutex != nullptr) {
+            xSemaphoreGive(g_miio_mutex);
+        }
+    }
+};
 
 // 大端读写时间戳
 static uint32_t readBe32(const uint8_t* buf) {
@@ -92,6 +122,14 @@ bool miioParseTokenHex(const char* hex, uint8_t token[16]) {
         token[i] = static_cast<uint8_t>(val);
     }
     return true;
+}
+
+void miioSetQueryTimeoutOverride(const uint32_t timeout_ms) {
+    g_query_timeout_override_ms = timeout_ms;
+}
+
+void miioClearQueryTimeoutOverride() {
+    g_query_timeout_override_ms = 0;
 }
 
 // 清空残留 UDP 包
@@ -235,6 +273,7 @@ static bool miioSendJson(const char* ip, const char* json, char* resp, const siz
 // 执行 miIO 命令（g_token 须已设置）
 static bool miioCommand(const char* ip, const char* method, const char* params_json,
                         char* resp, const size_t resp_max) {
+    MiioSessionLock lock;
     WiFi.setSleep(false);
 
     if (!g_udp.begin(0)) {
@@ -295,7 +334,7 @@ static bool parseBoolResult(const char* json, bool& value) {
 }
 
 MiioResult miioGetPower(const char* ip, const char* token_hex, bool& on) {
-    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
+    const MiioQueryScope query_scope(miioQueryTimeoutMs());
     MiioResult result{};
     if (!miioParseTokenHex(token_hex, g_token)) {
         setResult(result, false, "bad token");
@@ -424,7 +463,7 @@ static bool parseIntAt(const char* json, const int index, int& value) {
 
 MiioResult miioGetLightStatus(const char* ip, const char* token_hex, bool& on, int& bright,
                               bool& bright_known, int& color_temp, bool& ct_known) {
-    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
+    const MiioQueryScope query_scope(miioQueryTimeoutMs());
     MiioResult result{};
     bright_known = false;
     ct_known = false;
@@ -507,7 +546,7 @@ MiioResult miioSetColorTemp(const char* ip, const char* token_hex, const int kel
 
 MiioResult miioFanP5GetStatus(const char* ip, const char* token_hex, bool& on, int& speed,
                               bool& roll, int& mode) {
-    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
+    const MiioQueryScope query_scope(miioQueryTimeoutMs());
     char resp[384];
     if (!miioParseTokenHex(token_hex, g_token)) {
         MiioResult result{};
@@ -615,7 +654,7 @@ MiioResult miioFanP5SetMode(const char* ip, const char* token_hex, const char* m
 }
 
 MiioResult miioFanGetStatus(const char* ip, const char* token_hex, bool& on, int& speed_level) {
-    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
+    const MiioQueryScope query_scope(miioQueryTimeoutMs());
     char resp[256];
     if (!miioParseTokenHex(token_hex, g_token)) {
         MiioResult result{};
@@ -684,7 +723,7 @@ static bool readMiotValue(JsonVariant item, int& out_int, bool& out_bool, bool& 
 
 MiioResult miioF20GetStatus(const char* ip, const char* token_hex, const char* did, bool& on,
                             int& mode, int& fan_level, int& aqi) {
-    const MiioQueryScope query_scope(MIIO_QUERY_TIMEOUT_MS);
+    const MiioQueryScope query_scope(miioQueryTimeoutMs());
     char params[256];
     snprintf(params, sizeof(params),
              "[{\"did\":\"%s\",\"siid\":2,\"piid\":1},{\"did\":\"%s\",\"siid\":2,\"piid\":4},"

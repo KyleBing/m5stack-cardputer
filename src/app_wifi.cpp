@@ -96,48 +96,48 @@ static void drawWifiHintText(const int x, const int y, const char* text, const i
     drawHintText(x, y, text, text_size);
 }
 
-static void drawWifiHints(const int y) {
+static void drawWifiHints() {
+    const int hint_y = M5Cardputer.Display.height() - 12;
+
     switch (wifiPhase) {
         case WifiAppPhase::STATUS: {
             const AppConfig& cfg = getAppConfig();
             if (cfg.loaded && cfg.wifi_ssid[0] != '\0') {
                 KeyHintItem items[] = {{'r', "refresh"}, {'c', "change"}};
-                drawKeyHintsRow(APP_CONTENT_X, y, items, 2, 2, APP_COLOR_HINT);
+                drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 2, 1, APP_COLOR_HINT);
             } else {
-                const int badge_w = drawKeyBadge(APP_CONTENT_X, y, 'c', 2);
-                M5Cardputer.Display.setTextSize(2);
-                M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-                M5Cardputer.Display.setCursor(APP_CONTENT_X + badge_w, y + 1);
-                M5Cardputer.Display.print("scan");
+                KeyHintItem items[] = {{'c', "scan"}};
+                drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 1, 1, APP_COLOR_HINT);
             }
             break;
         }
         case WifiAppPhase::LIST: {
             int cx = APP_CONTENT_X;
             for (const char k : {'1', '2', '3', '4'}) {
-                cx += drawKeyBadge(cx, y, k, 1);
+                cx += drawKeyBadge(cx, hint_y, k, 1);
             }
             M5Cardputer.Display.setTextSize(1);
             M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-            M5Cardputer.Display.setCursor(cx, y);
+            M5Cardputer.Display.setCursor(cx, hint_y);
             M5Cardputer.Display.print("pick ");
             cx += M5Cardputer.Display.textWidth("pick ");
-            cx += drawArrowBadge(cx, y, 1);
-            M5Cardputer.Display.setCursor(cx, y);
+            cx += drawArrowBadge(cx, hint_y, 1);
+            M5Cardputer.Display.setTextSize(1);
             M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+            M5Cardputer.Display.setCursor(cx, hint_y);
             M5Cardputer.Display.print("page");
             break;
         }
         case WifiAppPhase::PASSWORD:
-            drawWifiHintText(APP_CONTENT_X, y, "ent connect del bk", 2);
+            drawWifiHintText(APP_CONTENT_X, hint_y, "ent connect del bk");
             break;
         case WifiAppPhase::CONNECTING: {
             if (wifiConnectFromConfig) {
                 KeyHintItem items[] = {{'r', "retry"}, {'c', "change"}};
-                drawKeyHintsRow(APP_CONTENT_X, y, items, 2, 2, APP_COLOR_HINT);
+                drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 2, 1, APP_COLOR_HINT);
             } else {
                 KeyHintItem items[] = {{'r', "retry"}};
-                drawKeyHintsRow(APP_CONTENT_X, y, items, 1, 2, APP_COLOR_HINT);
+                drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 1, 1, APP_COLOR_HINT);
             }
             break;
         }
@@ -188,7 +188,7 @@ static void drawWifiStatusScreen() {
         }
     }
 
-    drawWifiHints(M5Cardputer.Display.height() - INFO_LINE_H_2X);
+    drawWifiHints();
 }
 
 static void drawWifiListScreen() {
@@ -262,7 +262,7 @@ static void drawWifiListScreen() {
         M5Cardputer.Display.println("no network");
     }
 
-    drawWifiHints(M5Cardputer.Display.height() - 12);
+    drawWifiHints();
 }
 
 static void drawWifiPasswordScreen() {
@@ -304,7 +304,7 @@ static void drawWifiPasswordScreen() {
         y += WIFI_LIST_LINE_H;
     }
 
-    drawWifiHints(M5Cardputer.Display.height() - INFO_LINE_H_2X);
+    drawWifiHints();
 }
 
 static void drawWifiConnectingScreen() {
@@ -332,7 +332,7 @@ static void drawWifiConnectingScreen() {
         M5Cardputer.Display.println(wifiStatus);
     }
 
-    drawWifiHints(M5Cardputer.Display.height() - INFO_LINE_H_2X);
+    drawWifiHints();
 }
 
 // 使用 config 中已保存的 WiFi 发起连接（与米家应用一致：不反复 disconnect）

@@ -8,6 +8,7 @@ static constexpr int MENU_LOGO_SIZE = 24;
 static constexpr int HEADER_STATUS_GAP = 5;
 static constexpr int APP_BACK_BTN_W = ICON_BACK_W;
 static constexpr int HEADER_STATUS_CLEAR_PAD = 2;
+static bool s_app_header_draw_divider = true;
 
 static int headerStatusIconY(const int icon_h) {
     return (APP_HEADER_H - icon_h) / 2;
@@ -100,7 +101,8 @@ static void drawHeaderDivider(const int screen_w) {
     M5Cardputer.Display.drawFastHLine(0, APP_HEADER_H - 1, screen_w, DARKGREY);
 }
 
-void drawAppScreenHeader(const char* title) {
+void drawAppScreenHeader(const char* title, const bool draw_divider) {
+    s_app_header_draw_divider = draw_divider;
     const int screen_w = M5Cardputer.Display.width();
     M5Cardputer.Display.fillRect(0, 0, screen_w, APP_HEADER_H, BLACK);
 
@@ -112,7 +114,9 @@ void drawAppScreenHeader(const char* title) {
     const int status_right = screen_w - 2 - APP_BACK_BTN_W - 4;
     drawHeaderStatusIcons(status_right, false);
     drawBackButton(screen_w);
-    drawHeaderDivider(screen_w);
+    if (draw_divider) {
+        drawHeaderDivider(screen_w);
+    }
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
 }
 
@@ -182,7 +186,9 @@ void updateAppHeaderStatus() {
     }
     clearHeaderStatusArea(clear_left, status_right);
     drawHeaderStatusIcons(status_right, false);
-    drawHeaderDivider(screen_w);
+    if (s_app_header_draw_divider) {
+        drawHeaderDivider(screen_w);
+    }
     prev_clear_left = left_x - HEADER_STATUS_CLEAR_PAD;
     if (prev_clear_left < 0) {
         prev_clear_left = 0;
@@ -193,9 +199,9 @@ void updateMenuScreenBattery(const int page_count) {
     updateMenuHeaderStatus(page_count);
 }
 
-void beginAppScreen(const char* title) {
+void beginAppScreen(const char* title, const bool draw_divider) {
     M5Cardputer.Display.clear();
-    drawAppScreenHeader(title);
+    drawAppScreenHeader(title, draw_divider);
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
 }

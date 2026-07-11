@@ -49,6 +49,15 @@ void drawMijiaDeviceIconForList(const MijiaDevice* dev, MijiaDevKind kind, int x
 int drawMijiaStatusTag(int x, int y, const char* text, bool active, uint16_t active_bg,
                        int text_size = 1);
 
+// 宫格单元状态 tag 文案与配色
+struct MijiaGridStatusTag {
+    char text[12];
+    bool active;
+    uint16_t bg;
+};
+
+void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag);
+
 // 百分比进度条（0-100）
 void drawMijiaPercentBar(int x, int y, int w, int h, int percent, uint16_t fill_color);
 

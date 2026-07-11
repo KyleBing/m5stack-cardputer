@@ -137,10 +137,39 @@ static constexpr int MENU_KEY_TEXT_SIZE = 2;
 static constexpr int MENU_LINE_H = 18; // 与 2 倍按键块高度一致
 
 static int menuPage = 0;
+static bool menuNoAppPrompt = false;
 
 // 计算菜单总页数
 int getMenuPageCount() {
     return (MENU_ITEM_COUNT + MENU_ITEMS_PER_PAGE - 1) / MENU_ITEMS_PER_PAGE;
+}
+
+// 无对应 app 时在菜单态居中提示（保留主菜单 header，不显示子界面返回键）
+static void showMenuNoAppPrompt(const char key) {
+    menuNoAppPrompt = true;
+    currentState = AppState::MENU;
+
+    const int page_count = getMenuPageCount();
+    M5Cardputer.Display.clear();
+    drawMenuScreenHeader(APP_NAME, menuPage, page_count);
+
+    char msg[20];
+    snprintf(msg, sizeof(msg), "No app: %c", static_cast<char>(toupper(static_cast<unsigned char>(key))));
+
+    const int center_x = M5Cardputer.Display.width() / 2;
+    const int content_h = M5Cardputer.Display.height() - APP_CONTENT_Y;
+    constexpr int line_h = INFO_LINE_H_2X;
+    constexpr int hint_line_h = INFO_LINE_H;
+    const int block_h = line_h + 4 + hint_line_h;
+    const int text_y = APP_CONTENT_Y + (content_h - block_h) / 2;
+
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(RED, BLACK);
+    M5Cardputer.Display.drawCenterString(msg, center_x, text_y);
+
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
+    M5Cardputer.Display.drawCenterString("BtnA: menu", center_x, text_y + line_h + 4);
 }
 
 // 绘制单个菜单项：按键块 + 名称
@@ -178,6 +207,7 @@ void drawMenuPage() {
 
 // 绘制主菜单（header + 可翻页菜单区）
 void showMenu() {
+    menuNoAppPrompt = false;
     stopConfigWebServer();
     releaseConfigWifi();
     currentState = AppState::MENU;
@@ -215,11 +245,7 @@ void handleMenuKey(const String& key) {
     }
 
     if (!enterAppByKey(c)) {
-        beginAppScreen("Menu");
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-        M5Cardputer.Display.setTextSize(2);
-        M5Cardputer.Display.setTextColor(RED, BLACK);
-        M5Cardputer.Display.printf("No app: %c\n", toupper(c));
+        showMenuNoAppPrompt(c);
     }
 }
 
@@ -335,7 +361,7 @@ static void drawVersionFireworks() {
 // 绘制 Version 页面
 void drawVersionApp() {
     const VersionInfo info = getVersionInfo();
-    beginAppScreen(("v" + info.version).c_str());
+    beginAppScreen(("v" + info.version).c_str(), false);
     drawVersionFireworks();
 
     constexpr int logo_px = APP_LOGO_60_PX;
@@ -1004,59 +1030,54 @@ void drawSettingsApp() {
     int cy = APP_CONTENT_Y;
     cy = drawMijiaBarRow(APP_CONTENT_X, cy, "bright", buf, pct, content_w, GREEN);
 
-    constexpr int ts = 2;
-    constexpr int pad = 4;
-    constexpr int hint_lines = 2;
-    const int line_h = INFO_LINE_H_2X;
-    const int boxX = APP_CONTENT_X;
-    const int boxY = cy + 4;
-    const int boxW = content_w;
-    const int boxH = pad * 2 + hint_lines * line_h;
-
-    M5Cardputer.Display.drawRect(boxX, boxY, boxW, boxH, DARKGREY);
-
-    const auto drawHintText = [&](int& cx, const int ty, const char* text) {
-        M5Cardputer.Display.setTextSize(ts);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-        M5Cardputer.Display.setCursor(cx, ty);
-        M5Cardputer.Display.print(text);
-        cx += M5Cardputer.Display.textWidth(text);
-    };
-
-    // 大字横向：0-9 预设、左右箭头 step1
-    int ty = boxY + pad;
-    int cx = boxX + pad;
-    cx += drawTextBadge(cx, ty, "0-9", ts);
-    drawHintText(cx, ty, " preset  ");
-    cx += drawArrowBadge(cx, ty, ts);
-    drawHintText(cx, ty, " step1");
-
-    // 上下箭头 step10、r invert
-    ty += line_h;
-    cx = boxX + pad;
-    cx += drawArrowUpBadge(cx, ty, ts);
-    cx += drawArrowDownBadge(cx, ty, ts);
-    drawHintText(cx, ty, " step10  ");
-    cx += drawKeyBadge(cx, ty, 'r', ts);
-    drawHintText(cx, ty, " invert");
-
     // invert 状态单独突出显示
     const bool inverted = M5Cardputer.Display.getInvert();
-    const int inv_y = boxY + boxH + 8;
+    const int inv_y = cy + 8;
     const char* inv_label = inverted ? "INVERT ON" : "INVERT OFF";
     const uint16_t inv_bg = inverted ? APP_COLOR_MENU_KEY : DARKGREY;
     const uint16_t inv_fg = inverted ? APP_COLOR_KEY_TEXT : LIGHTGREY;
 
-    M5Cardputer.Display.setTextSize(ts);
+    M5Cardputer.Display.setTextSize(2);
     const int inv_tw = M5Cardputer.Display.textWidth(inv_label);
     constexpr int inv_pad_x = 8;
     constexpr int inv_pad_y = 3;
     const int inv_w = inv_tw + inv_pad_x * 2;
     const int inv_h = 16 + inv_pad_y * 2;
-    M5Cardputer.Display.fillRoundRect(boxX, inv_y, inv_w, inv_h, 4, inv_bg);
+    M5Cardputer.Display.fillRoundRect(APP_CONTENT_X, inv_y, inv_w, inv_h, 4, inv_bg);
     M5Cardputer.Display.setTextColor(inv_fg, inv_bg);
-    M5Cardputer.Display.setCursor(boxX + inv_pad_x, inv_y + inv_pad_y);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X + inv_pad_x, inv_y + inv_pad_y);
     M5Cardputer.Display.print(inv_label);
+
+    // 底栏 tip 1x
+    const int hint_y = M5Cardputer.Display.height() - 12;
+    const int hint_y2 = hint_y - INFO_LINE_H;
+
+    int cx = APP_CONTENT_X;
+    cx += drawTextBadge(cx, hint_y2, "0-9", 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y2);
+    M5Cardputer.Display.print(" preset  ");
+    cx += M5Cardputer.Display.textWidth(" preset  ");
+    cx += drawArrowBadge(cx, hint_y2, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y2);
+    M5Cardputer.Display.print(" step1");
+
+    cx = APP_CONTENT_X;
+    cx += drawArrowUpBadge(cx, hint_y, 1);
+    cx += drawArrowDownBadge(cx, hint_y, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print(" step10  ");
+    cx += M5Cardputer.Display.textWidth(" step10  ");
+    cx += drawKeyBadge(cx, hint_y, 'r', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print(" invert");
 }
 
 void handleSettingsApp(const Keyboard_Class::KeysState& status) {
@@ -1343,6 +1364,7 @@ void drawDisplayApp(const int patternIndex) {
     const int screen_w = M5Cardputer.Display.width();
     const int screen_h = M5Cardputer.Display.height();
     constexpr int hint_h = 12;
+    const int hint_y = screen_h - hint_h + 2;  // 贴底再下移 1px
     const int area_h = screen_h - hint_h;
 
     if (static_cast<int>(pattern) < 7) {
@@ -1370,13 +1392,13 @@ void drawDisplayApp(const int patternIndex) {
     M5Cardputer.Display.fillRect(0, screen_h - hint_h, screen_w, hint_h, BLACK);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(4, screen_h - hint_h);
+    M5Cardputer.Display.setCursor(4, hint_y);
     M5Cardputer.Display.printf("%s  ", dispPatternName(pattern));
     int cx = M5Cardputer.Display.getCursorX();
-    cx += drawArrowBadge(cx, screen_h - hint_h, 1);
+    cx += drawArrowBadge(cx, hint_y, 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, screen_h - hint_h);
+    M5Cardputer.Display.setCursor(cx, hint_y);
     M5Cardputer.Display.print("page");
 }
 
@@ -1572,6 +1594,7 @@ static void updateSleepPrompt() {
 // ===== MAIN =====
 
 void enterApp(const AppState state) {
+    menuNoAppPrompt = false;
     currentState = state;
 
     // Sleep 先显示 5 秒提示，再关屏
@@ -1695,10 +1718,11 @@ void loop() {
         return;
     }
 
-    // BtnA：非菜单界面短按返回菜单
+    // BtnA：无 app 提示页 / 子界面返回主菜单
     if (M5Cardputer.BtnA.wasPressed()) {
-        if (currentState != AppState::MENU) {
+        if (menuNoAppPrompt || currentState != AppState::MENU) {
             showMenu();
+            return;
         }
     }
 

@@ -10,6 +10,10 @@ struct MiioResult {
 // 解析 32 位 hex token
 bool miioParseTokenHex(const char* hex, uint8_t token[16]);
 
+// 临时覆盖状态查询超时（0 恢复默认）；宫格概览等场景使用
+void miioSetQueryTimeoutOverride(const uint32_t timeout_ms);
+void miioClearQueryTimeoutOverride();
+
 // 查询 power（get_prop，返回 on/off）
 MiioResult miioGetPower(const char* ip, const char* token_hex, bool& on);
 

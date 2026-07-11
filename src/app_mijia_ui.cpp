@@ -174,6 +174,114 @@ int drawMijiaStatusTag(const int x, const int y, const char* text, const bool ac
     return w + 4;
 }
 
+// 宫格状态 tag：将 MijiaUiState 映射为短标签（ON/OFF/TMO/...）
+void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
+    tag.active = false;
+    tag.bg = APP_COLOR_MUTED;
+    tag.text[0] = '\0';
+
+    const char* s = ui.status;
+    if (strcmp(s, "turn on...") == 0) {
+        strncpy(tag.text, "ON..", sizeof(tag.text));
+        tag.active = true;
+        tag.bg = APP_COLOR_OK;
+        return;
+    }
+    if (strcmp(s, "turn off...") == 0) {
+        strncpy(tag.text, "OFF..", sizeof(tag.text));
+        tag.active = true;
+        tag.bg = APP_COLOR_LABEL;
+        return;
+    }
+
+    if (ui.power_known) {
+        if (ui.power_on) {
+            strncpy(tag.text, "ON", sizeof(tag.text));
+            tag.active = true;
+            tag.bg = APP_COLOR_OK;
+        } else {
+            strncpy(tag.text, "OFF", sizeof(tag.text));
+            tag.active = true;
+            tag.bg = APP_COLOR_LABEL;
+        }
+        return;
+    }
+
+    if (strcmp(s, "query...") == 0) {
+        strncpy(tag.text, "...", sizeof(tag.text));
+        return;
+    }
+    if (strcmp(s, "timeout") == 0) {
+        strncpy(tag.text, "TMO", sizeof(tag.text));
+        tag.bg = APP_COLOR_WARN;
+        return;
+    }
+    if (strcmp(s, "task fail") == 0) {
+        strncpy(tag.text, "FAIL", sizeof(tag.text));
+        tag.bg = APP_COLOR_ERROR;
+        return;
+    }
+    if (strcmp(s, "no device") == 0) {
+        strncpy(tag.text, "N/A", sizeof(tag.text));
+        return;
+    }
+    if (strcmp(s, "wifi fail") == 0) {
+        strncpy(tag.text, "WIFI", sizeof(tag.text));
+        tag.bg = APP_COLOR_WARN;
+        return;
+    }
+    if (strcmp(s, "ready") == 0 || s[0] == '\0') {
+        strncpy(tag.text, "?", sizeof(tag.text));
+        return;
+    }
+    if (strcmp(s, "bad token") == 0) {
+        strncpy(tag.text, "TOKEN", sizeof(tag.text));
+        tag.bg = APP_COLOR_ERROR;
+        return;
+    }
+    if (strcmp(s, "bad ip") == 0) {
+        strncpy(tag.text, "IP", sizeof(tag.text));
+        tag.bg = APP_COLOR_ERROR;
+        return;
+    }
+    if (strcmp(s, "handshake") == 0) {
+        strncpy(tag.text, "HS", sizeof(tag.text));
+        tag.bg = APP_COLOR_WARN;
+        return;
+    }
+    if (strcmp(s, "bad json") == 0) {
+        strncpy(tag.text, "JSON", sizeof(tag.text));
+        tag.bg = APP_COLOR_ERROR;
+        return;
+    }
+    if (strcmp(s, "no power") == 0) {
+        strncpy(tag.text, "NPWR", sizeof(tag.text));
+        tag.bg = APP_COLOR_WARN;
+        return;
+    }
+    if (strcmp(s, "no reply") == 0) {
+        strncpy(tag.text, "NRPLY", sizeof(tag.text));
+        tag.bg = APP_COLOR_WARN;
+        return;
+    }
+    if (strcmp(s, "bad result") == 0) {
+        strncpy(tag.text, "DATA", sizeof(tag.text));
+        tag.bg = APP_COLOR_WARN;
+        return;
+    }
+    if (strcmp(s, "tx begin") == 0 || strcmp(s, "tx end") == 0 || strcmp(s, "udp init") == 0 ||
+        strcmp(s, "oom") == 0) {
+        strncpy(tag.text, "NET", sizeof(tag.text));
+        tag.bg = APP_COLOR_ERROR;
+        return;
+    }
+
+    // 设备返回的 error.message 等未知文案，截短显示
+    strncpy(tag.text, s, sizeof(tag.text) - 1);
+    tag.text[sizeof(tag.text) - 1] = '\0';
+    tag.bg = APP_COLOR_WARN;
+}
+
 void drawMijiaPercentBar(const int x, const int y, const int w, const int h, const int percent,
                          const uint16_t fill_color) {
     const int clamped = constrain(percent, 0, 100);
@@ -235,6 +343,25 @@ bool mijiaPanelShowsInlineStatus(const char* status, const bool power_known) {
         return false;
     }
     return status != nullptr && status[0] != '\0';
+}
+
+static bool mijiaPanelStatusIsTimeout(const char* status) {
+    return status != nullptr && strcmp(status, "timeout") == 0;
+}
+
+// 控制页右栏流程状态（超时时 2x + 警告色）
+static void drawMijiaPanelInlineStatus(const int x, const int y, const char* status) {
+    const bool timeout = mijiaPanelStatusIsTimeout(status);
+    const int text_size = timeout ? 2 : MIJIA_PANEL_TEXT_SIZE;
+    const uint16_t color = timeout ? APP_COLOR_WARN : APP_COLOR_HINT;
+    M5Cardputer.Display.setTextSize(text_size);
+    M5Cardputer.Display.setTextColor(color, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(status);
+}
+
+static int mijiaPanelInlineStatusLineH(const char* status) {
+    return mijiaPanelStatusIsTimeout(status) ? INFO_LINE_H_2X : INFO_LINE_H;
 }
 
 MijiaPanelLayout calcMijiaPanelLayout(const int panel_y, const int x) {
@@ -304,11 +431,8 @@ void drawMijiaPanelRightColumn(const MijiaDevice* dev, const MijiaDevKind kind,
         info_y += INFO_LINE_H;
     }
     if (mijiaPanelShowsInlineStatus(ui.status, ui.power_known)) {
-        M5Cardputer.Display.setTextSize(text_size);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-        M5Cardputer.Display.setCursor(layout.info_x, info_y);
-        M5Cardputer.Display.print(ui.status);
-        info_y += INFO_LINE_H;
+        drawMijiaPanelInlineStatus(layout.info_x, info_y, ui.status);
+        info_y += mijiaPanelInlineStatusLineH(ui.status);
     }
     drawMijiaDeviceControls(dev, kind, ui, layout.info_x, info_y, layout.info_w);
 }

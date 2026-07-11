@@ -698,16 +698,22 @@ void drawWebApp() {
         y += infoLineHeight(2);
     };
 
-    const auto drawKeyHint = [&](const char key, const char* text, const int text_size = 1) {
-        int cx = APP_CONTENT_X + drawKeyBadge(APP_CONTENT_X, y, key, text_size);
+    const int hint_y = M5Cardputer.Display.height() - 12;
+
+    const auto drawKeyHintAt = [&](const int hy, const char key, const char* text,
+                                   const int text_size = 1) {
+        int cx = APP_CONTENT_X + drawKeyBadge(APP_CONTENT_X, hy, key, text_size);
         M5Cardputer.Display.setTextSize(text_size);
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-        M5Cardputer.Display.setCursor(cx, y);
+        M5Cardputer.Display.setCursor(cx, hy);
         M5Cardputer.Display.print(text);
-        y += (text_size == 2) ? INFO_LINE_H_2X : INFO_LINE_H;
     };
 
-    // 连接中：初始提示全部 2x
+    const auto drawTextHintAt = [&](const int hy, const char* text) {
+        drawInfoLineAt(APP_CONTENT_X, hy, "hint", text, 1);
+    };
+
+    // 连接中：状态信息 2x，底栏 tip 1x
     if (g_startup_phase == WebStartupPhase::CONNECTING) {
         char dots[5];
         loadingDots(dots, sizeof(dots));
@@ -723,20 +729,20 @@ void drawWebApp() {
             drawLine2x("plan", "AP hotspot");
         }
 
-        drawKeyHint('a', "skip to AP mode", 2);
+        drawKeyHintAt(hint_y, 'a', "skip to AP mode");
         return;
     }
 
     if (g_startup_phase == WebStartupPhase::FAILED) {
         drawLine1x("status", "failed");
         drawLine1x("state", g_web_status);
-        drawKeyHint('a', "for AP");
+        drawKeyHintAt(hint_y, 'a', "for AP");
         return;
     }
 
     if (!isConfigWebServerRunning()) {
         drawLine1x("status", "offline");
-        drawLine1x("hint", "re-enter u");
+        drawTextHintAt(hint_y, "re-enter u");
         return;
     }
 
@@ -744,16 +750,16 @@ void drawWebApp() {
         drawLineValue2x("mode", "LAN");
         drawLineValue2x("url", stripHttpPrefix(getConfigWebUrl()));
         drawLineValue2x("state", getConfigWebStatus());
-        drawKeyHint('a', "switch to AP hotspot");
+        drawKeyHintAt(hint_y, 'a', "switch to AP hotspot");
     } else {
         drawLine1x("mode", "AP");
         drawLineValue2x("ssid", getConfigWebApSsid());
         drawLineValue2x("pass", getConfigWebApPass());
         drawLineValue2x("url", stripHttpPrefix(getConfigWebUrl()));
         drawLine1x("state", getConfigWebStatus());
-        drawLine1x("hint", "phone connect AP");
-        drawLine1x("hint", "open url in browser");
-        drawKeyHint('l', "retry LAN mode");
+        drawTextHintAt(hint_y - INFO_LINE_H * 2, "phone connect AP");
+        drawTextHintAt(hint_y - INFO_LINE_H, "open url in browser");
+        drawKeyHintAt(hint_y, 'l', "retry LAN mode");
     }
 }
 
