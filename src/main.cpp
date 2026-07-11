@@ -20,6 +20,7 @@
 #include <driver/rtc_io.h>
 #include <esp_chip_info.h>
 #include <esp_system.h>
+#include <cmath>
 
 
 
@@ -232,27 +233,99 @@ VersionInfo getVersionInfo() {
     };
 }
 
-// 在内容区绘制随机火花背景
-static void drawRandomSparks(const int count) {
+// RGB888 转 RGB565
+static uint16_t versionColor565(const uint32_t rgb) {
+    return M5Cardputer.Display.color565(static_cast<uint8_t>((rgb >> 16) & 0xFF),
+                                       static_cast<uint8_t>((rgb >> 8) & 0xFF),
+                                       static_cast<uint8_t>(rgb & 0xFF));
+}
+
+// 单朵烟花：放射线 + 拖尾火花 + 内层短芒
+static void drawFireworkBurst(const int cx, const int cy, const uint16_t color,
+                              const uint16_t glow_color) {
+    const int core_r = random(1, 3);
+    M5Cardputer.Display.fillCircle(cx, cy, core_r, color);
+
+    const int ray_count = random(10, 17);
+    for (int r = 0; r < ray_count; r++) {
+        const float angle =
+            (static_cast<float>(r) * 6.2831853f / ray_count) + random(-25, 26) / 100.0f;
+        const int len = random(10, 24);
+        const int ex = cx + static_cast<int>(cosf(angle) * len);
+        const int ey = cy + static_cast<int>(sinf(angle) * len);
+        M5Cardputer.Display.drawLine(cx, cy, ex, ey, color);
+
+        const int spark_t = random(len / 4, len * 3 / 4);
+        const int sx = cx + static_cast<int>(cosf(angle) * spark_t);
+        const int sy = cy + static_cast<int>(sinf(angle) * spark_t);
+        M5Cardputer.Display.fillCircle(sx, sy, 1, color);
+
+        if (random(3) != 0) {
+            const int tail = spark_t + random(2, 6);
+            const int tx = cx + static_cast<int>(cosf(angle) * tail);
+            const int ty = cy + static_cast<int>(sinf(angle) * tail);
+            M5Cardputer.Display.drawPixel(tx, ty, glow_color);
+            if (tail + 2 < len) {
+                const int tx2 = cx + static_cast<int>(cosf(angle) * (tail + 2));
+                const int ty2 = cy + static_cast<int>(sinf(angle) * (tail + 2));
+                M5Cardputer.Display.drawPixel(tx2, ty2, glow_color);
+            }
+        }
+    }
+
+    const int inner_rays = ray_count / 2 + 1;
+    for (int r = 0; r < inner_rays; r++) {
+        const float angle =
+            ((static_cast<float>(r) + 0.5f) * 6.2831853f / inner_rays) + random(-20, 21) / 100.0f;
+        const int len = random(4, 11);
+        const int ex = cx + static_cast<int>(cosf(angle) * len);
+        const int ey = cy + static_cast<int>(sinf(angle) * len);
+        M5Cardputer.Display.drawLine(cx, cy, ex, ey, glow_color);
+    }
+}
+
+// Version 页背景烟花（logo 四色 + 白，避开 logo 区域）
+static void drawVersionFireworks() {
     const int screen_w = M5Cardputer.Display.width();
     const int screen_h = M5Cardputer.Display.height();
     const int y_min = APP_CONTENT_Y;
+    const int logo_cx = screen_w / 2;
+    const int logo_cy = y_min + 4 + APP_LOGO_60_PX / 2;
+    const int avoid_r = APP_LOGO_60_PX / 2 + 14;
 
-    for (int i = 0; i < count; i++) {
+    static const uint32_t palette[] = {0x30D158, 0x3CD3FE, 0xFF4245, 0xFFD600, 0xFFFFFF};
+
+    const int burst_count = random(6, 10);
+    for (int i = 0; i < burst_count; i++) {
+        int cx = 0;
+        int cy = 0;
+        for (int attempt = 0; attempt < 10; attempt++) {
+            cx = random(screen_w);
+            cy = random(y_min, screen_h);
+            const int dx = cx - logo_cx;
+            const int dy = cy - logo_cy;
+            if (dx * dx + dy * dy >= avoid_r * avoid_r) {
+                break;
+            }
+        }
+        const int ci = random(5);
+        const uint16_t color = versionColor565(palette[ci]);
+        const uint16_t glow = versionColor565(palette[(ci + 1) % 4]);
+        drawFireworkBurst(cx, cy, color, glow);
+    }
+
+    for (int i = 0; i < random(8, 14); i++) {
         const int cx = random(screen_w);
         const int cy = random(y_min, screen_h);
-        const uint16_t color = (random(3) == 0) ? WHITE : ((random(2) == 0) ? YELLOW : ORANGE);
-        const int rays = random(4, 9);
+        const uint16_t color = versionColor565(palette[random(5)]);
+        const int rays = random(3, 6);
         for (int r = 0; r < rays; r++) {
-            const int len = random(3, 10);
-            const int dx = random(-len, len + 1);
-            const int dy = random(-len, len + 1);
-            if (dx == 0 && dy == 0) {
-                continue;
-            }
-            M5Cardputer.Display.drawLine(cx, cy, cx + dx, cy + dy, color);
+            const float angle = random(0, 628) / 100.0f;
+            const int len = random(2, 6);
+            M5Cardputer.Display.drawLine(cx, cy, cx + static_cast<int>(cosf(angle) * len),
+                                         cy + static_cast<int>(sinf(angle) * len), color);
         }
-        M5Cardputer.Display.fillCircle(cx, cy, 1, color);
+        M5Cardputer.Display.drawPixel(cx, cy, color);
     }
 }
 
@@ -260,7 +333,7 @@ static void drawRandomSparks(const int count) {
 void drawVersionApp() {
     const VersionInfo info = getVersionInfo();
     beginAppScreen(("v" + info.version).c_str());
-    drawRandomSparks(10);
+    drawVersionFireworks();
 
     constexpr int logo_px = APP_LOGO_60_PX;
     const int logoX = (M5Cardputer.Display.width() - logo_px) / 2;

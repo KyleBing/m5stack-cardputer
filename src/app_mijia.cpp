@@ -61,10 +61,14 @@ static void requestMijiaRefresh();
 static void scheduleMijiaOverviewRefreshJob();
 static void requestMijiaOverviewPageRefresh();
 static void drawMijiaHelpPage();
+static void drawMijiaGridHelpPage();
 static void invalidateMijiaControlSurface();
 static void applyMijiaControlRefresh(bool force_full = false);
 static void drawMijiaOverview(int& y);
 static void refreshMijiaGridSelection(int old_idx, int new_idx);
+static void refreshMijiaListSelection(int old_idx, int new_idx);
+static bool handleMijiaGridSelectionNav(const Keyboard_Class::KeysState& status);
+static bool handleMijiaListSelectionNav(const Keyboard_Class::KeysState& status);
 static const MijiaDevice* getCurrentMijiaDevice();
 
 // 是否已连上 config 中的 WiFi
@@ -255,11 +259,15 @@ static void applyMijiaControlRefresh(const bool force_full) {
     snapshotMijiaRenderedPanel(net);
 }
 
-// 按当前模式重绘控制页或帮助页
+// 按当前模式重绘控制页、概览或帮助页
 static void redrawMijiaScreen() {
-    if (mijiaHelpVisible && !mijiaOverviewMode) {
+    if (mijiaHelpVisible) {
         invalidateMijiaControlSurface();
-        drawMijiaHelpPage();
+        if (mijiaOverviewGridMode) {
+            drawMijiaGridHelpPage();
+        } else {
+            drawMijiaHelpPage();
+        }
         return;
     }
     if (mijiaOverviewMode) {
@@ -686,8 +694,227 @@ static bool handleMijiaOverviewNav(const int delta) {
     return true;
 }
 
+// 宫格底栏提示高度与分隔线
+static constexpr int MIJIA_GRID_HINT_H = 12;
+static constexpr int MIJIA_GRID_BOTTOM_DIVIDER = 1;
+
+// 垂直方向：; . 及 HID 上/下（Cardputer 方向键布局）
+static int getOverviewVerticalDelta(const Keyboard_Class::KeysState& status) {
+    int delta = 0;
+    for (const uint8_t hid : status.hid_keys) {
+        if (hid == 0x52 || hid == 0x33) {
+            delta = -1;
+        } else if (hid == 0x51 || hid == 0x37) {
+            delta = 1;
+        }
+    }
+    for (const char c : status.word) {
+        if (c == ';') {
+            delta = -1;
+        } else if (c == '.') {
+            delta = 1;
+        }
+    }
+    return delta;
+}
+
+// 水平方向：, / 及 HID 左/右（Cardputer 方向键布局）
+static int getOverviewHorizontalDelta(const Keyboard_Class::KeysState& status) {
+    int delta = 0;
+    for (const uint8_t hid : status.hid_keys) {
+        if (hid == 0x50 || hid == 0x36) {
+            delta = -1;
+        } else if (hid == 0x4F || hid == 0x38) {
+            delta = 1;
+        }
+    }
+    for (const char c : status.word) {
+        if (c == ',') {
+            delta = -1;
+        } else if (c == '/') {
+            delta = 1;
+        }
+    }
+    return delta;
+}
+
+// 列表上下选中，跨页时同步 scroll
+static bool handleMijiaListSelectionNav(const Keyboard_Class::KeysState& status) {
+    const int drow = getOverviewVerticalDelta(status);
+    if (drow == 0) {
+        return false;
+    }
+
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.device_count <= 1) {
+        return false;
+    }
+
+    const int new_idx = mijiaDeviceIdx + drow;
+    if (new_idx < 0 || new_idx >= cfg.device_count || new_idx == mijiaDeviceIdx) {
+        return false;
+    }
+
+    const int visible = MIJIA_LIST_VISIBLE_COUNT;
+    const int old_idx = mijiaDeviceIdx;
+    const int old_scroll = mijiaOverviewScrollIdx;
+    mijiaDeviceIdx = new_idx;
+    mijiaOverviewScrollIdx = (new_idx / visible) * visible;
+
+    if (mijiaOverviewScrollIdx != old_scroll) {
+        redrawMijiaScreen();
+    } else {
+        refreshMijiaListSelection(old_idx, new_idx);
+    }
+    return true;
+}
+
+// [ ] 翻页：-1 上一页，0 无，1 下一页
+static int getMijiaOverviewBracketDelta(const Keyboard_Class::KeysState& status) {
+    for (const char c : status.word) {
+        if (c == '[') {
+            return -1;
+        }
+        if (c == ']') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// 宫格方向键选中：上下左右 / ; , . /
+static bool handleMijiaGridSelectionNav(const Keyboard_Class::KeysState& status) {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.device_count <= 1) {
+        return false;
+    }
+
+    int dcol = 0;
+    int drow = 0;
+    for (const uint8_t hid : status.hid_keys) {
+        switch (hid) {
+            case 0x50:
+            case 0x36:
+                dcol = -1;
+                break;
+            case 0x4F:
+            case 0x38:
+                dcol = 1;
+                break;
+            case 0x52:
+            case 0x33:
+                drow = -1;
+                break;
+            case 0x51:
+            case 0x37:
+                drow = 1;
+                break;
+            default:
+                break;
+        }
+    }
+    for (const char c : status.word) {
+        if (c == ',') {
+            dcol = -1;
+        } else if (c == '/') {
+            dcol = 1;
+        } else if (c == ';') {
+            drow = -1;
+        } else if (c == '.') {
+            drow = 1;
+        }
+    }
+    if (dcol == 0 && drow == 0) {
+        return false;
+    }
+
+    int new_idx = mijiaDeviceIdx;
+    if (drow != 0) {
+        new_idx += drow * MIJIA_GRID_COLS;
+    } else {
+        new_idx += dcol;
+    }
+    if (new_idx < 0 || new_idx >= cfg.device_count || new_idx == mijiaDeviceIdx) {
+        return false;
+    }
+
+    const int old_idx = mijiaDeviceIdx;
+    const int old_scroll = mijiaOverviewScrollIdx;
+    mijiaDeviceIdx = new_idx;
+    mijiaOverviewScrollIdx = (new_idx / MIJIA_GRID_PAGE_SIZE) * MIJIA_GRID_PAGE_SIZE;
+
+    if (mijiaOverviewScrollIdx != old_scroll) {
+        requestMijiaOverviewPageRefresh();
+        redrawMijiaScreen();
+    } else {
+        refreshMijiaGridSelection(old_idx, new_idx);
+    }
+    return true;
+}
+
+// 估算底栏按键提示宽度
+static int mijiaMeasureHintItem(const KeyHintItem& item) {
+    const char letter = static_cast<char>(toupper(static_cast<unsigned char>(item.key)));
+    const char str[2] = {letter, '\0'};
+    M5Cardputer.Display.setTextSize(1);
+    const int tw = M5Cardputer.Display.textWidth(str);
+    constexpr int pad_x = 2;
+    const int badge_w = tw + pad_x * 2 + 3;
+    return badge_w + M5Cardputer.Display.textWidth(item.text);
+}
+
+// 宫格底栏：左侧 on/off，右侧 h help
+static void drawMijiaGridBottomHints(const AppConfig& cfg) {
+    const int hint_y = M5Cardputer.Display.height() - MIJIA_GRID_HINT_H;
+    const int screen_w = M5Cardputer.Display.width();
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, hint_y, screen_w - APP_CONTENT_X * 2,
+                                 MIJIA_GRID_HINT_H, BLACK);
+
+    int cx = APP_CONTENT_X;
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+
+    if (cfg.loaded && cfg.device_count > 1) {
+        const int page_count = getMijiaOverviewPageCount(cfg.device_count);
+        if (page_count > 1) {
+            char pos_buf[12];
+            snprintf(pos_buf, sizeof(pos_buf), "p%d/%d",
+                     getMijiaOverviewPage(cfg.device_count) + 1, page_count);
+            M5Cardputer.Display.setCursor(cx, hint_y);
+            M5Cardputer.Display.print(pos_buf);
+            cx += M5Cardputer.Display.textWidth(pos_buf) + 6;
+        }
+    }
+
+    cx += drawKeyBadge(cx, hint_y, 'o', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("on ");
+    cx += M5Cardputer.Display.textWidth("on ");
+    cx += drawKeyBadge(cx, hint_y, 'i', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("off");
+
+    const KeyHintItem help_item = {'h', "help"};
+    const int help_w = mijiaMeasureHintItem(help_item);
+    const int hx = screen_w - APP_CONTENT_X - help_w;
+    cx = hx + drawKeyBadge(hx, hint_y, 'h', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("help");
+}
+
 // 绘制概览底栏按键提示
 static void drawMijiaOverviewHints(const AppConfig& cfg) {
+    if (mijiaOverviewGridMode) {
+        drawMijiaGridBottomHints(cfg);
+        return;
+    }
+
     const int hint_y = M5Cardputer.Display.height() - 12;
     int cx = APP_CONTENT_X;
 
@@ -707,52 +934,25 @@ static void drawMijiaOverviewHints(const AppConfig& cfg) {
 
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    const char* pick_badge = mijiaOverviewGridMode ? "1-9" : "1-3";
-    cx += drawTextBadge(cx, hint_y, pick_badge, 1);
+
+    cx += drawArrowBadge(cx, hint_y, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, hint_y);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-    M5Cardputer.Display.print("pick ");
-    cx += M5Cardputer.Display.textWidth("pick ");
+    M5Cardputer.Display.print("page ");
+    cx += M5Cardputer.Display.textWidth("page ");
 
-    if (!mijiaOverviewGridMode) {
-        cx += drawArrowBadge(cx, hint_y, 1);
-        M5Cardputer.Display.setCursor(cx, hint_y);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-        M5Cardputer.Display.print("page ");
-        cx += M5Cardputer.Display.textWidth("page ");
-    }
-
-    if (mijiaOverviewGridMode) {
-        cx += drawKeyBadge(cx, hint_y, 'o', 1);
-        M5Cardputer.Display.setCursor(cx, hint_y);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-        M5Cardputer.Display.print("on ");
-        cx += M5Cardputer.Display.textWidth("on ");
-        cx += drawKeyBadge(cx, hint_y, 'i', 1);
-        M5Cardputer.Display.setCursor(cx, hint_y);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-        M5Cardputer.Display.print("off ");
-        cx += M5Cardputer.Display.textWidth("off ");
-        cx += drawKeyBadge(cx, hint_y, 'g', 1);
-        M5Cardputer.Display.setCursor(cx, hint_y);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-        M5Cardputer.Display.print("back ");
-        cx += M5Cardputer.Display.textWidth("back ");
-        cx += drawKeyBadge(cx, hint_y, 'l', 1);
-        M5Cardputer.Display.setCursor(cx, hint_y);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-        M5Cardputer.Display.print("list");
-    } else {
-        cx += drawKeyBadge(cx, hint_y, 'l', 1);
-        M5Cardputer.Display.setCursor(cx, hint_y);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-        M5Cardputer.Display.print("back ");
-        cx += M5Cardputer.Display.textWidth("back ");
-        cx += drawKeyBadge(cx, hint_y, 'g', 1);
-        M5Cardputer.Display.setCursor(cx, hint_y);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
-        M5Cardputer.Display.print("grid");
-    }
+    cx += drawKeyBadge(cx, hint_y, 'l', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("back ");
+    cx += M5Cardputer.Display.textWidth("back ");
+    cx += drawKeyBadge(cx, hint_y, 'g', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("grid");
 }
 
 // 宫格单元：左图标，右侧第一行序号+状态，第二行设备名
@@ -842,11 +1042,17 @@ static MijiaGridLayout getMijiaGridLayout() {
     layout.gap = 2;
     layout.grid_y = getMijiaGridOriginY();
     layout.content_w = M5Cardputer.Display.width() - APP_CONTENT_X * 2;
-    constexpr int hint_h = 12;
-    layout.avail_h = M5Cardputer.Display.height() - layout.grid_y - hint_h;
+    layout.avail_h =
+        M5Cardputer.Display.height() - layout.grid_y - MIJIA_GRID_HINT_H - MIJIA_GRID_BOTTOM_DIVIDER;
     layout.cell_w = (layout.content_w - (MIJIA_GRID_COLS - 1) * layout.gap) / MIJIA_GRID_COLS;
     layout.cell_h = (layout.avail_h - (MIJIA_GRID_ROWS - 1) * layout.gap) / MIJIA_GRID_ROWS;
     return layout;
+}
+
+// 宫格末行与底栏提示之间的分隔线
+static void drawMijiaGridBottomDivider(const MijiaGridLayout& layout) {
+    const int y = layout.grid_y + layout.avail_h;
+    M5Cardputer.Display.drawFastHLine(APP_CONTENT_X, y, layout.content_w, MIJIA_DIVIDER_COLOR);
 }
 
 // 绘制宫格分割线
@@ -906,6 +1112,7 @@ static void refreshMijiaGridSelection(const int old_idx, const int new_idx) {
     paint_slot(old_slot);
     paint_slot(new_slot);
     drawMijiaGridDividers(layout);
+    drawMijiaGridBottomDivider(layout);
 }
 
 struct MijiaListLayout {
@@ -954,6 +1161,7 @@ static void drawMijiaOverviewGrid() {
     const MijiaGridLayout layout = getMijiaGridLayout();
 
     drawMijiaGridDividers(layout);
+    drawMijiaGridBottomDivider(layout);
 
     for (int row = 0; row < MIJIA_GRID_ROWS; row++) {
         for (int col = 0; col < MIJIA_GRID_COLS; col++) {
@@ -1099,14 +1307,21 @@ static void drawMijiaOverview(int& y) {
 }
 
 bool handleMijiaOverviewPageNav(const Keyboard_Class::KeysState& status) {
-    if (!mijiaOverviewMode) {
+    if (!mijiaOverviewMode || mijiaHelpVisible) {
         return false;
     }
-    const int delta = getMenuNavDelta(status);
-    if (delta == 0) {
-        return false;
+    if (mijiaOverviewGridMode) {
+        const int bracket = getMijiaOverviewBracketDelta(status);
+        if (bracket != 0) {
+            return handleMijiaOverviewNav(bracket);
+        }
+        return handleMijiaGridSelectionNav(status);
     }
-    return handleMijiaOverviewNav(delta);
+    const int hdelta = getOverviewHorizontalDelta(status);
+    if (hdelta != 0) {
+        return handleMijiaOverviewNav(hdelta);
+    }
+    return handleMijiaListSelectionNav(status);
 }
 
 // 控制页切换设备
@@ -1298,6 +1513,8 @@ static void drawMijiaRefreshHelpRow(const int x, const int row, const int total_
     cx += M5Cardputer.Display.textWidth("  ");
 
     cx += drawArrowBadge(cx, y, text_size);
+    M5Cardputer.Display.setTextSize(text_size);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, y);
     M5Cardputer.Display.print("switch");
 }
@@ -1386,6 +1603,49 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
     }
 }
 
+// 宫格概览操作帮助（按 H 在 grid 界面查看）
+static void drawMijiaGridHelpContent(const int text_size) {
+    const int max_w = M5Cardputer.Display.width() - APP_CONTENT_X * 2;
+    static const KeyHintItem action_items[] = {
+        {'g', "back"},
+        {'l', "list"},
+        {'h', "help"},
+    };
+    const int total_rows =
+        2 + mijiaCountWrappedRows(action_items, 3, text_size, max_w);
+
+    // 方向键选中
+    {
+        const int y = mijiaHelpRowY(0, total_rows, text_size);
+        int cx = APP_CONTENT_X + drawArrowBadge(APP_CONTENT_X, y, text_size);
+        cx += drawArrowUpDownBadge(cx, y, text_size);
+        M5Cardputer.Display.setTextSize(text_size);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, y);
+        M5Cardputer.Display.print("sel");
+    }
+
+    // [ ] 翻页
+    {
+        const int y = mijiaHelpRowY(1, total_rows, text_size);
+        int cx = APP_CONTENT_X + drawKeyBadge(APP_CONTENT_X, y, '[', text_size);
+        cx += drawKeyBadge(cx, y, ']', text_size);
+        M5Cardputer.Display.setTextSize(text_size);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, y);
+        M5Cardputer.Display.print("page");
+    }
+
+    drawKeyHintsWrapped(APP_CONTENT_X, 2, total_rows, action_items, 3, text_size, APP_COLOR_HINT,
+                        max_w);
+}
+
+// 宫格概览帮助页
+static void drawMijiaGridHelpPage() {
+    beginAppScreen("Help");
+    drawMijiaGridHelpContent(2);
+}
+
 // 按 H 切换显示的帮助页
 static void drawMijiaHelpPage() {
     beginAppScreen("Help");
@@ -1436,7 +1696,7 @@ void updateMijiaApp() {
 
 void handleMijiaApp(const String& key) {
     if (key == "h") {
-        if (!mijiaOverviewMode) {
+        if (mijiaOverviewGridMode || !mijiaOverviewMode) {
             mijiaHelpVisible = !mijiaHelpVisible;
             redrawMijiaScreen();
         }
@@ -1451,6 +1711,7 @@ void handleMijiaApp(const String& key) {
             enterMijiaOverview(false);
         } else if (mijiaOverviewGridMode) {
             mijiaOverviewGridMode = false;
+            mijiaHelpVisible = false;
             syncMijiaOverviewScroll();
         } else {
             exitMijiaOverview();
@@ -1462,6 +1723,7 @@ void handleMijiaApp(const String& key) {
         if (!mijiaOverviewMode) {
             enterMijiaOverview(true);
         } else if (mijiaOverviewGridMode) {
+            mijiaHelpVisible = false;
             exitMijiaOverview();
         } else {
             mijiaOverviewGridMode = true;
@@ -1478,20 +1740,16 @@ void handleMijiaApp(const String& key) {
         }
 
         const AppConfig& cfg = getAppConfig();
-        const int max_pick = mijiaOverviewGridMode ? MIJIA_GRID_PAGE_SIZE : MIJIA_LIST_VISIBLE_COUNT;
-        // 数字键选中当前页设备
-        if (key.length() == 1 && key[0] >= '1' && key[0] < static_cast<char>('1' + max_pick)) {
+        // 宫格数字键选中当前页设备
+        if (mijiaOverviewGridMode && key.length() == 1 &&
+            key[0] >= '1' && key[0] < static_cast<char>('1' + MIJIA_GRID_PAGE_SIZE)) {
             const int pick = key[0] - '1';
-            if (pick < max_pick && cfg.loaded) {
+            if (pick < MIJIA_GRID_PAGE_SIZE && cfg.loaded) {
                 const int idx = mijiaOverviewScrollIdx + pick;
                 if (idx < cfg.device_count && idx != mijiaDeviceIdx) {
                     const int old_idx = mijiaDeviceIdx;
                     mijiaDeviceIdx = idx;
-                    if (mijiaOverviewGridMode) {
-                        refreshMijiaGridSelection(old_idx, idx);
-                    } else {
-                        refreshMijiaListSelection(old_idx, idx);
-                    }
+                    refreshMijiaGridSelection(old_idx, idx);
                 }
             }
         }

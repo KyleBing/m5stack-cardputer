@@ -1,0 +1,46 @@
+---
+description: 底栏 tip / 按键说明绘制后必须恢复说明文字颜色
+alwaysApply: true
+---
+
+# 底栏 Tip 文字颜色
+
+`drawKeyBadge`、`drawTextBadge`、`drawArrowBadge` 等徽章绘制函数会修改 `setTextColor`（通常为黄底黑字 `APP_COLOR_KEY_TEXT`）。
+
+在 tip / hint / 按键说明行中，**每次**绘制徽章或箭头徽章之后、打印说明文字之前，必须恢复说明文字颜色：
+
+```cpp
+cx += drawKeyBadge(cx, hint_y, 'o', 1);
+M5Cardputer.Display.setTextSize(1);
+M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);  // 必须恢复
+M5Cardputer.Display.setCursor(cx, hint_y);
+M5Cardputer.Display.print("on ");
+```
+
+`drawArrowBadge` 后同理：
+
+```cpp
+cx += drawArrowBadge(cx, hint_y, 1);
+M5Cardputer.Display.setTextSize(1);
+M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);  // 必须恢复
+M5Cardputer.Display.setCursor(cx, hint_y);
+M5Cardputer.Display.print("page ");
+```
+
+## 检查清单
+
+编写或修改底栏 tip 时，确认每一处 `drawKeyBadge` / `drawTextBadge` / `drawArrowBadge` 之后的 `print` 前都有 `setTextColor`。
+
+优先复用已有封装（已正确处理颜色）：
+- `drawKeyHintsRow`
+- `drawKeyHintItemAt`（`app_time_ui.cpp`）
+- `mijiaDrawKeyHintItem`
+- `drawHintText`
+
+## 反例
+
+```cpp
+// ❌ 说明文字会继承徽章的黑色，在黑色背景上不可见
+cx += drawKeyBadge(cx, y, 'h', 1);
+M5Cardputer.Display.print("help");
+```

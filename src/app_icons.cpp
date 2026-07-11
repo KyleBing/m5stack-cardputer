@@ -14,10 +14,10 @@ struct AppLogoCircle {
 };
 
 static const AppLogoCircle APP_LOGO_CIRCLES[] = {
-    {30, 22, 20, 2, 0x000000, 0xFFD600},  // yellow
-    {46, 31, 16, 2, 0x000000, 0x30D158},  // green
-    {20, 38, 18, 2, 0x000000, 0x3CD3FE},  // cyan
-    {37, 46, 11, 2, 0x000000, 0xFF4245},  // red
+    {30, 22, 20, 2, 0x000000, 0x30D158},  // green
+    {46, 31, 16, 2, 0x000000, 0x3CD3FE},  // cyan
+    {20, 38, 18, 2, 0x000000, 0xFF4245},  // red
+    {37, 46, 11, 2, 0x000000, 0xFFD600},  // yellow
 };
 
 static uint16_t colorFromRgb(const uint32_t rgb) {
