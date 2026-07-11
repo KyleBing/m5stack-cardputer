@@ -15,6 +15,7 @@
 
 static int mijiaDeviceIdx = 0;
 static bool mijiaOverviewMode = false;
+static bool mijiaOverviewGridMode = false;
 static bool mijiaHelpVisible = false;
 static int mijiaOverviewScrollIdx = 0;
 static int mijiaOverviewEntryDeviceIdx = 0;
@@ -304,17 +305,9 @@ static void setMijiaPower(const bool on) {
     mijiaSetDevicePower(dev, mijiaUi, on);
 }
 
-// 概览列表每屏固定显示 2 项
+// 概览每页设备数：列表 3 / 宫格 9
 static int getMijiaOverviewVisibleCount() {
-    return MIJIA_LIST_VISIBLE_COUNT;
-}
-
-// 概览列表每项高度：两格均分内容区（扣除底栏提示）
-static int getMijiaOverviewItemHeight() {
-    constexpr int hint_h = 12;
-    constexpr int gap = 6;
-    const int avail = M5Cardputer.Display.height() - APP_CONTENT_Y - hint_h;
-    return (avail - gap) / MIJIA_LIST_VISIBLE_COUNT;
+    return mijiaOverviewGridMode ? MIJIA_GRID_PAGE_SIZE : MIJIA_LIST_VISIBLE_COUNT;
 }
 
 static int getMijiaOverviewPageCount(const int device_count) {
@@ -325,6 +318,56 @@ static int getMijiaOverviewPageCount(const int device_count) {
     return (device_count + visible - 1) / visible;
 }
 
+// 切换列表/宫格时同步滚动位置到当前选中设备所在页
+static void syncMijiaOverviewScroll() {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.device_count <= 0) {
+        mijiaOverviewScrollIdx = 0;
+        return;
+    }
+    const int visible = getMijiaOverviewVisibleCount();
+    mijiaOverviewScrollIdx = (mijiaDeviceIdx / visible) * visible;
+    if (mijiaOverviewGridMode) {
+        const int page_count = getMijiaOverviewPageCount(cfg.device_count);
+        int page = mijiaOverviewScrollIdx / visible;
+        if (page < 0) {
+            page = 0;
+        }
+        if (page >= page_count) {
+            page = page_count - 1;
+        }
+        mijiaOverviewScrollIdx = page * visible;
+        return;
+    }
+    const int max_scroll = cfg.device_count > visible ? cfg.device_count - visible : 0;
+    if (mijiaOverviewScrollIdx > max_scroll) {
+        mijiaOverviewScrollIdx = max_scroll;
+    }
+    if (mijiaOverviewScrollIdx < 0) {
+        mijiaOverviewScrollIdx = 0;
+    }
+}
+
+// 宫格紧贴 header 顶边
+static int getMijiaGridOriginY() {
+    return APP_HEADER_H;
+}
+
+// 概览列表每项高度：均分内容区（扣除底栏提示）
+static int getMijiaOverviewItemHeight() {
+    constexpr int hint_h = 12;
+    constexpr int gap = 4;
+    const int avail = M5Cardputer.Display.height() - APP_CONTENT_Y - hint_h;
+    const int total_gap = gap * (MIJIA_LIST_VISIBLE_COUNT - 1);
+    return (avail - total_gap) / MIJIA_LIST_VISIBLE_COUNT;
+}
+
+// 概览列表图标边长：随行高缩放，不超过设计上限
+static int getMijiaOverviewIconPx(const int item_h) {
+    const int fit = item_h - 2;
+    return fit < MIJIA_LIST_ICON_PX ? fit : MIJIA_LIST_ICON_PX;
+}
+
 static int getMijiaOverviewPage(const int device_count) {
     const int visible = getMijiaOverviewVisibleCount();
     if (device_count <= 0) {
@@ -333,7 +376,7 @@ static int getMijiaOverviewPage(const int device_count) {
     return mijiaOverviewScrollIdx / visible;
 }
 
-// 概览列表翻页
+// 概览翻页：宫格按整页跳转，列表支持逐条滚动
 static bool handleMijiaOverviewNav(const int delta) {
     const AppConfig& cfg = getAppConfig();
     if (!cfg.loaded || cfg.device_count <= 1) {
@@ -342,6 +385,22 @@ static bool handleMijiaOverviewNav(const int delta) {
 
     const int visible = getMijiaOverviewVisibleCount();
     const int page_count = getMijiaOverviewPageCount(cfg.device_count);
+
+    if (mijiaOverviewGridMode) {
+        if (page_count <= 1) {
+            return false;
+        }
+        int page = mijiaOverviewScrollIdx / visible;
+        page = (page + delta + page_count) % page_count;
+        mijiaOverviewScrollIdx = page * visible;
+        mijiaDeviceIdx = mijiaOverviewScrollIdx;
+        if (mijiaDeviceIdx >= cfg.device_count) {
+            mijiaDeviceIdx = cfg.device_count - 1;
+        }
+        redrawMijiaScreen();
+        return true;
+    }
+
     if (page_count <= 1) {
         mijiaDeviceIdx = (mijiaDeviceIdx + delta + cfg.device_count) % cfg.device_count;
         mijiaOverviewScrollIdx = (mijiaDeviceIdx / visible) * visible;
@@ -360,54 +419,281 @@ static bool handleMijiaOverviewNav(const int delta) {
     return true;
 }
 
-// 绘制概览底栏按键提示（drawKeyBadge）
+// 绘制概览底栏按键提示
 static void drawMijiaOverviewHints(const AppConfig& cfg) {
     const int hint_y = M5Cardputer.Display.height() - 12;
     int cx = APP_CONTENT_X;
 
     if (cfg.loaded && cfg.device_count > 1) {
-        char pos_buf[20];
         const int page_count = getMijiaOverviewPageCount(cfg.device_count);
         if (page_count > 1) {
-            snprintf(pos_buf, sizeof(pos_buf), "p%d/%d %d/%d",
-                     getMijiaOverviewPage(cfg.device_count) + 1, page_count,
-                     mijiaDeviceIdx + 1, cfg.device_count);
-        } else {
-            snprintf(pos_buf, sizeof(pos_buf), "%d/%d", mijiaDeviceIdx + 1, cfg.device_count);
+            char pos_buf[12];
+            snprintf(pos_buf, sizeof(pos_buf), "p%d/%d",
+                     getMijiaOverviewPage(cfg.device_count) + 1, page_count);
+            M5Cardputer.Display.setTextSize(1);
+            M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+            M5Cardputer.Display.setCursor(cx, hint_y);
+            M5Cardputer.Display.print(pos_buf);
+            cx += M5Cardputer.Display.textWidth(pos_buf) + 6;
         }
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-        M5Cardputer.Display.setCursor(cx, hint_y);
-        M5Cardputer.Display.print(pos_buf);
-        cx += M5Cardputer.Display.textWidth(pos_buf) + 6;
     }
 
-    static const KeyHintItem nav_items[] = {
-        {',', "page-"},
-        {'.', "page+"},
-        {'1', "pick1"},
-        {'2', "pick2"},
-        {'i', "back"},
-    };
-    drawKeyHintsRow(cx, hint_y, nav_items, 5, 1, APP_COLOR_HINT);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    const char* pick_badge = mijiaOverviewGridMode ? "1-9" : "1-3";
+    cx += drawTextBadge(cx, hint_y, pick_badge, 1);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
+    M5Cardputer.Display.print("pick ");
+    cx += M5Cardputer.Display.textWidth("pick ");
+
+    cx += drawArrowBadge(cx, hint_y, 1);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
+    M5Cardputer.Display.print("page ");
+    cx += M5Cardputer.Display.textWidth("page ");
+
+    if (mijiaOverviewGridMode) {
+        cx += drawKeyBadge(cx, hint_y, 'g', 1);
+        M5Cardputer.Display.setCursor(cx, hint_y);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
+        M5Cardputer.Display.print("back");
+    } else {
+        cx += drawKeyBadge(cx, hint_y, 'i', 1);
+        M5Cardputer.Display.setCursor(cx, hint_y);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
+        M5Cardputer.Display.print("back");
+    }
 }
 
-// 绘制单项：左图标（缩放）+ 右名称/IP/型号
-static void drawMijiaOverviewItem(const MijiaDevice& entry, const int x, const int y,
-                                  const int item_h, const bool selected) {
+// 宫格单元：左图标，右上是序号、右下是设备名
+static void drawMijiaOverviewGridCell(const MijiaDevice& entry, const int device_idx, const int x,
+                                      const int y, const int cell_w, const int cell_h,
+                                      const bool selected) {
+    const MijiaDevKind kind = mijiaClassifyModel(entry.model);
+    const uint16_t num_color = selected ? APP_COLOR_OK : APP_COLOR_HINT;
+    const uint16_t name_color = selected ? APP_COLOR_OK : APP_COLOR_TEXT;
+
+    constexpr int pad = 2;
+    constexpr int text_gap = 4;
+    constexpr int text_line_gap = 1;
+    int icon_px = cell_h - pad * 2;
+    if (icon_px > DEVICE_ICON_LIST_PX) {
+        icon_px = DEVICE_ICON_LIST_PX;
+    }
+    if (icon_px < MIJIA_ICON_BASE) {
+        icon_px = MIJIA_ICON_BASE;
+    }
+
+    const int icon_x = x + pad;
+    const int icon_y = y + (cell_h - icon_px) / 2;
+    const float png_scale = static_cast<float>(icon_px) / DEVICE_ICON_LIST_PX;
+    const int vector_scale = icon_px / MIJIA_ICON_BASE;
+    drawMijiaDeviceIconForList(&entry, kind, icon_x, icon_y,
+                               selected ? APP_COLOR_OK : APP_COLOR_HINT, false,
+                               vector_scale > 0 ? vector_scale : 1, png_scale);
+
+    const int text_x = icon_x + icon_px + text_gap;
+    const int text_w = cell_w - (text_x - x) - pad;
+    const int num_h = infoLineHeight(1);
+    const int name_h = infoLineHeight(1);
+    const int text_block_h = num_h + text_line_gap + name_h;
+    const int text_y = y + (cell_h - text_block_h) / 2;
+
+    M5Cardputer.Display.setTextSize(1);
+    char num_buf[8];
+    snprintf(num_buf, sizeof(num_buf), "%d", device_idx + 1);
+    M5Cardputer.Display.setTextColor(num_color, BLACK);
+    M5Cardputer.Display.setCursor(text_x, text_y);
+    M5Cardputer.Display.print(num_buf);
+
+    const char* raw_name = entry.name[0] != '\0' ? entry.name : "device";
+    char name_buf[24];
+    strncpy(name_buf, raw_name, sizeof(name_buf) - 1);
+    name_buf[sizeof(name_buf) - 1] = '\0';
+    while (name_buf[0] != '\0' && M5Cardputer.Display.textWidth(name_buf) > text_w) {
+        name_buf[strlen(name_buf) - 1] = '\0';
+    }
+    M5Cardputer.Display.setTextColor(name_color, BLACK);
+    M5Cardputer.Display.setCursor(text_x, text_y + num_h + text_line_gap);
+    M5Cardputer.Display.print(name_buf);
+
+    if (selected) {
+        M5Cardputer.Display.drawRoundRect(x, y, cell_w, cell_h, 2, APP_COLOR_OK);
+    }
+}
+
+struct MijiaGridLayout {
+    int grid_y;
+    int content_w;
+    int avail_h;
+    int cell_w;
+    int cell_h;
+    int gap;
+};
+
+// 计算宫格布局参数
+static MijiaGridLayout getMijiaGridLayout() {
+    MijiaGridLayout layout{};
+    layout.gap = 2;
+    layout.grid_y = getMijiaGridOriginY();
+    layout.content_w = M5Cardputer.Display.width() - APP_CONTENT_X * 2;
+    constexpr int hint_h = 12;
+    layout.avail_h = M5Cardputer.Display.height() - layout.grid_y - hint_h;
+    layout.cell_w = (layout.content_w - (MIJIA_GRID_COLS - 1) * layout.gap) / MIJIA_GRID_COLS;
+    layout.cell_h = (layout.avail_h - (MIJIA_GRID_ROWS - 1) * layout.gap) / MIJIA_GRID_ROWS;
+    return layout;
+}
+
+// 绘制宫格分割线
+static void drawMijiaGridDividers(const MijiaGridLayout& layout) {
+    for (int col = 1; col < MIJIA_GRID_COLS; col++) {
+        const int vx = APP_CONTENT_X + col * (layout.cell_w + layout.gap) - layout.gap / 2;
+        M5Cardputer.Display.drawFastVLine(vx, layout.grid_y, layout.avail_h, APP_COLOR_MUTED);
+    }
+    for (int row = 1; row < MIJIA_GRID_ROWS; row++) {
+        const int hy = layout.grid_y + row * (layout.cell_h + layout.gap) - layout.gap / 2;
+        M5Cardputer.Display.drawFastHLine(APP_CONTENT_X, hy, layout.content_w, APP_COLOR_MUTED);
+    }
+}
+
+// 设备索引转当前页宫格 slot，不在当前页返回 -1
+static int mijiaGridSlotForIdx(const int device_idx) {
+    if (device_idx < mijiaOverviewScrollIdx ||
+        device_idx >= mijiaOverviewScrollIdx + MIJIA_GRID_PAGE_SIZE) {
+        return -1;
+    }
+    return device_idx - mijiaOverviewScrollIdx;
+}
+
+// 局部刷新宫格选中态（仅重绘变更的两个格子）
+static void refreshMijiaGridSelection(const int old_idx, const int new_idx) {
+    if (old_idx == new_idx) {
+        return;
+    }
+
+    const int old_slot = mijiaGridSlotForIdx(old_idx);
+    const int new_slot = mijiaGridSlotForIdx(new_idx);
+    if (old_slot < 0 && new_slot < 0) {
+        redrawMijiaScreen();
+        return;
+    }
+
+    const MijiaGridLayout layout = getMijiaGridLayout();
+    const AppConfig& cfg = getAppConfig();
+
+    const auto paint_slot = [&](const int slot) {
+        if (slot < 0 || slot >= MIJIA_GRID_PAGE_SIZE) {
+            return;
+        }
+        const int idx = mijiaOverviewScrollIdx + slot;
+        if (idx >= cfg.device_count) {
+            return;
+        }
+        const int row = slot / MIJIA_GRID_COLS;
+        const int col = slot % MIJIA_GRID_COLS;
+        const int cx = APP_CONTENT_X + col * (layout.cell_w + layout.gap);
+        const int cy = layout.grid_y + row * (layout.cell_h + layout.gap);
+        M5Cardputer.Display.fillRect(cx, cy, layout.cell_w, layout.cell_h, BLACK);
+        drawMijiaOverviewGridCell(cfg.devices[idx], idx, cx, cy, layout.cell_w, layout.cell_h,
+                                  idx == mijiaDeviceIdx);
+    };
+
+    paint_slot(old_slot);
+    paint_slot(new_slot);
+    drawMijiaGridDividers(layout);
+}
+
+struct MijiaListLayout {
+    int item_h;
+    int item_gap;
+    int line_w;
+};
+
+// 计算列表布局参数
+static MijiaListLayout getMijiaListLayout() {
+    MijiaListLayout layout{};
+    layout.item_h = getMijiaOverviewItemHeight();
+    layout.item_gap = 4;
+    layout.line_w = M5Cardputer.Display.width() - APP_CONTENT_X * 2;
+    return layout;
+}
+
+// 设备索引转当前页列表 slot，不在当前页返回 -1
+static int mijiaListSlotForIdx(const int device_idx) {
+    if (device_idx < mijiaOverviewScrollIdx ||
+        device_idx >= mijiaOverviewScrollIdx + MIJIA_LIST_VISIBLE_COUNT) {
+        return -1;
+    }
+    return device_idx - mijiaOverviewScrollIdx;
+}
+
+// 绘制列表项间分隔线
+static void drawMijiaListDividers(const MijiaListLayout& layout, const int device_count) {
+    int item_y = APP_CONTENT_Y;
+    for (int i = 0; i < MIJIA_LIST_VISIBLE_COUNT - 1; i++) {
+        const int idx = mijiaOverviewScrollIdx + i;
+        if (idx + 1 >= device_count) {
+            break;
+        }
+        const int line_y = item_y + layout.item_h + layout.item_gap / 2;
+        M5Cardputer.Display.drawFastHLine(APP_CONTENT_X, line_y, layout.line_w, APP_COLOR_MUTED);
+        item_y += layout.item_h + layout.item_gap;
+    }
+}
+
+// 宫格概览：3x3 整页分页，末页不足 9 台留空
+static void drawMijiaOverviewGrid() {
+    const AppConfig& cfg = getAppConfig();
+    syncMijiaOverviewScroll();
+
+    const MijiaGridLayout layout = getMijiaGridLayout();
+
+    drawMijiaGridDividers(layout);
+
+    for (int row = 0; row < MIJIA_GRID_ROWS; row++) {
+        for (int col = 0; col < MIJIA_GRID_COLS; col++) {
+            const int slot = row * MIJIA_GRID_COLS + col;
+            const int idx = mijiaOverviewScrollIdx + slot;
+            const int cx = APP_CONTENT_X + col * (layout.cell_w + layout.gap);
+            const int cy = layout.grid_y + row * (layout.cell_h + layout.gap);
+            if (idx < cfg.device_count) {
+                drawMijiaOverviewGridCell(cfg.devices[idx], idx, cx, cy, layout.cell_w, layout.cell_h,
+                                          idx == mijiaDeviceIdx);
+            }
+        }
+    }
+
+    drawMijiaOverviewHints(cfg);
+}
+
+// 绘制单项：序号 + 左图标（缩放）+ 右名称/型号
+static void drawMijiaOverviewItem(const MijiaDevice& entry, const int device_idx, const int x,
+                                  const int y, const int item_h, const bool selected) {
     const MijiaDevKind kind = mijiaClassifyModel(entry.model);
     const uint16_t name_color = selected ? APP_COLOR_OK : APP_COLOR_VALUE;
-    const int icon_px = MIJIA_LIST_ICON_PX;
-    const float png_scale = static_cast<float>(MIJIA_LIST_ICON_PX) / DEVICE_ICON_NATIVE_PX;
-    const int icon_y = y + (item_h - icon_px) / 2;
-    drawMijiaDeviceIconFor(&entry, kind, x, icon_y, selected ? APP_COLOR_OK : APP_COLOR_HINT,
-                           false, MIJIA_ICON_SCALE_LIST, png_scale);
-
-    const int text_x = x + icon_px + 6;
-    const int text_block_h = INFO_LINE_H_2X + INFO_LINE_H * 2;
-    const int text_y = y + (item_h - text_block_h) / 2;
+    const int num_h = infoLineHeight(2);
+    const int num_y = y + (item_h - num_h) / 2;
 
     M5Cardputer.Display.setTextSize(2);
+    char num_buf[8];
+    snprintf(num_buf, sizeof(num_buf), "%d", device_idx + 1);
+    M5Cardputer.Display.setTextColor(name_color, BLACK);
+    M5Cardputer.Display.setCursor(x, num_y);
+    M5Cardputer.Display.print(num_buf);
+    const int content_x = x + M5Cardputer.Display.textWidth(num_buf) + MIJIA_LIST_NUM_MARGIN_R;
+
+    const int icon_px = DEVICE_ICON_LIST_PX;
+    const int vector_scale = icon_px / MIJIA_ICON_BASE;
+    const int icon_y = y + (item_h - icon_px) / 2;
+    drawMijiaDeviceIconForList(&entry, kind, content_x, icon_y, selected ? APP_COLOR_OK : APP_COLOR_HINT,
+                               false, vector_scale > 0 ? vector_scale : 1, 1.0f);
+
+    const int text_x = content_x + icon_px + 6;
+    const int text_block_h = INFO_LINE_H * 2;
+    const int text_y = y + (item_h - text_block_h) / 2;
+
+    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(name_color, BLACK);
     M5Cardputer.Display.setCursor(text_x, text_y);
     if (entry.name[0] != '\0') {
@@ -416,18 +702,48 @@ static void drawMijiaOverviewItem(const MijiaDevice& entry, const int x, const i
         M5Cardputer.Display.print("device");
     }
 
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
-    M5Cardputer.Display.setCursor(text_x, text_y + INFO_LINE_H_2X);
-    M5Cardputer.Display.print(entry.ip);
-
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(text_x, text_y + INFO_LINE_H_2X + INFO_LINE_H);
+    M5Cardputer.Display.setCursor(text_x, text_y + INFO_LINE_H);
     if (entry.model[0] != '\0') {
         M5Cardputer.Display.print(entry.model);
     } else {
         M5Cardputer.Display.print("-");
     }
+}
+
+// 局部刷新列表选中态（仅重绘变更的两项）
+static void refreshMijiaListSelection(const int old_idx, const int new_idx) {
+    if (old_idx == new_idx) {
+        return;
+    }
+
+    const int old_slot = mijiaListSlotForIdx(old_idx);
+    const int new_slot = mijiaListSlotForIdx(new_idx);
+    if (old_slot < 0 && new_slot < 0) {
+        redrawMijiaScreen();
+        return;
+    }
+
+    const MijiaListLayout layout = getMijiaListLayout();
+    const AppConfig& cfg = getAppConfig();
+
+    const auto paint_slot = [&](const int slot) {
+        if (slot < 0 || slot >= MIJIA_LIST_VISIBLE_COUNT) {
+            return;
+        }
+        const int idx = mijiaOverviewScrollIdx + slot;
+        if (idx >= cfg.device_count) {
+            return;
+        }
+        const int item_y = APP_CONTENT_Y + slot * (layout.item_h + layout.item_gap);
+        M5Cardputer.Display.fillRect(APP_CONTENT_X, item_y, layout.line_w, layout.item_h, BLACK);
+        drawMijiaOverviewItem(cfg.devices[idx], idx, APP_CONTENT_X, item_y, layout.item_h,
+                              idx == mijiaDeviceIdx);
+    };
+
+    paint_slot(old_slot);
+    paint_slot(new_slot);
+    drawMijiaListDividers(layout, cfg.device_count);
 }
 
 static void drawMijiaOverview(int& y) {
@@ -445,6 +761,12 @@ static void drawMijiaOverview(int& y) {
         return;
     }
 
+    if (mijiaOverviewGridMode) {
+        drawMijiaOverviewGrid();
+        y = M5Cardputer.Display.height() - 12;
+        return;
+    }
+
     const int visible = getMijiaOverviewVisibleCount();
     const int max_scroll = cfg.device_count > visible ? cfg.device_count - visible : 0;
     if (mijiaOverviewScrollIdx > max_scroll) {
@@ -455,17 +777,19 @@ static void drawMijiaOverview(int& y) {
     }
 
     const int item_h = getMijiaOverviewItemHeight();
-    constexpr int item_gap = 6;
+    constexpr int item_gap = 4;
+    const MijiaListLayout layout = getMijiaListLayout();
     int item_y = APP_CONTENT_Y;
     for (int i = 0; i < visible; i++) {
         const int idx = mijiaOverviewScrollIdx + i;
         if (idx >= cfg.device_count) {
             break;
         }
-        drawMijiaOverviewItem(cfg.devices[idx], APP_CONTENT_X, item_y, item_h,
+        drawMijiaOverviewItem(cfg.devices[idx], idx, APP_CONTENT_X, item_y, item_h,
                               idx == mijiaDeviceIdx);
         item_y += item_h + item_gap;
     }
+    drawMijiaListDividers(layout, cfg.device_count);
     y = item_y;
     drawMijiaOverviewHints(cfg);
 }
@@ -669,11 +993,7 @@ static void drawMijiaRefreshHelpRow(const int x, const int row, const int total_
     M5Cardputer.Display.print("  ");
     cx += M5Cardputer.Display.textWidth("  ");
 
-    const int arrow_cy = y + 4 * text_size;
-    drawIconArrowLeft(cx, arrow_cy, APP_COLOR_HINT);
-    cx += ICON_ARROW_W + 4;
-    drawIconArrowRight(cx, arrow_cy, APP_COLOR_HINT);
-    cx += ICON_ARROW_W + 4;
+    cx += drawArrowBadge(cx, y, text_size);
     M5Cardputer.Display.setCursor(cx, y);
     M5Cardputer.Display.print("switch");
 }
@@ -796,6 +1116,7 @@ void drawMijiaApp() {
 void enterMijiaApp() {
     mijiaDeviceIdx = 0;
     mijiaOverviewMode = false;
+    mijiaOverviewGridMode = false;
     mijiaHelpVisible = false;
     mijiaOverviewScrollIdx = 0;
     mijiaWifiPhase = MijiaWifiPhase::IDLE;
@@ -829,12 +1150,15 @@ void handleMijiaApp(const String& key) {
     }
 
     if (key == "i") {
+        if (mijiaOverviewMode && mijiaOverviewGridMode) {
+            return;
+        }
         const bool was_overview = mijiaOverviewMode;
         mijiaOverviewMode = !mijiaOverviewMode;
         if (mijiaOverviewMode) {
+            mijiaOverviewGridMode = false;
             mijiaOverviewEntryDeviceIdx = mijiaDeviceIdx;
-            const int visible = getMijiaOverviewVisibleCount();
-            mijiaOverviewScrollIdx = (mijiaDeviceIdx / visible) * visible;
+            syncMijiaOverviewScroll();
         } else if (was_overview && mijiaDeviceIdx != mijiaOverviewEntryDeviceIdx) {
             mijiaResetUiState(mijiaUi);
             strncpy(mijiaUi.status, "query...", sizeof(mijiaUi.status));
@@ -843,7 +1167,47 @@ void handleMijiaApp(const String& key) {
         redrawMijiaScreen();
         return;
     }
+    if (key == "g") {
+        if (mijiaOverviewMode && !mijiaOverviewGridMode) {
+            return;
+        }
+        if (!mijiaOverviewMode) {
+            mijiaOverviewMode = true;
+            mijiaOverviewGridMode = true;
+            mijiaOverviewEntryDeviceIdx = mijiaDeviceIdx;
+            syncMijiaOverviewScroll();
+            redrawMijiaScreen();
+            return;
+        }
+        mijiaOverviewMode = false;
+        mijiaOverviewGridMode = false;
+        if (mijiaDeviceIdx != mijiaOverviewEntryDeviceIdx) {
+            mijiaResetUiState(mijiaUi);
+            strncpy(mijiaUi.status, "query...", sizeof(mijiaUi.status));
+            requestMijiaRefresh();
+        }
+        redrawMijiaScreen();
+        return;
+    }
     if (mijiaOverviewMode) {
+        const AppConfig& cfg = getAppConfig();
+        const int max_pick = mijiaOverviewGridMode ? MIJIA_GRID_PAGE_SIZE : MIJIA_LIST_VISIBLE_COUNT;
+        // 数字键选中当前页设备
+        if (key.length() == 1 && key[0] >= '1' && key[0] < static_cast<char>('1' + max_pick)) {
+            const int pick = key[0] - '1';
+            if (pick < max_pick && cfg.loaded) {
+                const int idx = mijiaOverviewScrollIdx + pick;
+                if (idx < cfg.device_count && idx != mijiaDeviceIdx) {
+                    const int old_idx = mijiaDeviceIdx;
+                    mijiaDeviceIdx = idx;
+                    if (mijiaOverviewGridMode) {
+                        refreshMijiaGridSelection(old_idx, idx);
+                    } else {
+                        refreshMijiaListSelection(old_idx, idx);
+                    }
+                }
+            }
+        }
         return;
     }
 
@@ -922,14 +1286,6 @@ void handleMijiaApp(const String& key) {
         } else {
             mijiaAdjustColorTemp(dev, mijiaUi, 100);
         }
-    } else if (mijiaOverviewMode && (key == "1" || key == "2")) {
-        const int visible = getMijiaOverviewVisibleCount();
-        const int idx = mijiaOverviewScrollIdx + (key[0] - '1');
-        if (idx < cfg.device_count) {
-            mijiaDeviceIdx = idx;
-            redrawMijiaScreen();
-        }
-        return;
     } else if (kind == MijiaDevKind::FAN_P5) {
         if (!ensureConfigWifi()) {
             strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));

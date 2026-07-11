@@ -74,6 +74,19 @@ const char* deviceIconPathForModel(const char* model, const bool active) {
     return s_device_icon_path;
 }
 
+// 列表用小图标：{basename}_25w.png / {basename}_active_25w.png
+const char* deviceIconPathForModelList(const char* model, const bool active) {
+    const char* basename = deviceIconBasenameForModel(model);
+    if (active) {
+        snprintf(s_device_icon_path, sizeof(s_device_icon_path), "%s/%s_active_25w.png",
+                 DEVICE_ICON_NATIVE_DIR, basename);
+    } else {
+        snprintf(s_device_icon_path, sizeof(s_device_icon_path), "%s/%s_25w.png",
+                 DEVICE_ICON_NATIVE_DIR, basename);
+    }
+    return s_device_icon_path;
+}
+
 int deviceIconDrawPx(const MijiaDevice* /*dev*/) {
     return DEVICE_ICON_NATIVE_PX;
 }
@@ -134,6 +147,30 @@ bool drawDeviceIconForScaled(const MijiaDevice* dev, const int x, const int y, c
     }
     if (active) {
         return drawDevicePngPath(deviceIconPathForModel(nullptr, false), x, y, scale);
+    }
+    return false;
+}
+
+bool drawDeviceIconForList(const MijiaDevice* dev, const int x, const int y, const bool active,
+                             const float scale) {
+    const char* model = dev != nullptr ? dev->model : nullptr;
+    const char* path = deviceIconPathForModelList(model, active);
+    if (drawDevicePngPath(path, x, y, scale)) {
+        return true;
+    }
+    // active 图缺失时回退普通图
+    if (active) {
+        path = deviceIconPathForModelList(model, false);
+        if (drawDevicePngPath(path, x, y, scale)) {
+            return true;
+        }
+    }
+    const char* default_path = deviceIconPathForModelList(nullptr, active);
+    if (drawDevicePngPath(default_path, x, y, scale)) {
+        return true;
+    }
+    if (active) {
+        return drawDevicePngPath(deviceIconPathForModelList(nullptr, false), x, y, scale);
     }
     return false;
 }

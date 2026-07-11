@@ -29,6 +29,76 @@ int drawKeyBadge(const int x, const int y, char key, const int text_size) {
     return bw + gap;
 }
 
+// 绘制文本徽章（黄底黑字，样式与 drawKeyBadge 一致）
+int drawTextBadge(const int x, const int y, const char* label, const int text_size) {
+    if (label == nullptr || label[0] == '\0') {
+        return 0;
+    }
+    const int size = (text_size == 2) ? 2 : 1;
+    M5Cardputer.Display.setTextSize(size);
+    const int tw = M5Cardputer.Display.textWidth(label);
+    const int th = 8 * size;
+    constexpr int pad_x = 2;
+    constexpr int pad_y = 1;
+    const int bw = tw + pad_x * 2;
+    const int bh = th + pad_y * 2;
+
+    M5Cardputer.Display.fillRoundRect(x, y, bw, bh, 2, APP_COLOR_MENU_KEY);
+    M5Cardputer.Display.setTextColor(APP_COLOR_KEY_TEXT, APP_COLOR_MENU_KEY);
+    M5Cardputer.Display.setCursor(x + pad_x, y + pad_y);
+    M5Cardputer.Display.print(label);
+
+    constexpr int gap = 3;
+    return bw + gap;
+}
+
+// 绘制箭头徽章（黄底黑箭头，样式与 drawKeyBadge 一致）
+static int drawArrowBadgeImpl(const int x, const int y, const int text_size, const int icon_w,
+                              const int icon_h,
+                              void (*draw_icon)(int, int, uint16_t)) {
+    const int size = (text_size == 2) ? 2 : 1;
+    constexpr int pad_x = 2;
+    constexpr int pad_y = 1;
+    const int bw = icon_w + pad_x * 2;
+    const int bh = icon_h + pad_y * 2 + (size - 1) * 4;
+    const int icon_cy = y + bh / 2;
+
+    M5Cardputer.Display.fillRoundRect(x, y, bw, bh, 2, APP_COLOR_MENU_KEY);
+    draw_icon(x + pad_x, icon_cy, APP_COLOR_KEY_TEXT);
+
+    constexpr int gap = 3;
+    return bw + gap;
+}
+
+// 绘制左右箭头徽章（黄底黑箭头，样式与 drawKeyBadge 一致）
+int drawArrowBadge(const int x, const int y, const int text_size) {
+    return drawArrowBadgeImpl(x, y, text_size, ICON_ARROW_LR_W, ICON_ARROW_H, drawIconArrowLeftRight);
+}
+
+int drawArrowUpDownBadge(const int x, const int y, const int text_size) {
+    return drawArrowBadgeImpl(x, y, text_size, ICON_ARROW_W, ICON_ARROW_UD_H, drawIconArrowUpDown);
+}
+
+int drawArrowAllBadge(const int x, const int y, const int text_size) {
+    return drawArrowBadgeImpl(x, y, text_size, ICON_ARROW_ALL_W, ICON_ARROW_ALL_H, drawIconArrowAll);
+}
+
+int drawArrowLeftBadge(const int x, const int y, const int text_size) {
+    return drawArrowBadgeImpl(x, y, text_size, ICON_ARROW_W, ICON_ARROW_H, drawIconArrowLeft);
+}
+
+int drawArrowRightBadge(const int x, const int y, const int text_size) {
+    return drawArrowBadgeImpl(x, y, text_size, ICON_ARROW_W, ICON_ARROW_H, drawIconArrowRight);
+}
+
+int drawArrowUpBadge(const int x, const int y, const int text_size) {
+    return drawArrowBadgeImpl(x, y, text_size, ICON_ARROW_W, ICON_ARROW_H, drawIconArrowUp);
+}
+
+int drawArrowDownBadge(const int x, const int y, const int text_size) {
+    return drawArrowBadgeImpl(x, y, text_size, ICON_ARROW_W, ICON_ARROW_H, drawIconArrowDown);
+}
+
 void drawKeyHintsRow(const int x, const int y, const KeyHintItem* items, const int item_count,
                      const int text_size, const uint16_t color) {
     if (items == nullptr || item_count <= 0) {

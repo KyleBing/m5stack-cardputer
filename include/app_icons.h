@@ -12,6 +12,8 @@ static constexpr int ICON_ARROW_W = 6;
 static constexpr int ICON_ARROW_H = 7;
 static constexpr int ICON_ARROW_LR_W = 14;  // 左右合成图标宽
 static constexpr int ICON_ARROW_UD_H = 14;  // 上下合成图标高
+static constexpr int ICON_ARROW_ALL_W = ICON_ARROW_LR_W; // 四方合成图标宽
+static constexpr int ICON_ARROW_ALL_H = ICON_ARROW_UD_H;  // 四方合成图标高
 
 void drawIconArrowLeft(int x, int cy, uint16_t color);
 void drawIconArrowRight(int x, int cy, uint16_t color);
@@ -19,6 +21,7 @@ void drawIconArrowUp(int x, int cy, uint16_t color);
 void drawIconArrowDown(int x, int cy, uint16_t color);
 void drawIconArrowLeftRight(int x, int cy, uint16_t color);
 void drawIconArrowUpDown(int x, int cy, uint16_t color);
+void drawIconArrowAll(int x, int cy, uint16_t color);
 
 // ===== 返回图标（header） =====
 static constexpr int ICON_BACK_W = 28;

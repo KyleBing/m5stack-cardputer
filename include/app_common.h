@@ -25,6 +25,24 @@ bool isBatteryCharging();
 // 绘制按键字母块（菜单键色底 + 黑字），text_size 仅支持 1 或 2，返回占用宽度（含右侧间距）
 int drawKeyBadge(int x, int y, char key, int text_size = 1);
 
+// 绘制文本徽章（黄底黑字），text_size 仅支持 1 或 2，返回占用宽度（含右侧间距）
+int drawTextBadge(int x, int y, const char* label, int text_size = 1);
+
+// 绘制左右箭头徽章（黄底黑箭头），text_size 仅支持 1 或 2，返回占用宽度（含右侧间距）
+int drawArrowBadge(int x, int y, int text_size = 1);
+
+// 绘制上下箭头徽章（黄底黑箭头）
+int drawArrowUpDownBadge(int x, int y, int text_size = 1);
+
+// 绘制四方箭头徽章（黄底黑箭头）
+int drawArrowAllBadge(int x, int y, int text_size = 1);
+
+// 绘制单方向箭头徽章（黄底黑箭头）
+int drawArrowLeftBadge(int x, int y, int text_size = 1);
+int drawArrowRightBadge(int x, int y, int text_size = 1);
+int drawArrowUpBadge(int x, int y, int text_size = 1);
+int drawArrowDownBadge(int x, int y, int text_size = 1);
+
 struct KeyHintItem {
     char key;
     const char* text;

@@ -77,6 +77,15 @@ void drawIconArrowUpDown(const int x, const int cy, const uint16_t color) {
     drawIconArrowDown(x, cy + 4, color);
 }
 
+// 四方箭头合成（x 为左缘，cy 为垂直中心）
+void drawIconArrowAll(const int x, const int cy, const uint16_t color) {
+    const int mid_x = x + (ICON_ARROW_LR_W - ICON_ARROW_W) / 2;
+    drawIconArrowUp(mid_x, cy - 4, color);
+    drawIconArrowDown(mid_x, cy + 4, color);
+    drawIconArrowLeft(x, cy, color);
+    drawIconArrowRight(x + ICON_ARROW_W + 2, cy, color);
+}
+
 // ===== 返回图标（header） =====
 
 void drawIconBack(const int x, const int y, const uint16_t color) {

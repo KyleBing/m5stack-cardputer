@@ -6,6 +6,7 @@
 // data/icon/device 打包后的原生尺寸图标目录
 static constexpr const char* DEVICE_ICON_NATIVE_DIR = "/icon/device";
 static constexpr int DEVICE_ICON_NATIVE_PX = 70;
+static constexpr int DEVICE_ICON_LIST_PX = 25; // 列表用 _25w.png 边长
 
 // 按 model 子串匹配图标名；无匹配返回 "default"
 const char* deviceIconBasenameForModel(const char* model);
@@ -15,6 +16,9 @@ const char* const* deviceIconNames();
 
 // 生成 /icon/device/{basename}[_active].png 路径（静态缓冲，勿并发使用）
 const char* deviceIconPathForModel(const char* model, bool active);
+
+// 生成列表用小图标路径：{basename}_25w.png / {basename}_active_25w.png
+const char* deviceIconPathForModelList(const char* model, bool active);
 
 // 设备图标绘制边长（原生 PNG）
 int deviceIconDrawPx(const MijiaDevice* dev);
@@ -27,6 +31,9 @@ bool drawDeviceIconFor(const MijiaDevice* dev, int x, int y, bool active);
 
 // 按 scale 缩放绘制 PNG 设备图标（1.0 为原生 70px）
 bool drawDeviceIconForScaled(const MijiaDevice* dev, int x, int y, bool active, float scale);
+
+// 绘制列表用 _25w.png 小图标（1:1，无缩放）；失败返回 false
+bool drawDeviceIconForList(const MijiaDevice* dev, int x, int y, bool active, float scale = 1.0f);
 
 // 无设备信息时绘制默认图标
 bool drawDeviceIconDefault(int x, int y, bool active);
