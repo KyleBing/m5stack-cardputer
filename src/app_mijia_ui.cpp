@@ -222,14 +222,6 @@ void drawMijiaLevelSegments(const int x, const int y, const int w, const int h, 
     }
 }
 
-// 仅设备无法读取状态时显示连接/查询状态
-static bool mijiaShouldShowInlineStatus(const char* status, const bool power_known) {
-    if (power_known) {
-        return false;
-    }
-    return status != nullptr && status[0] != '\0';
-}
-
 // 控制页左栏：原生 PNG 图标占满内容区高度并纵向居中
 static void mijiaCalcPanelLayout(const int content_y, int& icon_px, int& left_w, int& content_h) {
     icon_px = DEVICE_ICON_NATIVE_PX;
@@ -237,46 +229,52 @@ static void mijiaCalcPanelLayout(const int content_y, int& icon_px, int& left_w,
     content_h = M5Cardputer.Display.height() - content_y;
 }
 
-int drawMijiaDevicePanel(const MijiaDevice* dev, const MijiaDevKind kind, const int device_idx,
-                         const int device_count, const MijiaUiState& ui, const int x, const int y,
-                         const char* net_status) {
-    const int layout_y = y + MIJIA_DEVICE_NAME_TOP_MARGIN;
-    int icon_px = 0;
-    int left_w = 0;
-    int content_h = 0;
-    mijiaCalcPanelLayout(layout_y, icon_px, left_w, content_h);
+// 仅设备无法读取状态时显示连接/查询状态
+bool mijiaPanelShowsInlineStatus(const char* status, const bool power_known) {
+    if (power_known) {
+        return false;
+    }
+    return status != nullptr && status[0] != '\0';
+}
 
-    const int info_x = x + left_w + 6;
+MijiaPanelLayout calcMijiaPanelLayout(const int panel_y, const int x) {
+    MijiaPanelLayout layout{};
+    layout.layout_y = panel_y + MIJIA_DEVICE_NAME_TOP_MARGIN;
+    mijiaCalcPanelLayout(layout.layout_y, layout.icon_px, layout.left_w, layout.content_h);
+    layout.icon_x = x + (layout.left_w - layout.icon_px) / 2;
+    layout.icon_y =
+        layout.layout_y + (layout.content_h - layout.icon_px) / 2 - MIJIA_PANEL_ICON_UP_OFFSET;
+    layout.info_x = x + layout.left_w + 6;
     const int screen_w = M5Cardputer.Display.width();
-    const int info_w = screen_w - info_x - MIJIA_PANEL_RIGHT_PAD;
-    constexpr int text_size = MIJIA_PANEL_TEXT_SIZE;
+    layout.info_w = screen_w - layout.info_x - MIJIA_PANEL_RIGHT_PAD;
+    layout.right_top_y = layout.layout_y + INFO_LINE_H_2X + 2;
+    return layout;
+}
 
-    // 左栏：70px 原生图标，在内容区纵向居中；开关态用 _active 图
-    const int icon_x = x + (left_w - icon_px) / 2;
-    const int icon_y = layout_y + (content_h - icon_px) / 2 - MIJIA_PANEL_ICON_UP_OFFSET;
+void drawMijiaPanelIcon(const MijiaDevice* dev, const MijiaDevKind kind,
+                        const MijiaPanelLayout& layout, const MijiaUiState& ui) {
     const bool icon_active = ui.power_known && ui.power_on;
-    drawMijiaDeviceIconFor(dev, kind, icon_x, icon_y, APP_COLOR_VALUE, icon_active,
+    drawMijiaDeviceIconFor(dev, kind, layout.icon_x, layout.icon_y, APP_COLOR_VALUE, icon_active,
                            MIJIA_ICON_SCALE_DEFAULT);
-    const int left_bottom = icon_y + icon_px;
+}
 
-    // 分页与设备名同一行，贴内容区顶边
+void drawMijiaPanelHeader(const MijiaDevice* dev, const int device_idx, const int device_count,
+                          const MijiaPanelLayout& layout) {
     char pager[12];
     snprintf(pager, sizeof(pager), "%d/%d", device_idx + 1, device_count);
 
     M5Cardputer.Display.setTextSize(1);
     const int pager_w = M5Cardputer.Display.textWidth(pager);
-    const int content_right = screen_w - MIJIA_PANEL_RIGHT_PAD;
+    const int content_right = M5Cardputer.Display.width() - MIJIA_PANEL_RIGHT_PAD;
     const int pager_x = content_right - pager_w;
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(pager_x, layout_y);
+    M5Cardputer.Display.setCursor(pager_x, layout.layout_y);
     M5Cardputer.Display.print(pager);
 
-    const int name_y = layout_y;
-
     M5Cardputer.Display.setTextSize(MIJIA_PANEL_NAME_TEXT_SIZE);
-    const int name_max_w = max(0, pager_x - info_x - 6);
+    const int name_max_w = max(0, pager_x - layout.info_x - 6);
     M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
-    M5Cardputer.Display.setCursor(info_x, name_y);
+    M5Cardputer.Display.setCursor(layout.info_x, layout.layout_y);
     if (dev != nullptr && dev->name[0] != '\0') {
         char name[32];
         strncpy(name, dev->name, sizeof(name) - 1);
@@ -288,29 +286,41 @@ int drawMijiaDevicePanel(const MijiaDevice* dev, const MijiaDevKind kind, const 
     } else {
         M5Cardputer.Display.print("device");
     }
+}
 
-    int info_y = name_y + INFO_LINE_H_2X + 2;
-    // 联网阶段优先显示网络状态（不计入设备查询超时）
+void drawMijiaPanelRightColumn(const MijiaDevice* dev, const MijiaDevKind kind,
+                               const MijiaPanelLayout& layout, const MijiaUiState& ui,
+                               const char* net_status) {
+    constexpr int text_size = MIJIA_PANEL_TEXT_SIZE;
+    int info_y = layout.right_top_y;
+
     if (net_status != nullptr && net_status[0] != '\0') {
         M5Cardputer.Display.setTextSize(MIJIA_PANEL_TEXT_SIZE);
         M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-        M5Cardputer.Display.setCursor(info_x, info_y);
+        M5Cardputer.Display.setCursor(layout.info_x, info_y);
         M5Cardputer.Display.print("网络: ");
         M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
         M5Cardputer.Display.print(net_status);
         info_y += INFO_LINE_H;
     }
-    // 无法读取状态时，在右栏名称下方显示连接/查询状态
-    if (mijiaShouldShowInlineStatus(ui.status, ui.power_known)) {
+    if (mijiaPanelShowsInlineStatus(ui.status, ui.power_known)) {
         M5Cardputer.Display.setTextSize(text_size);
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-        M5Cardputer.Display.setCursor(info_x, info_y);
+        M5Cardputer.Display.setCursor(layout.info_x, info_y);
         M5Cardputer.Display.print(ui.status);
         info_y += INFO_LINE_H;
     }
+    drawMijiaDeviceControls(dev, kind, ui, layout.info_x, info_y, layout.info_w);
+}
 
-    const int right_bottom = drawMijiaDeviceControls(dev, kind, ui, info_x, info_y, info_w);
-    return max(left_bottom, right_bottom) + 4;
+int drawMijiaDevicePanel(const MijiaDevice* dev, const MijiaDevKind kind, const int device_idx,
+                         const int device_count, const MijiaUiState& ui, const int x, const int y,
+                         const char* net_status) {
+    const MijiaPanelLayout layout = calcMijiaPanelLayout(y, x);
+    drawMijiaPanelIcon(dev, kind, layout, ui);
+    drawMijiaPanelHeader(dev, device_idx, device_count, layout);
+    drawMijiaPanelRightColumn(dev, kind, layout, ui, net_status);
+    return max(layout.icon_y + layout.icon_px, layout.right_top_y) + 4;
 }
 
 // 流程状态小字（跟在 tag 后面）
@@ -330,7 +340,7 @@ void drawMijiaPowerTags(const int x, const int y, const bool known, const bool o
         cx += drawMijiaStatusTag(cx, y, "ON", on, APP_COLOR_OK, text_size);
         cx += drawMijiaStatusTag(cx, y, "OFF", !on, APP_COLOR_LABEL, text_size);
     }
-    if (inline_status && mijiaShouldShowInlineStatus(status, known)) {
+    if (inline_status && mijiaPanelShowsInlineStatus(status, known)) {
         drawMijiaInlineStatus(cx, y, status);
     }
 }

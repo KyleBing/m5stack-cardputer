@@ -2,6 +2,7 @@
 #include "app_colors.h"
 #include "app_common.h"
 #include "app_header.h"
+#include "app_time_ui.h"
 #include <cstring>
 
 enum class CountdownPhase {
@@ -186,7 +187,7 @@ static void drawCountdownTime(const int y, const int h, const bool force) {
         const int main_w = cdDigitW * 3 + cdColonW * 2;
         cdMainH = 8 * cdTs;
         cdMainX = margin + (avail_w - main_w) / 2;
-        cdMainY = y + (h - cdMainH) / 2 - 6;  // 时间区略偏上
+        cdMainY = y + (h - cdMainH) / 2 - 2;
         cdHx = cdMainX;
         cdMx = cdMainX + cdDigitW + cdColonW;
         cdSx = cdMainX + cdDigitW * 2 + cdColonW * 2;
@@ -218,36 +219,24 @@ static void drawCountdownTime(const int y, const int h, const bool force) {
     cdLastField = cdField;
 }
 
-static void drawCountdownStatusTag() {
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, APP_CONTENT_Y, 72, 10, BLACK);
+static void drawCountdownStateBanner() {
+    int area_y = 0;
+    int area_h = 0;
+    getTimeDisplayArea(area_y, area_h);
+
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, area_y + area_h - 10,
+                                 M5Cardputer.Display.width() - APP_CONTENT_X * 2, 10, BLACK);
     if (cdPhase == CountdownPhase::RUNNING) {
         M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y + 2);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
         M5Cardputer.Display.print("RUN");
     } else if (cdPhase == CountdownPhase::PAUSED) {
         M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y + 2);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
         M5Cardputer.Display.print("PAUSED");
     } else if (cdPhase == CountdownPhase::FINISHED) {
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y + 2);
-        M5Cardputer.Display.print("DONE");
-    }
-}
-
-static void drawCountdownBanner() {
-    const int screen_h = M5Cardputer.Display.height();
-    const int hint_h = 12;
-    const int status_h = 12;
-    const int area_y = APP_CONTENT_Y + status_h;
-    const int area_h = screen_h - area_y - hint_h;
-
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, area_y + area_h - 10,
-                                 M5Cardputer.Display.width() - APP_CONTENT_X * 2, 10, BLACK);
-    if (cdPhase == CountdownPhase::FINISHED) {
         M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
@@ -255,19 +244,37 @@ static void drawCountdownBanner() {
     }
 }
 
-static void drawCountdownHints() {
-    const int hint_y = M5Cardputer.Display.height() - 12;
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, hint_y, 236, 12, BLACK);
+static void drawCountdownSetupBottomHints() {
+    const int y = M5Cardputer.Display.height() - TIME_HINT_ROW_H;
+    const int screen_w = M5Cardputer.Display.width();
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, screen_w - APP_CONTENT_X * 2, TIME_HINT_ROW_H,
+                                 BLACK);
 
+    int cx = APP_CONTENT_X;
+    cx += drawArrowBadge(cx, y, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print("adjust ");
+    cx += M5Cardputer.Display.textWidth("adjust ");
+
+    cx += drawTextBadge(cx, y, "0-9", 1);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
+    M5Cardputer.Display.print("input ");
+    cx += M5Cardputer.Display.textWidth("input ");
+
+    cx += drawKeyBadge(cx, y, 'g', 1);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
+    M5Cardputer.Display.print("start");
+
+    drawTimeHelpHintRight("help");
+}
+
+static void drawCountdownActionHints() {
     if (cdPhase == CountdownPhase::SETUP) {
-        const KeyHintItem items[] = {
-            {',', "field"},
-            {'0', "digit"},
-            {';', "up"},
-            {'.', "down"},
-            {'g', "start"},
-        };
-        drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 5, 1, APP_COLOR_HINT);
+        drawCountdownSetupBottomHints();
         return;
     }
 
@@ -284,14 +291,13 @@ static void drawCountdownHints() {
         {'g', g_text},
         {'r', "reset"},
     };
-    drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 2, 1, APP_COLOR_HINT);
+    drawTimeBottomHints(items, 2);
 }
 
-// 状态/提示只在阶段变化时刷新；时间可局部刷新
 static void drawCountdownChrome() {
-    drawCountdownStatusTag();
-    drawCountdownBanner();
-    drawCountdownHints();
+    drawTimeModeTag("CD");
+    drawCountdownStateBanner();
+    drawCountdownActionHints();
 }
 
 static void cdInvalidateTimeCache() {
@@ -302,14 +308,12 @@ static void cdInvalidateTimeCache() {
 }
 
 static void drawCountdownApp(const bool full_init) {
-    const int screen_h = M5Cardputer.Display.height();
-    const int hint_h = 12;
-    const int status_h = 12;
-    const int area_y = APP_CONTENT_Y + status_h;
-    const int area_h = screen_h - area_y - hint_h;
+    int area_y = 0;
+    int area_h = 0;
+    getTimeDisplayArea(area_y, area_h);
 
     if (full_init || !cdScreenReady) {
-        beginAppScreen("Countdown");
+        beginAppScreen("Time");
         cdScreenReady = true;
         cdInvalidateTimeCache();
         drawCountdownChrome();
@@ -337,25 +341,47 @@ static void cdAdjustField(const int delta) {
     }
 }
 
-// 数字键左移填入（如按 1 再按 5 → 15）
+// 数字键堆栈输入：保留末位左移再填新位（45→2→52→7→27）
+static void cdShiftInputDigit(int& value, const int digit, const int max_value) {
+    value = (value % 10) * 10 + digit;
+    if (value > max_value) {
+        value = digit;
+    }
+}
+
 static void cdInputDigit(const int digit) {
     if (cdPhase != CountdownPhase::SETUP || digit < 0 || digit > 9) {
         return;
     }
     switch (cdField) {
         case 0:
-            cdHours = constrain(cdHours * 10 + digit, 0, 99);
+            cdShiftInputDigit(cdHours, digit, 99);
             break;
         case 1:
-            cdMinutes = constrain(cdMinutes * 10 + digit, 0, 59);
+            // 分钟允许输入 72 等，启动时再进位到小时
+            cdShiftInputDigit(cdMinutes, digit, 99);
             break;
         default:
-            cdSeconds = constrain(cdSeconds * 10 + digit, 0, 59);
+            cdShiftInputDigit(cdSeconds, digit, 99);
             break;
     }
 }
 
+// 启动前归一化：秒/分溢出进位（如 0:72:0 → 1:12:0）
+static void cdNormalizeSetupTime() {
+    if (cdSeconds >= 60) {
+        cdMinutes += cdSeconds / 60;
+        cdSeconds %= 60;
+    }
+    if (cdMinutes >= 60) {
+        cdHours += cdMinutes / 60;
+        cdMinutes %= 60;
+    }
+    cdHours = constrain(cdHours, 0, 99);
+}
+
 static void cdStart() {
+    cdNormalizeSetupTime();
     const uint32_t total = cdSetupTotalMs();
     if (total == 0) {
         return;
@@ -404,12 +430,14 @@ static void cdResetToSetup() {
     cdRemainMs = 0;
     cdInvalidateTimeCache();
     drawCountdownChrome();
-    const int screen_h = M5Cardputer.Display.height();
-    const int hint_h = 12;
-    const int status_h = 12;
-    const int area_y = APP_CONTENT_Y + status_h;
-    const int area_h = screen_h - area_y - hint_h;
+    int area_y = 0;
+    int area_h = 0;
+    getTimeDisplayArea(area_y, area_h);
     drawCountdownTime(area_y, area_h, true);
+}
+
+void redrawCountdownApp() {
+    drawCountdownApp(true);
 }
 
 void enterCountdownApp() {
@@ -467,6 +495,11 @@ void handleCountdownApp(const Keyboard_Class::KeysState& status) {
             drawCountdownApp(false);
             return;
         }
+    }
+
+    if (status.space || status.enter) {
+        cdToggleRun();
+        return;
     }
 
     const char key = cdPressedLetter(status);

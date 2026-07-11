@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="70px" height="70px" viewBox="0 0 70 70" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>favicon</title>
+    <g id="favicon" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <circle id="Oval" stroke="#000000" stroke-width="2" fill="#30D158" cx="24" cy="25" r="18"></circle>
+        <circle id="Oval-Copy" stroke="#000000" stroke-width="2" fill="#3CD3FE" cx="48" cy="34" r="18"></circle>
+        <circle id="Oval-Copy-2" stroke="#000000" stroke-width="2" fill="#FF4245" cx="22" cy="46" r="18"></circle>
+        <circle id="Oval-Copy-3" stroke="#000000" stroke-width="2" fill="#FFD600" cx="41" cy="50" r="14"></circle>
+    </g>
+</svg>

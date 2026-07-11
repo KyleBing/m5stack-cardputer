@@ -9,7 +9,7 @@
 #include <WiFi.h>
 #include <cstring>
 
-static constexpr const char* AP_SSID = "Cardputer-Setup";
+static constexpr const char* AP_SSID = "cardputer";
 static constexpr const char* AP_PASS = "cardputer";
 static constexpr const char* AP_WEB_URL = "http://192.168.4.1";
 static constexpr int WEB_DEVICE_MAX = MIJIA_DEVICE_MAX;
@@ -55,7 +55,7 @@ static const char* DEFAULT_CONFIG = R"({
     }
   ],
   "cursor": {
-    "api_key": "your-cursor-session-jwt"
+    "token": "your-cursor-session-jwt"
   }
 })";
 
@@ -103,6 +103,7 @@ static void sendHtmlPage(const String& body) {
     html.reserve(body.length() + 4096);
     html += F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
               "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+              "<link rel='icon' href='/favicon.svg' type='image/svg+xml'>"
               "<title>Cardputer Config</title>"
               "<style>"
               "*{box-sizing:border-box}"
@@ -120,7 +121,15 @@ static void sendHtmlPage(const String& body) {
               "--save-bd:#333;--hint:#999;--icon-bg:#000}}"
               "body{font-family:system-ui,sans-serif;margin:0;padding:10px 12px;line-height:1.4;"
               "width:100%;max-width:100%;background:var(--bg);color:var(--fg)}"
+              ".topbar{margin-bottom:8px}"
+              ".brand{display:flex;align-items:center;gap:10px}"
+              ".site-logo{width:36px;height:36px;object-fit:contain;flex-shrink:0}"
+              ".brand-text{min-width:0}"
+              ".brand-text h1{font-size:1.2rem;margin:0 0 2px;color:var(--fg-h)}"
+              ".nav{font-size:13px;margin:2px 0 0}"
+              ".nav a{color:var(--link)}"
               "h1{font-size:1.2rem;margin:0 0 8px;color:var(--fg-h)}"
+              "h2{font-size:1.05rem;margin:0 0 8px;color:var(--fg-h)}"
               "input,textarea{width:100%;padding:6px 8px;font-size:13px;border:1px solid var(--input-bd);"
               "border-radius:4px;font-family:inherit;background:var(--input-bg);color:var(--fg)}"
               "textarea{resize:vertical;min-height:28px;font-family:ui-monospace,monospace;"
@@ -136,9 +145,6 @@ static void sendHtmlPage(const String& body) {
               "border-radius:4px;background:var(--btn-bg);color:var(--fg);cursor:pointer;font-size:13px;"
               "text-decoration:none}"
               "a.btn.primary{background:#1a73e8;color:#fff;border-color:#1a73e8}"
-              ".topbar{display:block;margin-bottom:8px}"
-              ".nav{font-size:13px;margin:2px 0 0}"
-              ".nav a{color:var(--link)}"
               ".tabs{display:flex;gap:0;border-bottom:2px solid var(--tab-bd);margin-bottom:12px}"
               ".tab{padding:10px 18px;cursor:pointer;border:none;background:none;font-size:14px;"
               "color:var(--tab-fg);border-bottom:2px solid transparent;margin-bottom:-2px}"
@@ -180,6 +186,13 @@ static void sendHtmlPage(const String& body) {
               "pre{background:var(--pre-bg);color:var(--fg);padding:12px;overflow:auto;font-size:12px;"
               "border:1px solid var(--pre-bd);border-radius:4px}"
               "textarea.json-editor{height:min(70vh,520px);font-family:ui-monospace,monospace}"
+              ".token-steps{margin:0 0 12px;padding:0 0 0 18px;font-size:12px;color:var(--hint)}"
+              ".token-steps li{margin:0 0 6px}"
+              ".token-method-title{font-size:13px;margin:14px 0 6px;color:var(--fg-h)}"
+              ".token-paths{margin:0 0 8px;padding:0 0 0 18px;font-size:12px;color:var(--hint)}"
+              ".token-paths li{margin:0 0 4px}"
+              ".token-cmd{margin:0 0 12px;font-size:11px;line-height:1.4;white-space:pre-wrap;word-break:break-all}"
+              ".token-formats{font-size:12px;color:var(--hint);margin:0 0 10px}"
               "</style></head><body>");
     html += body;
     html += F("</body></html>");
@@ -192,9 +205,11 @@ static void handleFormRoot() {
 
     String body;
     body.reserve(cfg.length() + 8192);
-    body += F("<div class='topbar'><h1>Cardputer Config</h1>"
+    body += F("<div class='topbar'><div class='brand'>"
+              "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
+              "<div class='brand-text'><h1>Cardputer Config</h1>"
               "<p class='nav'><a href='/advanced'>高级 JSON</a> · "
-              "<a href='/example'>示例</a></p></div>"
+              "<a href='/example'>示例</a></p></div></div></div>"
               "<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
               "<div class='tabs'>"
@@ -226,9 +241,33 @@ static void handleFormRoot() {
               "<tbody id='dev-tbody'></tbody>"
               "</table></div></div>"
               "<div id='panel-cursor' class='panel'>"
-              "<p class='hint'>Cursor 会话 Token：在浏览器 Cookie 中选择 "
-              "<code>https://cursor.com</code> 下的 "
-              "<code>WorkosCursorSessionToken</code> 值；也支持 JWT 或 sub::jwt。</p>"
+              "<h2>Cursor Session Token</h2>"
+              "<p class='hint'>用于 Cursor 应用拉取用量数据，写入 "
+              "<code>cursor.token</code>。</p>"
+              "<h3 class='token-method-title'>方式一：浏览器 Cookie</h3>"
+              "<ol class='token-steps'>"
+              "<li>在电脑浏览器登录 <code>https://cursor.com</code></li>"
+              "<li>打开开发者工具 → Application（应用）→ Cookies → "
+              "<code>cursor.com</code></li>"
+              "<li>找到 <code>WorkosCursorSessionToken</code>，复制其 Value</li>"
+              "<li>粘贴到下方输入框并保存</li>"
+              "</ol>"
+              "<h3 class='token-method-title'>方式二：Cursor IDE 本地 SQLite</h3>"
+              "<p class='hint'>在电脑安装并登录 Cursor IDE 后，从 "
+              "<code>state.vscdb</code> 读取 JWT（需本机已安装 "
+              "<code>sqlite3</code>）。</p>"
+              "<ul class='token-paths'>"
+              "<li>macOS：<code>~/Library/Application Support/Cursor/User/globalStorage/state.vscdb</code></li>"
+              "<li>Linux：<code>~/.config/Cursor/User/globalStorage/state.vscdb</code></li>"
+              "<li>Windows：<code>%APPDATA%\\Cursor\\User\\globalStorage\\state.vscdb</code></li>"
+              "</ul>"
+              "<pre class='token-cmd'>sqlite3 \"&lt;path-to&gt;/state.vscdb\" "
+              "\"SELECT value FROM ItemTable WHERE key='cursorAuth/accessToken';\"</pre>"
+              "<p class='hint'>输出为 JWT（<code>eyJ...</code> 开头），可直接粘贴；"
+              "固件会从 JWT 解析 <code>sub</code> 并组装 Cookie。</p>"
+              "<p class='token-formats'>支持格式：完整 Cookie 值 "
+              "（<code>sub::jwt</code> 或 <code>sub%3A%3Ajwt</code>）；"
+              "或仅粘贴 JWT。</p>"
               "<label>Session Token<textarea id='cursor-key' rows='4'></textarea></label>"
               "</div>"
               "<div class='save-bar'>"
@@ -249,7 +288,7 @@ static void handleFormRoot() {
     }
     body += F("];");
     body += F(
-        "let cfg={wifi:{ssid:'',password:''},devices:[],cursor:{api_key:''}};"
+        "let cfg={wifi:{ssid:'',password:''},devices:[],cursor:{token:''}};"
         "function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/\"/g,'&quot;')"
         ".replace(/</g,'&lt;');}"
         "function ta(f,v){return `<textarea data-f='${f}' rows='1'>${esc(v)}</textarea>`;}"
@@ -263,8 +302,8 @@ static void handleFormRoot() {
         "${ta('model',model)}</div>`;}"
         "function collect(){cfg.wifi.ssid=document.getElementById('wifi-ssid').value;"
         "cfg.wifi.password=document.getElementById('wifi-pass').value;cfg.devices=[];"
-        "if(!cfg.cursor)cfg.cursor={api_key:''};"
-        "cfg.cursor.api_key=document.getElementById('cursor-key').value;"
+        "if(!cfg.cursor)cfg.cursor={token:''};"
+        "cfg.cursor.token=document.getElementById('cursor-key').value;"
         "document.querySelectorAll('#dev-tbody tr').forEach(row=>{"
         "const d={};row.querySelectorAll('[data-f]').forEach(el=>{d[el.dataset.f]=el.value;});"
         "cfg.devices.push(d);});}"
@@ -296,13 +335,14 @@ static void handleFormRoot() {
         "document.querySelectorAll('.panel').forEach(p=>{"
         "p.classList.toggle('active',p.id==='panel-'+id);});}"
         "function init(){try{cfg=JSON.parse(document.getElementById('cfg-data').textContent);}"
-        "catch(e){cfg={wifi:{ssid:'',password:''},devices:[],cursor:{api_key:''}};}"
+        "catch(e){cfg={wifi:{ssid:'',password:''},devices:[],cursor:{token:''}};}"
         "if(!cfg.wifi)cfg.wifi={ssid:'',password:''};"
         "if(!cfg.devices)cfg.devices=[];"
-        "if(!cfg.cursor)cfg.cursor={api_key:''};"
+        "if(!cfg.cursor)cfg.cursor={token:''};"
+        "if(!cfg.cursor.token&&cfg.cursor.api_key)cfg.cursor.token=cfg.cursor.api_key;"
         "document.getElementById('wifi-ssid').value=cfg.wifi.ssid||'';"
         "document.getElementById('wifi-pass').value=cfg.wifi.password||'';"
-        "document.getElementById('cursor-key').value=cfg.cursor.api_key||'';"
+        "document.getElementById('cursor-key').value=cfg.cursor.token||'';"
         "render();"
         "document.querySelectorAll('.tab').forEach(t=>{"
         "t.onclick=()=>switchTab(t.dataset.tab);});"
@@ -335,9 +375,12 @@ static void handleAdvancedRoot() {
 
     String body;
     body.reserve(cfg.length() + 512);
-    body += F("<h1>高级 JSON 编辑</h1>"
+    body += F("<div class='topbar'><div class='brand'>"
+              "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
+              "<div class='brand-text'><h1>Cardputer Config</h1>"
               "<p class='nav'><a href='/'>← 返回主页</a> · "
-              "<a href='/example'>示例格式</a></p>"
+              "<a href='/example'>示例格式</a></p></div></div></div>"
+              "<h2>高级 JSON 编辑</h2>"
               "<form method='POST' action='/save'>"
               "<textarea class='json-editor' name='config'>");
     body += escapeForTextarea(cfg);
@@ -375,9 +418,8 @@ static void handleSave() {
 
 static void handleExample() {
     String body = F("<h1>示例 config.json</h1><p>米家控制使用 <code>ip</code> + <code>token</code>，"
-                    "开关命令为 <code>set_power</code>。Cursor 用量需配置 <code>cursor.api_key</code>："
-                    "从浏览器 Cookie 中选择 <code>https://cursor.com</code> 下的 "
-                    "<code>WorkosCursorSessionToken</code> 值。</p><pre>");
+                    "开关命令为 <code>set_power</code>。Cursor 用量见主页 "
+                    "<strong>Cursor</strong> 标签页。</p><pre>");
     body += DEFAULT_CONFIG;
     body += F("</pre><p class='nav'><a href='/'>← 返回主页</a></p>");
     sendHtmlPage(body);
@@ -431,6 +473,21 @@ static void loadingDots(char* buf, const size_t buf_size) {
     buf[i] = '\0';
 }
 
+// 从 LittleFS 提供 /favicon.svg
+static bool tryServeFavicon() {
+    if (g_server.uri() != "/favicon.svg") {
+        return false;
+    }
+
+    File file = LittleFS.open("/favicon.svg", "r");
+    if (!file) {
+        return false;
+    }
+    g_server.streamFile(file, "image/svg+xml");
+    file.close();
+    return true;
+}
+
 // 从 LittleFS 提供 /icon/device/*.png（供配置页预览）
 static bool tryServeDeviceIcon() {
     const String uri = g_server.uri();
@@ -469,7 +526,7 @@ static void registerWebRoutes() {
     g_server.on("/save", HTTP_POST, handleSave);
     g_server.on("/example", HTTP_GET, handleExample);
     g_server.onNotFound([]() {
-        if (tryServeDeviceIcon()) {
+        if (tryServeFavicon() || tryServeDeviceIcon()) {
             return;
         }
         g_server.send(404, "text/plain", "not found");

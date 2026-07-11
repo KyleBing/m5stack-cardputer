@@ -34,9 +34,6 @@ int drawArrowBadge(int x, int y, int text_size = 1);
 // 绘制上下箭头徽章（黄底黑箭头）
 int drawArrowUpDownBadge(int x, int y, int text_size = 1);
 
-// 绘制四方箭头徽章（黄底黑箭头）
-int drawArrowAllBadge(int x, int y, int text_size = 1);
-
 // 绘制单方向箭头徽章（黄底黑箭头）
 int drawArrowLeftBadge(int x, int y, int text_size = 1);
 int drawArrowRightBadge(int x, int y, int text_size = 1);

@@ -1,7 +1,8 @@
 #pragma once
 
-#include <WString.h>
+#include "M5Cardputer.h"
 
 void enterStopwatchApp();
 void updateStopwatchApp();
-void handleStopwatchApp(const String& key);
+void redrawStopwatchApp();
+void handleStopwatchApp(const Keyboard_Class::KeysState& status);

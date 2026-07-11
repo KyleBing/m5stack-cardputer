@@ -14,10 +14,10 @@ struct AppLogoCircle {
 };
 
 static const AppLogoCircle APP_LOGO_CIRCLES[] = {
-    {30, 22, 20, 2, 0x000000, 0xFCEE21},
-    {46, 31, 16, 2, 0x000000, 0x8CC63F},
-    {20, 38, 18, 2, 0x000000, 0x29ABE2},
-    {37, 46, 11, 2, 0x000000, 0xFF7BAC},
+    {30, 22, 20, 2, 0x000000, 0xFFD600},  // yellow
+    {46, 31, 16, 2, 0x000000, 0x30D158},  // green
+    {20, 38, 18, 2, 0x000000, 0x3CD3FE},  // cyan
+    {37, 46, 11, 2, 0x000000, 0xFF4245},  // red
 };
 
 static uint16_t colorFromRgb(const uint32_t rgb) {
@@ -75,15 +75,6 @@ void drawIconArrowLeftRight(const int x, const int cy, const uint16_t color) {
 void drawIconArrowUpDown(const int x, const int cy, const uint16_t color) {
     drawIconArrowUp(x, cy - 4, color);
     drawIconArrowDown(x, cy + 4, color);
-}
-
-// 四方箭头合成（x 为左缘，cy 为垂直中心）
-void drawIconArrowAll(const int x, const int cy, const uint16_t color) {
-    const int mid_x = x + (ICON_ARROW_LR_W - ICON_ARROW_W) / 2;
-    drawIconArrowUp(mid_x, cy - 4, color);
-    drawIconArrowDown(mid_x, cy + 4, color);
-    drawIconArrowLeft(x, cy, color);
-    drawIconArrowRight(x + ICON_ARROW_W + 2, cy, color);
 }
 
 // ===== 返回图标（header） =====

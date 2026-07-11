@@ -171,12 +171,12 @@ static void drawIconDemoApp() {
 
     int y = APP_CONTENT_Y;
     char buf[32];
-    static const KeyHintItem nav_items[] = {
-        {'[', "prev"},
-        {']', "next"},
-    };
-    drawKeyHintsRow(APP_CONTENT_X, y, nav_items, sizeof(nav_items) / sizeof(nav_items[0]), 1,
-                    APP_COLOR_HINT);
+    int cx = APP_CONTENT_X;
+    cx += drawArrowBadge(cx, y, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print("page");
     snprintf(buf, sizeof(buf), "page %d/%d", iconDemoPage + 1, page_count);
     M5Cardputer.Display.setCursor(APP_CONTENT_X + 168, y);
     M5Cardputer.Display.setTextSize(1);

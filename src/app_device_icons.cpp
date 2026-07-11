@@ -112,6 +112,14 @@ bool drawDevicePngNative(const char* path, const int x, const int y) {
     return drawDevicePngNativeScaled(path, x, y, 1.0f);
 }
 
+bool drawAppLogo60(const int x, const int y, const float scale) {
+    if (!LittleFS.exists(APP_LOGO_60_PATH)) {
+        return false;
+    }
+    return M5Cardputer.Display.drawPngFile(LittleFS, APP_LOGO_60_PATH, x, y, 0, 0, 0, 0, scale,
+                                           scale, lgfx::v1::datum_t::top_left);
+}
+
 static bool drawDevicePngPath(const char* path, const int x, const int y, const float scale) {
     if (drawDevicePngNativeScaled(path, x, y, scale)) {
         return true;

@@ -138,11 +138,12 @@ void drawFontDemoApp() {
     M5Cardputer.Display.setTextSize(1);
 
     const int hint_y = M5Cardputer.Display.height() - hint_h;
-    const KeyHintItem items[] = {
-        {'[', "prev"},
-        {']', "next"},
-    };
-    drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 2, 1, APP_COLOR_HINT);
+    int cx = APP_CONTENT_X;
+    cx += drawArrowBadge(cx, hint_y, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("page");
 }
 
 void enterFontDemoApp() {

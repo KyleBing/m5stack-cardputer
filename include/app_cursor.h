@@ -1,8 +1,8 @@
 #pragma once
 
-#include <WString.h>
+#include "M5Cardputer.h"
 
 void enterCursorApp();
 void drawCursorApp();
 void updateCursorApp();
-void handleCursorApp(const String& key);
+void handleCursorApp(const Keyboard_Class::KeysState& status);

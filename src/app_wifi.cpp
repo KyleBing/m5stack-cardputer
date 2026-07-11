@@ -112,9 +112,22 @@ static void drawWifiHints(const int y) {
             }
             break;
         }
-        case WifiAppPhase::LIST:
-            drawWifiHintText(APP_CONTENT_X, y, "1-4 pick , . page", 1);
+        case WifiAppPhase::LIST: {
+            int cx = APP_CONTENT_X;
+            for (const char k : {'1', '2', '3', '4'}) {
+                cx += drawKeyBadge(cx, y, k, 1);
+            }
+            M5Cardputer.Display.setTextSize(1);
+            M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+            M5Cardputer.Display.setCursor(cx, y);
+            M5Cardputer.Display.print("pick ");
+            cx += M5Cardputer.Display.textWidth("pick ");
+            cx += drawArrowBadge(cx, y, 1);
+            M5Cardputer.Display.setCursor(cx, y);
+            M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+            M5Cardputer.Display.print("page");
             break;
+        }
         case WifiAppPhase::PASSWORD:
             drawWifiHintText(APP_CONTENT_X, y, "ent connect del bk", 2);
             break;

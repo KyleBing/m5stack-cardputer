@@ -1,6 +1,7 @@
 #include "M5Cardputer.h"
 #include "app_config.h"
 #include "app_icons.h"
+#include "app_device_icons.h"
 #include "app_header.h"
 #include "app_common.h"
 #include "app_web.h"
@@ -9,8 +10,6 @@
 #include "app_mijia_ui.h"
 #include "app_ble.h"
 #include "app_connectivity.h"
-#include "app_countdown.h"
-#include "app_stopwatch.h"
 #include "app_rtc.h"
 #include "app_icon_demo.h"
 #include "app_cursor.h"
@@ -54,8 +53,6 @@ enum class AppState {
     SLEEP,
     MIJIA,
     WEB,
-    COUNTDOWN,
-    STOPWATCH,
     CURSOR,
     MORSE,
     FONT_DEMO,
@@ -89,8 +86,6 @@ static const MenuItem MENU_ITEMS[] = {
     {'d', "Disp", "Display", AppState::DISP},
     {'c', "Cur", "Cursor", AppState::CURSOR},
     {'a', "Icn", "Icons", AppState::ICONS},
-    {'q', "Cd", "Countdown", AppState::COUNTDOWN},
-    {'h', "Sw", "Stopwatch", AppState::STOPWATCH},
     {'f', "Fnt", "Font", AppState::FONT_DEMO},
     {'j', "Mor", "Morse", AppState::MORSE},
 };
@@ -237,17 +232,48 @@ VersionInfo getVersionInfo() {
     };
 }
 
+// 在内容区绘制随机火花背景
+static void drawRandomSparks(const int count) {
+    const int screen_w = M5Cardputer.Display.width();
+    const int screen_h = M5Cardputer.Display.height();
+    const int y_min = APP_CONTENT_Y;
+
+    for (int i = 0; i < count; i++) {
+        const int cx = random(screen_w);
+        const int cy = random(y_min, screen_h);
+        const uint16_t color = (random(3) == 0) ? WHITE : ((random(2) == 0) ? YELLOW : ORANGE);
+        const int rays = random(4, 9);
+        for (int r = 0; r < rays; r++) {
+            const int len = random(3, 10);
+            const int dx = random(-len, len + 1);
+            const int dy = random(-len, len + 1);
+            if (dx == 0 && dy == 0) {
+                continue;
+            }
+            M5Cardputer.Display.drawLine(cx, cy, cx + dx, cy + dy, color);
+        }
+        M5Cardputer.Display.fillCircle(cx, cy, 1, color);
+    }
+}
+
 // 绘制 Version 页面
 void drawVersionApp() {
     const VersionInfo info = getVersionInfo();
     beginAppScreen(("v" + info.version).c_str());
+    drawRandomSparks(10);
 
-    constexpr int logoSize = APP_LOGO_DESIGN_SIZE;
-    const int logoX = (M5Cardputer.Display.width() - logoSize) / 2;
+    constexpr int logo_px = APP_LOGO_60_PX;
+    const int logoX = (M5Cardputer.Display.width() - logo_px) / 2;
     const int logoY = APP_CONTENT_Y + 4;
-    drawAppLogo(logoX, logoY, logoSize);
+    int logo_bottom = logoY + logo_px;
+    if (!drawAppLogo60(logoX, logoY, 1.0f)) {
+        constexpr int fallback_size = APP_LOGO_DESIGN_SIZE;
+        const int fallback_x = (M5Cardputer.Display.width() - fallback_size) / 2;
+        drawAppLogo(fallback_x, logoY, fallback_size);
+        logo_bottom = logoY + fallback_size;
+    }
 
-    const int textY = logoY + logoSize + 10;
+    const int textY = logo_bottom + 10;
     const int centerX = M5Cardputer.Display.width() / 2;
     constexpr int lineH = 12;
 
@@ -902,44 +928,59 @@ void drawSettingsApp() {
     int cy = APP_CONTENT_Y;
     cy = drawMijiaBarRow(APP_CONTENT_X, cy, "bright", buf, pct, content_w, GREEN);
 
-    // 说明区：按键徽章 + 文案
+    constexpr int ts = 2;
     constexpr int pad = 4;
-    constexpr int hintLines = 5;
+    constexpr int hint_lines = 2;
+    const int line_h = INFO_LINE_H_2X;
     const int boxX = APP_CONTENT_X;
     const int boxY = cy + 4;
     const int boxW = content_w;
-    const int boxH = pad * 2 + hintLines * INFO_LINE_H;
+    const int boxH = pad * 2 + hint_lines * line_h;
 
     M5Cardputer.Display.drawRect(boxX, boxY, boxW, boxH, DARKGREY);
 
-    int ty = boxY + pad;
-    const auto drawKeyHint = [&](const char key, const char* text) {
-        int cx = boxX + pad + drawKeyBadge(boxX + pad, ty, key, 1);
-        M5Cardputer.Display.setTextSize(1);
+    const auto drawHintText = [&](int& cx, const int ty, const char* text) {
+        M5Cardputer.Display.setTextSize(ts);
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
         M5Cardputer.Display.setCursor(cx, ty);
         M5Cardputer.Display.print(text);
-        ty += INFO_LINE_H;
-    };
-    const auto drawDualKeyHint = [&](const char key1, const char key2, const char* text) {
-        int cx = boxX + pad;
-        cx += drawKeyBadge(cx, ty, key1, 1);
-        cx += drawKeyBadge(cx, ty, key2, 1);
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-        M5Cardputer.Display.setCursor(cx, ty);
-        M5Cardputer.Display.print(text);
-        ty += INFO_LINE_H;
+        cx += M5Cardputer.Display.textWidth(text);
     };
 
-    drawKeyHint('0', "0-9 preset");
-    drawDualKeyHint(',', '/', " step 1");
-    drawDualKeyHint(';', '.', " step 10");
-    drawKeyHint('r', "invert");
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(boxX + pad, ty);
-    M5Cardputer.Display.printf("inv: %s", M5Cardputer.Display.getInvert() ? "ON" : "OFF");
+    // 大字横向：0-9 预设、左右箭头 step1
+    int ty = boxY + pad;
+    int cx = boxX + pad;
+    cx += drawTextBadge(cx, ty, "0-9", ts);
+    drawHintText(cx, ty, " preset  ");
+    cx += drawArrowBadge(cx, ty, ts);
+    drawHintText(cx, ty, " step1");
+
+    // 上下箭头 step10、r invert
+    ty += line_h;
+    cx = boxX + pad;
+    cx += drawArrowUpBadge(cx, ty, ts);
+    cx += drawArrowDownBadge(cx, ty, ts);
+    drawHintText(cx, ty, " step10  ");
+    cx += drawKeyBadge(cx, ty, 'r', ts);
+    drawHintText(cx, ty, " invert");
+
+    // invert 状态单独突出显示
+    const bool inverted = M5Cardputer.Display.getInvert();
+    const int inv_y = boxY + boxH + 8;
+    const char* inv_label = inverted ? "INVERT ON" : "INVERT OFF";
+    const uint16_t inv_bg = inverted ? APP_COLOR_MENU_KEY : DARKGREY;
+    const uint16_t inv_fg = inverted ? APP_COLOR_KEY_TEXT : LIGHTGREY;
+
+    M5Cardputer.Display.setTextSize(ts);
+    const int inv_tw = M5Cardputer.Display.textWidth(inv_label);
+    constexpr int inv_pad_x = 8;
+    constexpr int inv_pad_y = 3;
+    const int inv_w = inv_tw + inv_pad_x * 2;
+    const int inv_h = 16 + inv_pad_y * 2;
+    M5Cardputer.Display.fillRoundRect(boxX, inv_y, inv_w, inv_h, 4, inv_bg);
+    M5Cardputer.Display.setTextColor(inv_fg, inv_bg);
+    M5Cardputer.Display.setCursor(boxX + inv_pad_x, inv_y + inv_pad_y);
+    M5Cardputer.Display.print(inv_label);
 }
 
 void handleSettingsApp(const Keyboard_Class::KeysState& status) {
@@ -1255,19 +1296,20 @@ void drawDisplayApp(const int patternIndex) {
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(4, screen_h - hint_h);
     M5Cardputer.Display.printf("%s  ", dispPatternName(pattern));
-    const KeyHintItem items[] = {
-        {'[', "prev"},
-        {']', "next"},
-    };
-    drawKeyHintsRow(M5Cardputer.Display.getCursorX(), screen_h - hint_h, items, 2, 1, APP_COLOR_HINT);
+    int cx = M5Cardputer.Display.getCursorX();
+    cx += drawArrowBadge(cx, screen_h - hint_h, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, screen_h - hint_h);
+    M5Cardputer.Display.print("page");
 }
 
-void handleDisplayApp(const String& key) {
-    if (key == "[") {
-        drawDisplayApp(dispPatternIndex - 1);
-    } else if (key == "]") {
-        drawDisplayApp(dispPatternIndex + 1);
+void handleDisplayApp(const Keyboard_Class::KeysState& status) {
+    const int delta = getMenuNavDelta(status);
+    if (delta == 0) {
+        return;
     }
+    drawDisplayApp(dispPatternIndex + delta);
 }
 
 // ===== SLEEP =====
@@ -1516,12 +1558,6 @@ void enterApp(const AppState state) {
         case AppState::WEB:
             enterWebApp();
             break;
-        case AppState::COUNTDOWN:
-            enterCountdownApp();
-            break;
-        case AppState::STOPWATCH:
-            enterStopwatchApp();
-            break;
         case AppState::CURSOR:
             enterCursorApp();
             break;
@@ -1598,7 +1634,8 @@ void loop() {
         lastHeaderStatusMs = now;
         if (currentState == AppState::MENU) {
             updateMenuHeaderStatus(getMenuPageCount());
-        } else if (currentState != AppState::SLEEP && currentState != AppState::DISP) {
+        } else if (currentState != AppState::SLEEP && currentState != AppState::DISP &&
+                   !(currentState == AppState::RTC && isTimePureMode())) {
             updateAppHeaderStatus();
         }
     }
@@ -1633,10 +1670,6 @@ void loop() {
         updateMijiaApp();
     } else if (currentState == AppState::WEB) {
         updateWebApp();
-    } else if (currentState == AppState::COUNTDOWN) {
-        updateCountdownApp();
-    } else if (currentState == AppState::STOPWATCH) {
-        updateStopwatchApp();
     } else if (currentState == AppState::CURSOR) {
         updateCursorApp();
     } else if (currentState == AppState::MORSE) {
@@ -1645,7 +1678,7 @@ void loop() {
 
     if (currentState == AppState::RTC) {
         static uint32_t lastRtcUpdateMs = 0;
-        if (now - lastRtcUpdateMs >= 1000) {
+        if (now - lastRtcUpdateMs >= 30) {
             lastRtcUpdateMs = now;
             updateRtcApp();
         }
@@ -1681,7 +1714,7 @@ void loop() {
                 break;
             case AppState::DISP:
                 if (M5Cardputer.Keyboard.isPressed()) {
-                    handleDisplayApp(getPressedKey());
+                    handleDisplayApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             case AppState::INFO:
@@ -1715,19 +1748,14 @@ void loop() {
                     handleWebApp(getPressedKey());
                 }
                 break;
-            case AppState::COUNTDOWN:
+            case AppState::RTC:
                 if (M5Cardputer.Keyboard.isPressed()) {
-                    handleCountdownApp(M5Cardputer.Keyboard.keysState());
-                }
-                break;
-            case AppState::STOPWATCH:
-                if (M5Cardputer.Keyboard.isPressed()) {
-                    handleStopwatchApp(getPressedKey());
+                    handleTimeApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             case AppState::CURSOR:
                 if (M5Cardputer.Keyboard.isPressed()) {
-                    handleCursorApp(getPressedKey());
+                    handleCursorApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             case AppState::MORSE:
@@ -1747,7 +1775,7 @@ void loop() {
 
     // 实时 app 不休眠；其它状态 yield 10ms
     if (currentState != AppState::BMI && currentState != AppState::MIC &&
-        currentState != AppState::STOPWATCH) {
+        currentState != AppState::RTC) {
         delay(10);
     }
 }

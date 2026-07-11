@@ -49,7 +49,11 @@ bool loadAppConfig() {
 
     JsonObject cursor = doc["cursor"];
     if (!cursor.isNull()) {
-        copyField(g_config.cursor_api_key, sizeof(g_config.cursor_api_key), cursor["api_key"]);
+        const char* token = cursor["token"];
+        if (token == nullptr || token[0] == '\0') {
+            token = cursor["api_key"]; // 兼容旧字段名
+        }
+        copyField(g_config.cursor_token, sizeof(g_config.cursor_token), token);
     }
 
     g_config.brightness = static_cast<uint8_t>(doc["brightness"] | 30);

@@ -13,12 +13,12 @@ struct MijiaDevice {
 
 static constexpr int MIJIA_DEVICE_MAX = 50;
 
-static constexpr int CURSOR_API_KEY_MAX = 1024;
+static constexpr int CURSOR_TOKEN_MAX = 1024;
 
 struct AppConfig {
     char wifi_ssid[33];
     char wifi_password[65];
-    char cursor_api_key[CURSOR_API_KEY_MAX];
+    char cursor_token[CURSOR_TOKEN_MAX];
     uint8_t brightness;
     MijiaDevice devices[MIJIA_DEVICE_MAX];
     int device_count;

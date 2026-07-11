@@ -20,8 +20,12 @@ const char* deviceIconPathForModel(const char* model, bool active);
 // 生成列表用小图标路径：{basename}_25w.png / {basename}_active_25w.png
 const char* deviceIconPathForModelList(const char* model, bool active);
 
-// 设备图标绘制边长（原生 PNG）
-int deviceIconDrawPx(const MijiaDevice* dev);
+// data 根目录打包后的 Version logo
+static constexpr const char* APP_LOGO_60_PATH = "/logo_60.png";
+static constexpr int APP_LOGO_60_PX = 60;
+
+// 绘制 Version 页 logo（1:1 原生尺寸）
+bool drawAppLogo60(const int x, const int y, const float scale = 1.0f);
 
 // 按路径 1:1 原始尺寸绘制（左上角对齐）
 bool drawDevicePngNative(const char* path, int x, int y);

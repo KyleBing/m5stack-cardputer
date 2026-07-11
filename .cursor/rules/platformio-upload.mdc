@@ -1,16 +1,34 @@
 ---
-description: 固件改动完成后自动 upload 到 Cardputer
+description: 编译成功后用弹窗按钮询问是否 Upload 到 Cardputer 设备
 alwaysApply: true
 ---
 
-# PlatformIO 烧录
+# PlatformIO 编译与上传
 
-完成固件相关代码改动后，验证步骤使用：
+修改代码并完成验证性编译后，**必须通过弹窗按钮让用户选择是否 Upload**。不要自动上传，也不要仅在文字回复里询问。
+
+## 流程
+
+1. 代码修改完成后运行 `pio run` 验证编译通过。
+2. 编译成功后，立即调用 `AskQuestion` 弹出选择按钮，让用户决定是否 Upload。
+3. 用户选择 Upload 后再执行上传；选择不上传或关闭弹窗时，不运行 upload。
+
+## 弹窗选项
+
+使用 `AskQuestion`，标题示例：`Upload 到 Cardputer？`
+
+选项：
+- `Upload`（推荐项，放第一位）
+- `不上传`
+
+## 上传命令
 
 ```bash
-pio run -t upload
+pio run --target upload
 ```
 
-不要仅用 `pio run` 编译而不烧录（除非用户明确要求只编译）。
+## 注意
 
-upload 失败时排查并重试；设备未连接时告知用户。
+- 编译失败时先修复问题，不要弹出 Upload 选择。
+- 仅做代码审阅、解释、搜索等未改代码的任务时，不必弹出 Upload 选择。
+- 用户明确说「上传」「upload」「刷机」等时，可直接执行上传，无需再弹窗询问。

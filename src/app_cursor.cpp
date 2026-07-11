@@ -63,7 +63,7 @@ static bool g_fetch_pending = false;
 static bool g_silent_fetch = false;
 static char g_error_msg[48] = "";
 static char g_status_msg[32] = "";
-static char g_cookie[CURSOR_API_KEY_MAX + 64] = "";
+static char g_cookie[CURSOR_TOKEN_MAX + 64] = "";
 static int g_user_id = 0;
 static CursorUsageData g_usage{};
 static uint32_t g_last_period_fetch_ms = 0;
@@ -207,13 +207,13 @@ static bool extractJwtSub(const char* jwt, char* sub_buf, const size_t sub_size)
 }
 
 // 构造 WorkosCursorSessionToken Cookie
-static bool buildCursorCookie(const char* api_key, char* cookie, const size_t cookie_size) {
-    if (api_key == nullptr || api_key[0] == '\0' || cookie == nullptr || cookie_size < 32) {
+static bool buildCursorCookie(const char* token, char* cookie, const size_t cookie_size) {
+    if (token == nullptr || token[0] == '\0' || cookie == nullptr || cookie_size < 32) {
         return false;
     }
 
-    if (strstr(api_key, "::") != nullptr || strstr(api_key, "%3A%3A") != nullptr) {
-        snprintf(cookie, cookie_size, "WorkosCursorSessionToken=%s", api_key);
+    if (strstr(token, "::") != nullptr || strstr(token, "%3A%3A") != nullptr) {
+        snprintf(cookie, cookie_size, "WorkosCursorSessionToken=%s", token);
         String encoded(cookie);
         encoded.replace("::", "%3A%3A");
         strncpy(cookie, encoded.c_str(), cookie_size - 1);
@@ -222,11 +222,11 @@ static bool buildCursorCookie(const char* api_key, char* cookie, const size_t co
     }
 
     char sub[96];
-    if (!extractJwtSub(api_key, sub, sizeof(sub))) {
+    if (!extractJwtSub(token, sub, sizeof(sub))) {
         return false;
     }
 
-    snprintf(cookie, cookie_size, "WorkosCursorSessionToken=%s%%3A%%3A%s", sub, api_key);
+    snprintf(cookie, cookie_size, "WorkosCursorSessionToken=%s%%3A%%3A%s", sub, token);
     return true;
 }
 
@@ -436,11 +436,11 @@ static bool fetchDailyUsage(const int range_days, float* daily_out) {
 // 拉取认证与周期用量（较快，先展示摘要）
 static bool fetchCursorAuthPeriod() {
   const AppConfig& cfg = getAppConfig();
-  if (!cfg.loaded || cfg.cursor_api_key[0] == '\0') {
-    strncpy(g_error_msg, "no api_key in cfg", sizeof(g_error_msg));
+  if (!cfg.loaded || cfg.cursor_token[0] == '\0') {
+    strncpy(g_error_msg, "no token in cfg", sizeof(g_error_msg));
     return false;
   }
-  if (!buildCursorCookie(cfg.cursor_api_key, g_cookie, sizeof(g_cookie))) {
+  if (!buildCursorCookie(cfg.cursor_token, g_cookie, sizeof(g_cookie))) {
     strncpy(g_error_msg, "bad session token", sizeof(g_error_msg));
     return false;
   }
@@ -674,12 +674,17 @@ static void drawCursorHints() {
   } else if (g_page == CursorPage::CHART_30) {
     page_text = "30d";
   }
-  const KeyHintItem items[] = {
-      {'[', "prev"},
-      {']', "next"},
-      {'r', "refresh"},
-  };
-  drawKeyHintsRow(APP_CONTENT_X, hint_y, items, 3, 1, APP_COLOR_HINT);
+  int cx = APP_CONTENT_X;
+  cx += drawArrowBadge(cx, hint_y, 1);
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+  M5Cardputer.Display.setCursor(cx, hint_y);
+  M5Cardputer.Display.print("page ");
+  cx += M5Cardputer.Display.textWidth("page ");
+  cx += drawKeyBadge(cx, hint_y, 'r', 1);
+  M5Cardputer.Display.setCursor(cx, hint_y);
+  M5Cardputer.Display.setTextColor(APP_COLOR_OK);
+  M5Cardputer.Display.print("refresh");
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
   M5Cardputer.Display.setCursor(APP_CONTENT_X + 120, hint_y);
@@ -809,7 +814,7 @@ void drawCursorApp() {
   }
 
   const AppConfig& cfg = getAppConfig();
-  if (!cfg.loaded || cfg.cursor_api_key[0] == '\0') {
+  if (!cfg.loaded || cfg.cursor_token[0] == '\0') {
     drawInfoLineAt(APP_CONTENT_X, y, "cfg", "no token", 2);
     y += INFO_LINE_H_2X;
     drawInfoLineAt(APP_CONTENT_X, y, "hint", "u web setup", 2);
@@ -1024,17 +1029,15 @@ void updateCursorApp() {
   }
 }
 
-void handleCursorApp(const String& key) {
+void handleCursorApp(const Keyboard_Class::KeysState& status) {
   noteCursorActivity();
+  const int delta = getMenuNavDelta(status);
+  if (delta != 0) {
+    cursorPageNav(delta);
+    return;
+  }
+  const String key = getPressedKey();
   if (key == "r") {
     beginCursorFetch(CursorFetchMode::FULL);
-    return;
-  }
-  if (key == "[") {
-    cursorPageNav(-1);
-    return;
-  }
-  if (key == "]") {
-    cursorPageNav(1);
   }
 }

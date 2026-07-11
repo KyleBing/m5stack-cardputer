@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app_config.h"
+#include "app_header.h"
 #include "mijia_control.h"
 #include <cstdint>
 
@@ -24,6 +25,8 @@ static constexpr int MIJIA_PANEL_BAR_TEXT_SIZE = 2;    // 进度条说明与数�
 static constexpr int MIJIA_LIST_ITEM_H = 42;
 static constexpr int MIJIA_LIST_ITEM_GAP = 6;
 static constexpr int MIJIA_LIST_NUM_MARGIN_R = 10; // 设备序号右侧间距
+// 概览列表/宫格分隔线（比 APP_COLOR_MUTED 更暗）
+static constexpr uint16_t MIJIA_DIVIDER_COLOR = 0x3186;
 
 // 倍数换算为像素边长
 inline int mijiaIconPx(const int scale) { return MIJIA_ICON_BASE * scale; }
@@ -65,6 +68,37 @@ void drawMijiaLevelSegments(int x, int y, int w, int h, int level, int max_level
 int drawMijiaDevicePanel(const MijiaDevice* dev, MijiaDevKind kind, int device_idx,
                          int device_count, const MijiaUiState& ui, int x, int y,
                          const char* net_status = nullptr);
+
+// 控制页布局（局部刷新用）
+struct MijiaPanelLayout {
+    int layout_y;
+    int icon_px;
+    int left_w;
+    int content_h;
+    int icon_x;
+    int icon_y;
+    int info_x;
+    int info_w;
+    int right_top_y; // 名称行下方，状态与控制区起点
+};
+
+MijiaPanelLayout calcMijiaPanelLayout(int panel_y, int x = APP_CONTENT_X);
+
+// 是否显示行内连接/查询状态
+bool mijiaPanelShowsInlineStatus(const char* status, bool power_known);
+
+// 绘制控制页左栏图标
+void drawMijiaPanelIcon(const MijiaDevice* dev, MijiaDevKind kind, const MijiaPanelLayout& layout,
+                        const MijiaUiState& ui);
+
+// 绘制控制页名称与分页
+void drawMijiaPanelHeader(const MijiaDevice* dev, int device_idx, int device_count,
+                          const MijiaPanelLayout& layout);
+
+// 绘制控制页右栏状态与控制区
+void drawMijiaPanelRightColumn(const MijiaDevice* dev, MijiaDevKind kind,
+                               const MijiaPanelLayout& layout, const MijiaUiState& ui,
+                               const char* net_status = nullptr);
 
 // ON/OFF 双 tag；inline_status 为 false 时不绘制行尾状态字
 void drawMijiaPowerTags(int x, int y, bool known, bool on, const char* status,
