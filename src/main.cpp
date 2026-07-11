@@ -69,26 +69,29 @@ struct MenuItem {
 
 // Cardputer 技能 → 字母入口
 static const MenuItem MENU_ITEMS[] = {
-    {'v', "Ver", "Version", AppState::VERSION},
-    {'k', "Key", "Keyboard", AppState::KEYBOARD},
-    {'g', "BMI", "BMI", AppState::BMI},
-    {'i', "Info", "Info", AppState::INFO},
-    {'r', "Mic", "Mic", AppState::MIC},
-    {'o', "Set", "Settings", AppState::SETTINGS},
-    {'l', "Spk", "Speaker", AppState::SPEAKER},
-    {'s', "Slp", "Sleep", AppState::SLEEP},
-    {'t', "Time", "Time", AppState::RTC},
-    {'n', "InI2", "InI2", AppState::IN_I2C},
-    {'e', "ExI2", "ExI2", AppState::EX_I2C},
-    {'w', "WiFi", "WiFi", AppState::WIFI},
+    // 常用 app
     {'m', "Mij", "Mijia", AppState::MIJIA},
     {'u', "Cfg", "Config Setup", AppState::WEB},
+    {'w', "WiFi", "WiFi", AppState::WIFI},
+    {'t', "Time", "Time", AppState::RTC},
+    {'s', "Slp", "Sleep", AppState::SLEEP},
+    {'o', "Set", "Settings", AppState::SETTINGS},
+    {'c', "Cur", "Cursor", AppState::CURSOR},
+    {'v', "Ver", "Version", AppState::VERSION},
+    {'j', "Mor", "Morse", AppState::MORSE},
+
+    // 系统功能测试
+    {'i', "Info", "Info", AppState::INFO},
+    {'k', "Key", "Keyboard", AppState::KEYBOARD},
+    {'g', "BMI", "BMI", AppState::BMI},
+    {'l', "Spk", "Speaker", AppState::SPEAKER},
+    {'r', "Mic", "Mic", AppState::MIC},
     {'b', "BLE", "BLE", AppState::BLE},
     {'d', "Disp", "Display", AppState::DISP},
-    {'c', "Cur", "Cursor", AppState::CURSOR},
     {'a', "Icn", "Icons", AppState::ICONS},
     {'f', "Fnt", "Font", AppState::FONT_DEMO},
-    {'j', "Mor", "Morse", AppState::MORSE},
+    {'n', "InI2", "InI2", AppState::IN_I2C},
+    {'e', "ExI2", "ExI2", AppState::EX_I2C},
 };
 
 static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
