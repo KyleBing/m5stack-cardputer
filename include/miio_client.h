@@ -20,15 +20,19 @@ MiioResult miioGetPower(const char* ip, const char* token_hex, bool& on);
 // 设置 power（set_power on/off，yeelink 等设备必须用此接口）
 MiioResult miioSetPower(const char* ip, const char* token_hex, bool on);
 
-// 灯：查询 power + bright（1-100）+ ct（色温 K，可选）
+// 灯：查询 power + bright（1-100）+ ct（色温 K，可选）；query_hue 时再取 hue/sat
 MiioResult miioGetLightStatus(const char* ip, const char* token_hex, bool& on, int& bright,
-                              bool& bright_known, int& color_temp, bool& ct_known);
+                              bool& bright_known, int& color_temp, bool& ct_known, bool query_hue,
+                              int& hue, bool& hue_known, int& sat);
 
 // 灯：设置亮度 1-100
 MiioResult miioSetBright(const char* ip, const char* token_hex, int bright);
 
 // 灯：设置色温（Kelvin，set_ct_abx）
 MiioResult miioSetColorTemp(const char* ip, const char* token_hex, int kelvin);
+
+// 灯：设置 HSV 色相（0-359）与饱和度（0-100）
+MiioResult miioSetHue(const char* ip, const char* token_hex, int hue, int sat);
 
 // dmaker.fan.p5：查询 power/speed/roll/mode(0=normal 1=nature)/roll_angle
 MiioResult miioFanP5GetStatus(const char* ip, const char* token_hex, bool& on, int& speed,
@@ -67,3 +71,17 @@ MiioResult miioF20SetMode(const char* ip, const char* token_hex, const char* did
 
 // dmaker.airpurifier.f20：风速档 0-5
 MiioResult miioF20SetFanLevel(const char* ip, const char* token_hex, const char* did, int level);
+
+// 空气炸锅（MIoT）：查询 status / target-time / target-temp / left-time
+// status: 0关机 1待机 2暂停 3预约 4烹饪…；on=正在工作（非关机/待机/完成）
+MiioResult miioFryerGetStatus(const char* ip, const char* token_hex, const char* did, bool& on,
+                              int& status, int& target_temp, int& target_time, int& left_time);
+
+// 空气炸锅：开=写温时长后 start-cook，关=cancel-cooking
+// 完全关机时需先在机身按开机进入待机，远程才能开锅
+MiioResult miioFryerSetPower(const char* ip, const char* token_hex, const char* did, bool on,
+                             int target_temp, int target_time);
+
+// 空气炸锅：设置目标温度与时长（手动模式）
+MiioResult miioFryerSetTempTime(const char* ip, const char* token_hex, const char* did,
+                                int target_temp, int target_time);

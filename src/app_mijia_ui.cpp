@@ -174,23 +174,32 @@ int drawMijiaStatusTag(const int x, const int y, const char* text, const bool ac
     return w + 4;
 }
 
-// 宫格状态 tag：将 MijiaUiState 映射为短标签（ON/OFF/TMO/...）
+// 宫格状态 tag：统一 ≤3 字符，避免撑出格子
 void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
     tag.active = false;
     tag.bg = APP_COLOR_MUTED;
     tag.text[0] = '\0';
 
     const char* s = ui.status;
+    // 开关切换中
     if (strcmp(s, "turn on...") == 0) {
-        strncpy(tag.text, "ON..", sizeof(tag.text));
+        strncpy(tag.text, "ON!", sizeof(tag.text));
         tag.active = true;
         tag.bg = APP_COLOR_OK;
         return;
     }
     if (strcmp(s, "turn off...") == 0) {
-        strncpy(tag.text, "OFF..", sizeof(tag.text));
+        strncpy(tag.text, "OF!", sizeof(tag.text));
         tag.active = true;
         tag.bg = APP_COLOR_LABEL;
+        return;
+    }
+    // 其他操作中间态（亮度/风速/摇头等）
+    if (strcmp(s, "query...") == 0 || strcmp(s, "bright...") == 0 || strcmp(s, "ct...") == 0 ||
+        strcmp(s, "hue...") == 0 || strcmp(s, "speed...") == 0 || strcmp(s, "roll...") == 0 ||
+        strcmp(s, "mode...") == 0 || strcmp(s, "angle...") == 0 || strcmp(s, "fan lv...") == 0 ||
+        strcmp(s, "temp...") == 0 || strcmp(s, "time...") == 0) {
+        strncpy(tag.text, "...", sizeof(tag.text));
         return;
     }
 
@@ -207,17 +216,13 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         return;
     }
 
-    if (strcmp(s, "query...") == 0) {
-        strncpy(tag.text, "...", sizeof(tag.text));
-        return;
-    }
     if (strcmp(s, "timeout") == 0) {
         strncpy(tag.text, "TMO", sizeof(tag.text));
         tag.bg = APP_COLOR_WARN;
         return;
     }
     if (strcmp(s, "task fail") == 0) {
-        strncpy(tag.text, "FAIL", sizeof(tag.text));
+        strncpy(tag.text, "ERR", sizeof(tag.text));
         tag.bg = APP_COLOR_ERROR;
         return;
     }
@@ -226,7 +231,7 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         return;
     }
     if (strcmp(s, "wifi fail") == 0) {
-        strncpy(tag.text, "WIFI", sizeof(tag.text));
+        strncpy(tag.text, "NET", sizeof(tag.text));
         tag.bg = APP_COLOR_WARN;
         return;
     }
@@ -235,7 +240,7 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         return;
     }
     if (strcmp(s, "bad token") == 0) {
-        strncpy(tag.text, "TOKEN", sizeof(tag.text));
+        strncpy(tag.text, "TOK", sizeof(tag.text));
         tag.bg = APP_COLOR_ERROR;
         return;
     }
@@ -250,22 +255,22 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         return;
     }
     if (strcmp(s, "bad json") == 0) {
-        strncpy(tag.text, "JSON", sizeof(tag.text));
+        strncpy(tag.text, "JSN", sizeof(tag.text));
         tag.bg = APP_COLOR_ERROR;
         return;
     }
     if (strcmp(s, "no power") == 0) {
-        strncpy(tag.text, "NPWR", sizeof(tag.text));
+        strncpy(tag.text, "NPW", sizeof(tag.text));
         tag.bg = APP_COLOR_WARN;
         return;
     }
     if (strcmp(s, "no reply") == 0) {
-        strncpy(tag.text, "NRPLY", sizeof(tag.text));
+        strncpy(tag.text, "NRP", sizeof(tag.text));
         tag.bg = APP_COLOR_WARN;
         return;
     }
     if (strcmp(s, "bad result") == 0) {
-        strncpy(tag.text, "DATA", sizeof(tag.text));
+        strncpy(tag.text, "BAD", sizeof(tag.text));
         tag.bg = APP_COLOR_WARN;
         return;
     }
@@ -276,9 +281,9 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         return;
     }
 
-    // 设备返回的 error.message 等未知文案，截短显示
-    strncpy(tag.text, s, sizeof(tag.text) - 1);
-    tag.text[sizeof(tag.text) - 1] = '\0';
+    // 未知文案截到 3 字符
+    strncpy(tag.text, s, 3);
+    tag.text[3] = '\0';
     tag.bg = APP_COLOR_WARN;
 }
 
@@ -524,10 +529,11 @@ void drawMijiaPowerTags(const int x, const int y, const bool known, const bool o
 
 // 说明在左、数值右对齐（上行）；下行进度条
 int drawMijiaBarRow(const int x, const int y, const char* label, const char* value,
-                    const int percent, const int total_w, const uint16_t fill_color) {
-    constexpr int bar_h = 12;
+                    const int percent, const int total_w, const uint16_t fill_color,
+                    const int text_size, const int bar_h) {
+    const int label_h = text_size == 2 ? INFO_LINE_H_2X : INFO_LINE_H;
 
-    M5Cardputer.Display.setTextSize(MIJIA_PANEL_BAR_TEXT_SIZE);
+    M5Cardputer.Display.setTextSize(text_size);
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
     M5Cardputer.Display.setCursor(x, y);
     M5Cardputer.Display.print(label);
@@ -535,17 +541,18 @@ int drawMijiaBarRow(const int x, const int y, const char* label, const char* val
     M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
     M5Cardputer.Display.drawRightString(value, x + total_w, y);
 
-    const int bar_y = y + INFO_LINE_H_2X;
+    const int bar_y = y + label_h;
     drawMijiaPercentBar(x, bar_y, total_w, bar_h, percent, fill_color);
-    return bar_y + bar_h + 5;
+    return bar_y + bar_h + 4;
 }
 
 // 绘制带标签的百分比条
 static int drawMijiaLabeledBar(const int x, const int y, const char* label, const int percent,
-                               const uint16_t fill_color, const int bar_w) {
+                               const uint16_t fill_color, const int bar_w, const int text_size,
+                               const int bar_h) {
     char buf[16];
     snprintf(buf, sizeof(buf), "%d%%", percent);
-    return drawMijiaBarRow(x, y, label, buf, percent, bar_w, fill_color);
+    return drawMijiaBarRow(x, y, label, buf, percent, bar_w, fill_color, text_size, bar_h);
 }
 
 // Kelvin 映射为暖橙→冷蓝白 RGB565
@@ -556,6 +563,52 @@ static uint16_t mijiaKelvinToColor565(const int kelvin, const int min_k, const i
     const uint8_t r = static_cast<uint8_t>(255 - t * 41 / 255);
     const uint8_t g = static_cast<uint8_t>(166 + t * 62 / 255);
     const uint8_t b = static_cast<uint8_t>(87 + t * 168 / 255);
+    return M5Cardputer.Display.color565(r, g, b);
+}
+
+// HSV 色相 → RGB565（S=V=1）
+static uint16_t mijiaHueToColor565(const int hue) {
+    const int h = ((hue % 360) + 360) % 360;
+    const int sector = h / 60;
+    const int f = h % 60;
+    const uint8_t p = 0;
+    const uint8_t q = static_cast<uint8_t>(255 * (60 - f) / 60);
+    const uint8_t t = static_cast<uint8_t>(255 * f / 60);
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+    switch (sector) {
+        case 0:
+            r = 255;
+            g = t;
+            b = p;
+            break;
+        case 1:
+            r = q;
+            g = 255;
+            b = p;
+            break;
+        case 2:
+            r = p;
+            g = 255;
+            b = t;
+            break;
+        case 3:
+            r = p;
+            g = q;
+            b = 255;
+            break;
+        case 4:
+            r = t;
+            g = p;
+            b = 255;
+            break;
+        default:
+            r = 255;
+            g = p;
+            b = q;
+            break;
+    }
     return M5Cardputer.Display.color565(r, g, b);
 }
 
@@ -576,15 +629,34 @@ static void drawMijiaColorTempPercentBar(const int x, const int y, const int w, 
     }
 }
 
+// 色相彩虹条：底色为光谱，白色竖条标示当前 hue
+static void drawMijiaHuePercentBar(const int x, const int y, const int w, const int h,
+                                   const int hue) {
+    const int inner_w = max(1, w - 2);
+    const int inner_h = max(1, h - 2);
+    M5Cardputer.Display.drawRoundRect(x, y, w, h, 2, APP_COLOR_MUTED);
+    for (int i = 0; i < inner_w; i++) {
+        const int hh = i * 360 / inner_w;
+        M5Cardputer.Display.drawFastVLine(x + 1 + i, y + 1, inner_h, mijiaHueToColor565(hh));
+    }
+    const int marker_x = x + 1 + constrain(hue, 0, 359) * (inner_w - 1) / 359;
+    M5Cardputer.Display.drawFastVLine(marker_x, y + 1, inner_h, WHITE);
+    if (marker_x + 1 < x + 1 + inner_w) {
+        M5Cardputer.Display.drawFastVLine(marker_x + 1, y + 1, inner_h, WHITE);
+    }
+}
+
 // 色温条：显示 Kelvin 数值
 static int drawMijiaColorTempBar(const int x, const int y, const int kelvin, const int min_k,
-                                 const int max_k, const int bar_w) {
+                                 const int max_k, const int bar_w, const int text_size,
+                                 const int bar_h) {
     char buf[16];
     snprintf(buf, sizeof(buf), "%dK", kelvin);
     const int pct =
         max_k > min_k ? constrain((kelvin - min_k) * 100 / (max_k - min_k), 0, 100) : 0;
+    const int label_h = text_size == 2 ? INFO_LINE_H_2X : INFO_LINE_H;
 
-    M5Cardputer.Display.setTextSize(MIJIA_PANEL_BAR_TEXT_SIZE);
+    M5Cardputer.Display.setTextSize(text_size);
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
     M5Cardputer.Display.setCursor(x, y);
     M5Cardputer.Display.print("ct");
@@ -592,10 +664,30 @@ static int drawMijiaColorTempBar(const int x, const int y, const int kelvin, con
     M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
     M5Cardputer.Display.drawRightString(buf, x + bar_w, y);
 
-    constexpr int bar_h = 12;
-    const int bar_y = y + INFO_LINE_H_2X;
+    const int bar_y = y + label_h;
     drawMijiaColorTempPercentBar(x, bar_y, bar_w, bar_h, pct, kelvin, min_k, max_k);
-    return bar_y + bar_h + 5;
+    return bar_y + bar_h + 4;
+}
+
+// 色相条：显示 0-359
+static int drawMijiaHueBar(const int x, const int y, const int hue, const int bar_w,
+                           const int text_size, const int bar_h) {
+    char buf[16];
+    const int h = ((hue % 360) + 360) % 360;
+    snprintf(buf, sizeof(buf), "%d", h);
+    const int label_h = text_size == 2 ? INFO_LINE_H_2X : INFO_LINE_H;
+
+    M5Cardputer.Display.setTextSize(text_size);
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print("hue");
+
+    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
+    M5Cardputer.Display.drawRightString(buf, x + bar_w, y);
+
+    const int bar_y = y + label_h;
+    drawMijiaHuePercentBar(x, bar_y, bar_w, bar_h, h);
+    return bar_y + bar_h + 4;
 }
 
 int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
@@ -609,20 +701,29 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
 
     switch (kind) {
         case MijiaDevKind::LIGHT: {
+            // bslamp2：1x 字号 + 更矮进度条，腾出 hue 行
+            const bool compact = mijiaLightSupportsHue(dev != nullptr ? dev->model : nullptr);
+            const int bar_text = compact ? 1 : MIJIA_PANEL_BAR_TEXT_SIZE;
+            const int bar_h = compact ? 9 : 11;
             int cy = y;
             if (ui.extra_known || ui.bright > 0) {
-                cy = drawMijiaLabeledBar(x, cy, "bright", ui.bright, YELLOW, w);
+                cy = drawMijiaLabeledBar(x, cy, "bright", ui.bright, YELLOW, w, bar_text, bar_h);
             }
             if (dev != nullptr && mijiaLightSupportsCt(dev->model)) {
                 const int ct =
                     ui.ct_known ? ui.color_temp : (ui.ct_min + ui.ct_max) / 2;
-                cy = drawMijiaColorTempBar(x, cy, ct, ui.ct_min, ui.ct_max, w);
+                cy = drawMijiaColorTempBar(x, cy, ct, ui.ct_min, ui.ct_max, w, bar_text, bar_h);
+            }
+            if (dev != nullptr && mijiaLightSupportsHue(dev->model)) {
+                const int hue = ui.hue_known ? ui.hue : 0;
+                cy = drawMijiaHueBar(x, cy, hue, w, bar_text, bar_h);
             }
             return cy;
         }
 
         case MijiaDevKind::FAN_P5: {
-            int cy = drawMijiaLabeledBar(x, y, "speed", ui.speed, CYAN, w);
+            // 风扇：进度条标签/数值用 1x，条高与 bslamp2 一致
+            int cy = drawMijiaLabeledBar(x, y, "speed", ui.speed, CYAN, w, 1, 9);
 
             // 选项行：标签普通字 + 全部选项 tag，当前项高亮
             const auto drawOptionRow = [&](const int row_y, const char* label,
@@ -666,12 +767,12 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
         }
 
         case MijiaDevKind::FAN_GENERIC:
-            M5Cardputer.Display.setTextSize(MIJIA_PANEL_BAR_TEXT_SIZE);
+            M5Cardputer.Display.setTextSize(1);
             M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
             M5Cardputer.Display.setCursor(x, y);
             M5Cardputer.Display.println("speed:");
-            drawMijiaLevelSegments(x, y + INFO_LINE_H_2X, w, 10, ui.speed, 4, CYAN);
-            return y + INFO_LINE_H_2X + 14;
+            drawMijiaLevelSegments(x, y + INFO_LINE_H, w, 10, ui.speed, 4, CYAN);
+            return y + INFO_LINE_H + 14;
 
         case MijiaDevKind::AIR_PURIFIER_F20: {
             static const char* MODE_NAMES[] = {"auto", "sleep", "low", "med", "high", "fav"};
@@ -687,8 +788,34 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
             return seg_y + 12;
         }
 
+        case MijiaDevKind::AIR_FRYER: {
+            // mode=工作状态，fan_level=目标温度，fryer_time=目标时长，aqi=剩余分钟
+            static const char* STATUS_NAMES[] = {"off", "idle", "pause", "timer", "cook",
+                                                 "pre", "done", "preok", "prep", "pot"};
+            const int si = constrain(ui.mode, 0, 9);
+            const int temp = ui.fan_level >= 40 ? ui.fan_level : 180;
+            const int mins = ui.fryer_time > 0 ? ui.fryer_time : 15;
+            int cy = y;
+            int cx = x;
+            cx += drawMijiaStatusTag(cx, cy, STATUS_NAMES[si], true,
+                                     ui.power_on ? APP_COLOR_OK : APP_COLOR_LABEL, text_size);
+            if (ui.aqi > 0 && ui.power_on) {
+                snprintf(buf, sizeof(buf), "left %dm", ui.aqi);
+                drawMijiaStatusTag(cx, cy, buf, true, APP_COLOR_MUTED, text_size);
+            }
+            cy += MIJIA_TAG_H + 4;
+            // 手动模式：温度 / 时长进度条（1x 小字）
+            const int temp_pct = constrain((temp - 40) * 100 / (200 - 40), 0, 100);
+            char tbuf[16];
+            snprintf(tbuf, sizeof(tbuf), "%dC", temp);
+            cy = drawMijiaBarRow(x, cy, "temp", tbuf, temp_pct, w, ORANGE, 1, 9);
+            const int time_pct = constrain(mins * 100 / 60, 0, 100);
+            snprintf(tbuf, sizeof(tbuf), "%dm", mins);
+            cy = drawMijiaBarRow(x, cy, "time", tbuf, time_pct, w, CYAN, 1, 9);
+            return cy;
+        }
+
         case MijiaDevKind::PLUG:
-        case MijiaDevKind::AIR_FRYER:
         default:
             return y;
     }

@@ -68,9 +68,10 @@ void drawMijiaPercentBar(int x, int y, int w, int h, int percent, uint16_t fill_
 void drawMijiaScaledPercentBar(int x, int y, int w, int h, int percent, uint16_t fill_color,
                                int tick_count = 11);
 
-// 说明在左、数值右对齐（上行）；下行进度条（percent 0-100）
+// 说明在左、数值右对齐（上行）；下行进度条（text_size / bar_h 可按设备压缩）
 int drawMijiaBarRow(int x, int y, const char* label, const char* value, int percent, int total_w,
-                    uint16_t fill_color);
+                    uint16_t fill_color, int text_size = MIJIA_PANEL_BAR_TEXT_SIZE,
+                    int bar_h = 11);
 
 // 分段档位条（level 1..max_level，0 表示全灭）
 void drawMijiaLevelSegments(int x, int y, int w, int h, int level, int max_level,

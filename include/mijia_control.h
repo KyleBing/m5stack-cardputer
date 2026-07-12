@@ -25,12 +25,16 @@ struct MijiaUiState {
     bool ct_known;
     int ct_min;
     int ct_max;
+    int hue;         // 灯色相 0-359
+    bool hue_known;
+    int sat;         // 灯饱和度 0-100
     int speed;       // 风扇 0-100 或 1-4
     bool roll;       // 风扇摇头
     int roll_angle;  // 风扇摇头角度（P5: 30/60/90/120/140）
-    int mode;        // 风扇 0=normal 1=nature；净化器 0-5
-    int fan_level;   // 净化器风速 0-5
-    int aqi;         // 净化器 AQI
+    int mode;        // 风扇 0=normal 1=nature；净化器 0-5；炸锅工作状态 0-9
+    int fan_level;   // 净化器风速 0-5；炸锅目标温度 °C
+    int aqi;         // 净化器 AQI；炸锅剩余时间 min
+    int fryer_time;  // 炸锅目标时长 min（手动模式）
     char status[48];
 };
 
@@ -51,11 +55,20 @@ void mijiaSetBrightPercent(const MijiaDevice* dev, MijiaUiState& state, int perc
 // 灯：是否支持色温调节
 bool mijiaLightSupportsCt(const char* model);
 
+// 灯：是否支持色相（HSV，如 bslamp2 / color8 / color2）
+bool mijiaLightSupportsHue(const char* model);
+
 // 灯：调节色温（delta_k 可正可负，单位 K）
 void mijiaAdjustColorTemp(const MijiaDevice* dev, MijiaUiState& state, int delta_k);
 
 // 灯：直接设色温 K
 void mijiaSetColorTemp(const MijiaDevice* dev, MijiaUiState& state, int kelvin);
+
+// 灯：调节色相（delta 可正可负，0-359 循环）
+void mijiaAdjustHue(const MijiaDevice* dev, MijiaUiState& state, int delta);
+
+// 灯：直接设色相 0-359
+void mijiaSetHue(const MijiaDevice* dev, MijiaUiState& state, int hue);
 
 // 风扇 P5：调节风速
 void mijiaAdjustFanP5Speed(const MijiaDevice* dev, MijiaUiState& state, int delta);
@@ -77,3 +90,9 @@ void mijiaSetPurifierMode(const MijiaDevice* dev, MijiaUiState& state, int mode)
 
 // 净化器 F20：调节风速档
 void mijiaAdjustPurifierFanLevel(const MijiaDevice* dev, MijiaUiState& state, int delta);
+
+// 空气炸锅：调节目标温度（°C，通常 40-200）
+void mijiaAdjustFryerTemp(const MijiaDevice* dev, MijiaUiState& state, int delta);
+
+// 空气炸锅：调节目标时长（分钟）
+void mijiaAdjustFryerTime(const MijiaDevice* dev, MijiaUiState& state, int delta);

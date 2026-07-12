@@ -220,10 +220,10 @@ String getPressedKey() {
 // btngo：边沿检测用（休眠唤醒后需 resetBtnGoEdge）
 static bool s_btngo_last_down = false;
 
-// btngo：提示标签（UI 文案）
+// btngo：提示标签（UI 文案，不显示物理键符 `）
 const char* btnGoHintLabel() {
 #if BTNGO_USE_KEYBOARD
-    return "`";  // 键盘左上角
+    return "ESC";
 #else
     return "GO";  // 侧边 BtnA
 #endif

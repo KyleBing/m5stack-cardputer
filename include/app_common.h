@@ -70,7 +70,7 @@ String getPressedKey();
 // 键盘左上角 `（grave / HID 0x35）；改键时同步改 CHAR 与 HID
 static constexpr char BTNGO_KEY_CHAR = '`';
 static constexpr uint8_t BTNGO_HID = 0x35;
-// 提示文案用短标签（如 "`" / "GO"）
+// 提示文案用短标签（如 "ESC" / "GO"）
 const char* btnGoHintLabel();
 // 本帧是否触发返回主菜单（边沿）
 bool wasBtnGoPressed();

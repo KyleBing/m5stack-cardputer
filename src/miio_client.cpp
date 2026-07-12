@@ -462,18 +462,23 @@ static bool parseIntAt(const char* json, const int index, int& value) {
 }
 
 MiioResult miioGetLightStatus(const char* ip, const char* token_hex, bool& on, int& bright,
-                              bool& bright_known, int& color_temp, bool& ct_known) {
+                              bool& bright_known, int& color_temp, bool& ct_known,
+                              const bool query_hue, int& hue, bool& hue_known, int& sat) {
     const MiioQueryScope query_scope(miioQueryTimeoutMs());
     MiioResult result{};
     bright_known = false;
     ct_known = false;
+    hue_known = false;
+    sat = 100;
 
-    char resp[320];
+    char resp[384];
     if (!miioParseTokenHex(token_hex, g_token)) {
         setResult(result, false, "bad token");
         return result;
     }
-    if (!miioCommand(ip, "get_prop", "[\"power\",\"bright\",\"ct\"]", resp, sizeof(resp))) {
+    const char* props =
+        query_hue ? "[\"power\",\"bright\",\"ct\",\"hue\",\"sat\"]" : "[\"power\",\"bright\",\"ct\"]";
+    if (!miioCommand(ip, "get_prop", props, resp, sizeof(resp))) {
         setResult(result, false, g_last_error);
         return result;
     }
@@ -506,8 +511,21 @@ MiioResult miioGetLightStatus(const char* ip, const char* token_hex, bool& on, i
         ct_known = true;
     }
 
+    int h = 0;
+    if (query_hue && parseIntAt(resp, 3, h)) {
+        hue = ((h % 360) + 360) % 360;
+        hue_known = true;
+    }
+
+    int s = 100;
+    if (query_hue && parseIntAt(resp, 4, s)) {
+        sat = clampInt(s, 0, 100);
+    }
+
     char msg[32];
-    if (bright_known && ct_known) {
+    if (bright_known && hue_known) {
+        snprintf(msg, sizeof(msg), on ? "ON %d%% H%d" : "OFF", bright, hue);
+    } else if (bright_known && ct_known) {
         snprintf(msg, sizeof(msg), on ? "ON %d%% %dK" : "OFF", bright, color_temp);
     } else if (bright_known) {
         snprintf(msg, sizeof(msg), on ? "ON %d%%" : "OFF", bright);
@@ -539,6 +557,21 @@ MiioResult miioSetColorTemp(const char* ip, const char* token_hex, const int kel
     if (result.ok) {
         char msg[16];
         snprintf(msg, sizeof(msg), "CT=%dK", kelvin);
+        setResult(result, true, msg);
+    }
+    return result;
+}
+
+MiioResult miioSetHue(const char* ip, const char* token_hex, const int hue, const int sat) {
+    const int h = ((hue % 360) + 360) % 360;
+    const int s = clampInt(sat, 0, 100);
+    char params[40];
+    snprintf(params, sizeof(params), "[%d,%d,\"smooth\",300]", h, s);
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "set_hsv", params, resp, sizeof(resp));
+    if (result.ok) {
+        char msg[16];
+        snprintf(msg, sizeof(msg), "H=%d", h);
         setResult(result, true, msg);
     }
     return result;
@@ -827,6 +860,169 @@ MiioResult miioF20SetFanLevel(const char* ip, const char* token_hex, const char*
         char msg[16];
         snprintf(msg, sizeof(msg), "FL=%d", clampInt(level, 0, 5));
         setResult(result, true, msg);
+    }
+    return result;
+}
+
+// 空气炸锅 MIoT：status / target-time / target-temp / left-time（siid 2）
+MiioResult miioFryerGetStatus(const char* ip, const char* token_hex, const char* did, bool& on,
+                              int& status, int& target_temp, int& target_time, int& left_time) {
+    const MiioQueryScope query_scope(miioQueryTimeoutMs());
+    char params[320];
+    snprintf(params, sizeof(params),
+             "[{\"did\":\"%s\",\"siid\":2,\"piid\":1},{\"did\":\"%s\",\"siid\":2,\"piid\":3},"
+             "{\"did\":\"%s\",\"siid\":2,\"piid\":4},{\"did\":\"%s\",\"siid\":2,\"piid\":5}]",
+             did, did, did, did);
+
+    char resp[512];
+    MiioResult result = miioRun(ip, token_hex, "get_properties", params, resp, sizeof(resp));
+    if (!result.ok) {
+        return result;
+    }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, resp)) {
+        setResult(result, false, "bad json");
+        return result;
+    }
+
+    JsonArray arr = doc["result"].as<JsonArray>();
+    if (arr.isNull() || arr.size() < 4) {
+        setResult(result, false, "bad result");
+        return result;
+    }
+
+    int iv = 0;
+    bool bv = false;
+    bool is_bool = false;
+    status = 0;
+    target_time = 15;
+    target_temp = 180;
+    left_time = 0;
+    if (readMiotValue(arr[0], iv, bv, is_bool) && !is_bool) {
+        status = iv;
+    }
+    if (readMiotValue(arr[1], iv, bv, is_bool) && !is_bool) {
+        target_time = clampInt(iv, 1, 1440);
+    }
+    if (readMiotValue(arr[2], iv, bv, is_bool) && !is_bool) {
+        target_temp = clampInt(iv, 40, 200);
+    }
+    if (readMiotValue(arr[3], iv, bv, is_bool) && !is_bool) {
+        left_time = clampInt(iv, 0, 1440);
+    }
+    // 仅烹饪相关态视为“开”（待机/完成不算开，避免 toggle 误发 cancel）
+    on = (status == 2 || status == 3 || status == 4 || status == 5 || status == 8 ||
+          status == 9);
+
+    static const char* STATUS_NAMES[] = {"off", "idle", "pause", "timer", "cook",
+                                         "pre", "done", "preok", "prep", "pot"};
+    const int si = clampInt(status, 0, 9);
+    char msg[32];
+    if (on) {
+        snprintf(msg, sizeof(msg), "%s %dC %dm", STATUS_NAMES[si], target_temp,
+                 left_time > 0 ? left_time : target_time);
+    } else {
+        snprintf(msg, sizeof(msg), "%s %dC %dm", STATUS_NAMES[si], target_temp, target_time);
+    }
+    setResult(result, true, msg);
+    return result;
+}
+
+// 检查 action 返回 code（无顶层 error 时也可能失败）
+static bool miioActionResultOk(const char* resp) {
+    JsonDocument doc;
+    if (deserializeJson(doc, resp)) {
+        return false;
+    }
+    if (doc["error"].is<JsonObject>()) {
+        return false;
+    }
+    JsonVariant res = doc["result"];
+    if (res.is<JsonObject>()) {
+        const int code = res["code"] | 0;
+        return code == 0;
+    }
+    return true;
+}
+
+// 手动模式：写入目标时长(piid3)与温度(piid4)
+MiioResult miioFryerSetTempTime(const char* ip, const char* token_hex, const char* did,
+                                const int target_temp, const int target_time) {
+    const int temp = clampInt(target_temp, 40, 200);
+    const int mins = clampInt(target_time, 1, 1440);
+    char params[192];
+    snprintf(params, sizeof(params),
+             "[{\"did\":\"%s\",\"siid\":2,\"piid\":3,\"value\":%d},"
+             "{\"did\":\"%s\",\"siid\":2,\"piid\":4,\"value\":%d}]",
+             did, mins, did, temp);
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "set_properties", params, resp, sizeof(resp));
+    if (result.ok) {
+        char msg[24];
+        snprintf(msg, sizeof(msg), "%dC %dm", temp, mins);
+        setResult(result, true, msg);
+    }
+    return result;
+}
+
+// 开：先写温时长，再 start-cook；失败则试自定义烹饪（含 recipe-name）
+// 关：cancel-cooking。完全关机需机身先开机到待机。
+MiioResult miioFryerSetPower(const char* ip, const char* token_hex, const char* did, const bool on,
+                             const int target_temp, const int target_time) {
+    char params[448];
+    char resp[256];
+    if (on) {
+        const int temp = clampInt(target_temp, 40, 200);
+        const int mins = clampInt(target_time, 1, 1440);
+
+        // 先写入目标温/时长
+        MiioResult set_res = miioFryerSetTempTime(ip, token_hex, did, temp, mins);
+        if (!set_res.ok) {
+            return set_res;
+        }
+
+        // 标准开始烹饪（siid2 aiid1）
+        snprintf(params, sizeof(params),
+                 "{\"did\":\"%s\",\"siid\":2,\"aiid\":1,\"in\":[]}", did);
+        MiioResult result = miioRun(ip, token_hex, "action", params, resp, sizeof(resp));
+        if (result.ok && miioActionResultOk(resp)) {
+            setResult(result, true, "START");
+            return result;
+        }
+
+        // maf04 自定义烹饪需带 recipe-name(piid2)
+        snprintf(params, sizeof(params),
+                 "{\"did\":\"%s\",\"siid\":3,\"aiid\":1,\"in\":["
+                 "{\"piid\":1,\"value\":\"\"},"
+                 "{\"piid\":2,\"value\":\"\"},"
+                 "{\"piid\":3,\"value\":%d},"
+                 "{\"piid\":4,\"value\":%d},"
+                 "{\"piid\":5,\"value\":0},"
+                 "{\"piid\":6,\"value\":0},"
+                 "{\"piid\":7,\"value\":1}"
+                 "]}",
+                 did, mins, temp);
+        result = miioRun(ip, token_hex, "action", params, resp, sizeof(resp));
+        if (result.ok && miioActionResultOk(resp)) {
+            setResult(result, true, "START");
+            return result;
+        }
+        if (result.ok) {
+            setResult(result, false, "start fail");
+        }
+        return result;
+    }
+
+    // siid2 aiid2：取消烹饪
+    snprintf(params, sizeof(params), "{\"did\":\"%s\",\"siid\":2,\"aiid\":2,\"in\":[]}", did);
+    MiioResult result = miioRun(ip, token_hex, "action", params, resp, sizeof(resp));
+    if (result.ok && !miioActionResultOk(resp)) {
+        setResult(result, false, "stop fail");
+        return result;
+    }
+    if (result.ok) {
+        setResult(result, true, "STOP");
     }
     return result;
 }

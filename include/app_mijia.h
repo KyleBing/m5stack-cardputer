@@ -12,3 +12,5 @@ bool handleMijiaOverviewPageNav(const Keyboard_Class::KeysState& status);
 bool handleMijiaDeviceNav(const Keyboard_Class::KeysState& status);
 // 主循环调用：应用异步查询结果并重绘
 void updateMijiaApp();
+// 每帧调用：BtnA 切换当前设备开关（控制页 / Grid）
+void pollMijiaBtnA();

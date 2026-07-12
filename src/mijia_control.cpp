@@ -76,6 +76,15 @@ bool mijiaLightSupportsCt(const char* model) {
     return max_k > min_k;
 }
 
+// 床头灯 2 / color8 / color2 等支持 HSV 色相（j/k 调节）
+bool mijiaLightSupportsHue(const char* model) {
+    if (model == nullptr) {
+        return false;
+    }
+    return strstr(model, "bslamp2") != nullptr || strstr(model, "color8") != nullptr ||
+           strstr(model, "color2") != nullptr;
+}
+
 void mijiaResetUiState(MijiaUiState& state) {
     state.power_known = false;
     state.power_on = false;
@@ -85,12 +94,16 @@ void mijiaResetUiState(MijiaUiState& state) {
     state.ct_known = false;
     state.ct_min = 2700;
     state.ct_max = 6500;
+    state.hue = 0;
+    state.hue_known = false;
+    state.sat = 100;
     state.speed = 0;
     state.roll = false;
     state.roll_angle = 90;
     state.mode = 0;
     state.fan_level = 0;
     state.aqi = 0;
+    state.fryer_time = 15;
     strncpy(state.status, "ready", sizeof(state.status));
 }
 
@@ -127,13 +140,17 @@ void mijiaRefreshDevice(const MijiaDevice* dev, MijiaUiState& state) {
         case MijiaDevKind::LIGHT: {
             bool bright_known = false;
             bool ct_known = false;
+            bool hue_known = false;
             mijiaLightCtRange(dev->model, state.ct_min, state.ct_max);
             result = miioGetLightStatus(dev->ip, dev->token, state.power_on, state.bright,
-                                        bright_known, state.color_temp, ct_known);
+                                        bright_known, state.color_temp, ct_known,
+                                        mijiaLightSupportsHue(dev->model), state.hue, hue_known,
+                                        state.sat);
             if (result.ok) {
                 state.power_known = true;
                 state.ct_known = ct_known && mijiaLightSupportsCt(dev->model);
-                state.extra_known = bright_known || state.ct_known;
+                state.hue_known = hue_known && mijiaLightSupportsHue(dev->model);
+                state.extra_known = bright_known || state.ct_known || state.hue_known;
             }
             break;
         }
@@ -155,6 +172,15 @@ void mijiaRefreshDevice(const MijiaDevice* dev, MijiaUiState& state) {
         case MijiaDevKind::AIR_PURIFIER_F20:
             result = miioF20GetStatus(dev->ip, dev->token, dev->id, state.power_on, state.mode,
                                       state.fan_level, state.aqi);
+            if (result.ok) {
+                state.power_known = true;
+                state.extra_known = true;
+            }
+            break;
+        case MijiaDevKind::AIR_FRYER:
+            // MIoT：不能用 get_prop power，否则会超时显示“离线”
+            result = miioFryerGetStatus(dev->ip, dev->token, dev->id, state.power_on, state.mode,
+                                        state.fan_level, state.fryer_time, state.aqi);
             if (result.ok) {
                 state.power_known = true;
                 state.extra_known = true;
@@ -192,6 +218,29 @@ void mijiaSetDevicePower(const MijiaDevice* dev, MijiaUiState& state, const bool
         case MijiaDevKind::AIR_PURIFIER_F20:
             result = miioF20SetPower(dev->ip, dev->token, dev->id, on);
             break;
+        case MijiaDevKind::AIR_FRYER: {
+            const int temp = state.fan_level >= 40 ? state.fan_level : 180;
+            const int mins = state.fryer_time > 0 ? state.fryer_time : 15;
+            result = miioFryerSetPower(dev->ip, dev->token, dev->id, on, temp, mins);
+            // 以设备回读为准，避免乐观 UI 显示已开但实际仍是待机
+            if (result.ok) {
+                MiioResult st =
+                    miioFryerGetStatus(dev->ip, dev->token, dev->id, state.power_on, state.mode,
+                                       state.fan_level, state.fryer_time, state.aqi);
+                if (st.ok) {
+                    state.power_known = true;
+                    state.extra_known = true;
+                    if (on && !state.power_on) {
+                        // 多半还在关机/待机：需机身先开机，或锅未推到位
+                        st.ok = false;
+                        strncpy(st.message, "need wake?", sizeof(st.message));
+                        st.message[sizeof(st.message) - 1] = '\0';
+                    }
+                    result = st;
+                }
+            }
+            break;
+        }
         default:
             result = miioSetPower(dev->ip, dev->token, on);
             break;
@@ -199,7 +248,10 @@ void mijiaSetDevicePower(const MijiaDevice* dev, MijiaUiState& state, const bool
 
     if (result.ok) {
         state.power_known = true;
-        state.power_on = on;
+        // 炸锅已用回读状态，勿用请求值覆盖
+        if (kind != MijiaDevKind::AIR_FRYER) {
+            state.power_on = on;
+        }
     }
     applyResult(state, result);
 }
@@ -252,6 +304,34 @@ void mijiaSetColorTemp(const MijiaDevice* dev, MijiaUiState& state, const int ke
     if (result.ok) {
         state.ct_known = true;
         state.color_temp = target;
+        state.extra_known = true;
+        state.power_on = true;
+        state.power_known = true;
+    }
+    applyResult(state, result);
+}
+
+void mijiaAdjustHue(const MijiaDevice* dev, MijiaUiState& state, const int delta) {
+    if (dev == nullptr || !mijiaLightSupportsHue(dev->model)) {
+        return;
+    }
+    int target = state.hue_known ? state.hue : 0;
+    target = ((target + delta) % 360 + 360) % 360;
+    mijiaSetHue(dev, state, target);
+}
+
+void mijiaSetHue(const MijiaDevice* dev, MijiaUiState& state, const int hue) {
+    if (dev == nullptr || !mijiaLightSupportsHue(dev->model)) {
+        return;
+    }
+    const int target = ((hue % 360) + 360) % 360;
+    const int sat = state.sat > 0 ? state.sat : 100;
+    strncpy(state.status, "hue...", sizeof(state.status));
+    const MiioResult result = miioSetHue(dev->ip, dev->token, target, sat);
+    if (result.ok) {
+        state.hue_known = true;
+        state.hue = target;
+        state.sat = sat;
         state.extra_known = true;
         state.power_on = true;
         state.power_known = true;
@@ -388,6 +468,40 @@ void mijiaAdjustPurifierFanLevel(const MijiaDevice* dev, MijiaUiState& state, co
     const MiioResult result = miioF20SetFanLevel(dev->ip, dev->token, dev->id, target);
     if (result.ok) {
         state.fan_level = target;
+        state.extra_known = true;
+    }
+    applyResult(state, result);
+}
+
+void mijiaAdjustFryerTemp(const MijiaDevice* dev, MijiaUiState& state, const int delta) {
+    if (dev == nullptr) {
+        return;
+    }
+    int temp = state.fan_level >= 40 ? state.fan_level : 180;
+    temp = clampInt(temp + delta, 40, 200);
+    const int mins = state.fryer_time > 0 ? state.fryer_time : 15;
+    strncpy(state.status, "temp...", sizeof(state.status));
+    const MiioResult result = miioFryerSetTempTime(dev->ip, dev->token, dev->id, temp, mins);
+    if (result.ok) {
+        state.fan_level = temp;
+        state.fryer_time = mins;
+        state.extra_known = true;
+    }
+    applyResult(state, result);
+}
+
+void mijiaAdjustFryerTime(const MijiaDevice* dev, MijiaUiState& state, const int delta) {
+    if (dev == nullptr) {
+        return;
+    }
+    int mins = state.fryer_time > 0 ? state.fryer_time : 15;
+    mins = clampInt(mins + delta, 1, 120);
+    const int temp = state.fan_level >= 40 ? state.fan_level : 180;
+    strncpy(state.status, "time...", sizeof(state.status));
+    const MiioResult result = miioFryerSetTempTime(dev->ip, dev->token, dev->id, temp, mins);
+    if (result.ok) {
+        state.fan_level = temp;
+        state.fryer_time = mins;
         state.extra_known = true;
     }
     applyResult(state, result);

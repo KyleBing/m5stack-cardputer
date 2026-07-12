@@ -1863,6 +1863,8 @@ void loop() {
             updateBleApp();
         }
     } else if (currentState == AppState::MIJIA) {
+        // BtnA 边沿只在当帧有效，需每帧轮询
+        pollMijiaBtnA();
         updateMijiaApp();
     } else if (currentState == AppState::WEB) {
         updateWebApp();
