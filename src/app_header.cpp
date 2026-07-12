@@ -88,7 +88,7 @@ static void clearHeaderStatusArea(const int left_x, const int right_x) {
     M5Cardputer.Display.fillRect(left_x, 0, right_x - left_x, APP_HEADER_H - 1, BLACK);
 }
 
-// 绘制右侧 BtnA 返回图标：半个圆角矩形 + 左箭头
+// btngo：绘制右侧返回图标（半个圆角矩形 + 左箭头）
 static void drawBackButton(const int screen_w) {
     constexpr int btn_w = APP_BACK_BTN_W;
     constexpr int btn_h = ICON_BACK_H;

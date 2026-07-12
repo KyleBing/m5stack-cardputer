@@ -194,7 +194,8 @@ static bool mijiaPanelControlsVisualChanged(const MijiaUiState& old_ui, const Mi
     return old_ui.extra_known != new_ui.extra_known || old_ui.bright != new_ui.bright ||
            old_ui.color_temp != new_ui.color_temp || old_ui.ct_known != new_ui.ct_known ||
            old_ui.ct_min != new_ui.ct_min || old_ui.ct_max != new_ui.ct_max ||
-           old_ui.speed != new_ui.speed || old_ui.roll != new_ui.roll || old_ui.mode != new_ui.mode ||
+           old_ui.speed != new_ui.speed || old_ui.roll != new_ui.roll ||
+           old_ui.roll_angle != new_ui.roll_angle || old_ui.mode != new_ui.mode ||
            old_ui.fan_level != new_ui.fan_level || old_ui.aqi != new_ui.aqi;
 }
 
@@ -271,11 +272,16 @@ static void applyMijiaControlRefresh(const bool force_full) {
         drawMijiaPanelIcon(dev, kind, layout, mijiaUi);
     }
     if (right_dirty) {
-        const int clear_h = M5Cardputer.Display.height() - layout.right_top_y;
-        M5Cardputer.Display.fillRect(layout.info_x, layout.right_top_y, layout.info_w, clear_h,
-                                     BLACK);
+        // 留出底边 2px，避免擦掉开启态边框
+        const int clear_h = M5Cardputer.Display.height() - layout.right_top_y - 2;
+        if (clear_h > 0) {
+            M5Cardputer.Display.fillRect(layout.info_x, layout.right_top_y, layout.info_w, clear_h,
+                                         BLACK);
+        }
         drawMijiaPanelRightColumn(dev, kind, layout, mijiaUi, net);
     }
+    // 局部刷新后补画边框（右栏清理可能碰到边缘）
+    drawMijiaControlPowerBorder(mijiaUi.power_known && mijiaUi.power_on);
     snapshotMijiaRenderedPanel(net);
 }
 
@@ -1603,8 +1609,9 @@ static int mijiaCountHelpRows(const MijiaDevKind kind, const int max_w, const in
                 {'=', "spd+"},
                 {'w', "roll"},
                 {'m', "mode"},
+                {'a', "angle"},
             };
-            rows += mijiaCountWrappedRows(fan_items, 4, text_size, max_w);
+            rows += mijiaCountWrappedRows(fan_items, 5, text_size, max_w);
             break;
         }
         case MijiaDevKind::FAN_GENERIC: {
@@ -1746,8 +1753,9 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
                 {'=', "spd+"},
                 {'w', "roll"},
                 {'m', "mode"},
+                {'a', "angle"},
             };
-            row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, fan_items, 4, text_size,
+            row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, fan_items, 5, text_size,
                                       APP_COLOR_HINT, max_w);
             break;
         }
@@ -2041,6 +2049,8 @@ void handleMijiaApp(const String& key) {
             mijiaToggleFanP5Roll(dev, mijiaUi);
         } else if (key == "m") {
             mijiaToggleFanP5Mode(dev, mijiaUi);
+        } else if (key == "a") {
+            mijiaCycleFanP5Angle(dev, mijiaUi);
         } else {
             handled = false;
         }

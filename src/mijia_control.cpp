@@ -87,6 +87,7 @@ void mijiaResetUiState(MijiaUiState& state) {
     state.ct_max = 6500;
     state.speed = 0;
     state.roll = false;
+    state.roll_angle = 90;
     state.mode = 0;
     state.fan_level = 0;
     state.aqi = 0;
@@ -138,7 +139,7 @@ void mijiaRefreshDevice(const MijiaDevice* dev, MijiaUiState& state) {
         }
         case MijiaDevKind::FAN_P5:
             result = miioFanP5GetStatus(dev->ip, dev->token, state.power_on, state.speed,
-                                        state.roll, state.mode);
+                                        state.roll, state.mode, state.roll_angle);
             if (result.ok) {
                 state.power_known = true;
                 state.extra_known = true;
@@ -305,6 +306,37 @@ void mijiaToggleFanP5Mode(const MijiaDevice* dev, MijiaUiState& state) {
     const MiioResult result = miioFanP5SetMode(dev->ip, dev->token, mode);
     if (result.ok) {
         state.mode = next;
+        state.extra_known = true;
+    }
+    applyResult(state, result);
+}
+
+void mijiaCycleFanP5Angle(const MijiaDevice* dev, MijiaUiState& state) {
+    if (dev == nullptr) {
+        return;
+    }
+
+    // P5 支持：30 / 60 / 90 / 120 / 140
+    static const int kAngles[] = {30, 60, 90, 120, 140};
+    constexpr int kCount = 5;
+    int idx = 0;
+    for (int i = 0; i < kCount; i++) {
+        if (state.roll_angle == kAngles[i]) {
+            idx = (i + 1) % kCount;
+            break;
+        }
+        if (state.roll_angle < kAngles[i]) {
+            idx = i;
+            break;
+        }
+        idx = 0;
+    }
+    const int next = kAngles[idx];
+
+    strncpy(state.status, "angle...", sizeof(state.status));
+    const MiioResult result = miioFanP5SetAngle(dev->ip, dev->token, next);
+    if (result.ok) {
+        state.roll_angle = next;
         state.extra_known = true;
     }
     applyResult(state, result);

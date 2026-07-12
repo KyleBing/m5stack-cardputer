@@ -333,7 +333,7 @@ void drawMijiaLevelSegments(const int x, const int y, const int w, const int h, 
 // 控制页左栏：原生 PNG 图标占满内容区高度并纵向居中
 static void mijiaCalcPanelLayout(const int content_y, int& icon_px, int& left_w, int& content_h) {
     icon_px = DEVICE_ICON_NATIVE_PX;
-    left_w = icon_px + 8;
+    left_w = icon_px;
     content_h = M5Cardputer.Display.height() - content_y;
 }
 
@@ -365,16 +365,20 @@ static int mijiaPanelInlineStatusLineH(const char* status) {
 }
 
 MijiaPanelLayout calcMijiaPanelLayout(const int panel_y, const int x) {
+    (void)x;
     MijiaPanelLayout layout{};
     layout.layout_y = panel_y + MIJIA_DEVICE_NAME_TOP_MARGIN;
     mijiaCalcPanelLayout(layout.layout_y, layout.icon_px, layout.left_w, layout.content_h);
-    layout.icon_x = x + (layout.left_w - layout.icon_px) / 2;
+    // 图标左右各 10px
+    layout.icon_x = MIJIA_PANEL_ICON_LEFT;
     layout.icon_y =
         layout.layout_y + (layout.content_h - layout.icon_px) / 2 - MIJIA_PANEL_ICON_UP_OFFSET;
-    layout.info_x = x + layout.left_w + 6;
+    layout.info_x = layout.icon_x + layout.icon_px + MIJIA_PANEL_ICON_INFO_GAP;
     const int screen_w = M5Cardputer.Display.width();
     layout.info_w = screen_w - layout.info_x - MIJIA_PANEL_RIGHT_PAD;
-    layout.right_top_y = layout.layout_y + INFO_LINE_H_2X + 2;
+    // 右栏文字区整体下移 MIJIA_PANEL_INFO_TOP_PAD
+    const int info_top = layout.layout_y + MIJIA_PANEL_INFO_TOP_PAD;
+    layout.right_top_y = info_top + INFO_LINE_H_2X + 2;
     return layout;
 }
 
@@ -389,19 +393,21 @@ void drawMijiaPanelHeader(const MijiaDevice* dev, const int device_idx, const in
                           const MijiaPanelLayout& layout) {
     char pager[12];
     snprintf(pager, sizeof(pager), "%d/%d", device_idx + 1, device_count);
+    // 右栏文字区上边距
+    const int name_y = layout.layout_y + MIJIA_PANEL_INFO_TOP_PAD;
 
     M5Cardputer.Display.setTextSize(1);
     const int pager_w = M5Cardputer.Display.textWidth(pager);
     const int content_right = M5Cardputer.Display.width() - MIJIA_PANEL_RIGHT_PAD;
     const int pager_x = content_right - pager_w;
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(pager_x, layout.layout_y);
+    M5Cardputer.Display.setCursor(pager_x, name_y);
     M5Cardputer.Display.print(pager);
 
     M5Cardputer.Display.setTextSize(MIJIA_PANEL_NAME_TEXT_SIZE);
     const int name_max_w = max(0, pager_x - layout.info_x - 6);
     M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
-    M5Cardputer.Display.setCursor(layout.info_x, layout.layout_y);
+    M5Cardputer.Display.setCursor(layout.info_x, name_y);
     if (dev != nullptr && dev->name[0] != '\0') {
         char name[32];
         strncpy(name, dev->name, sizeof(name) - 1);
@@ -444,7 +450,54 @@ int drawMijiaDevicePanel(const MijiaDevice* dev, const MijiaDevKind kind, const 
     drawMijiaPanelIcon(dev, kind, layout, ui);
     drawMijiaPanelHeader(dev, device_idx, device_count, layout);
     drawMijiaPanelRightColumn(dev, kind, layout, ui, net_status);
+    // 开启态：贴紧 header 的 2px 状态框（底角圆角）
+    drawMijiaControlPowerBorder(ui.power_known && ui.power_on);
     return max(layout.icon_y + layout.icon_px, layout.right_top_y) + 4;
+}
+
+// 画底角 2px 半径的四分之一圆环描边（仅左下 / 右下）
+static void drawBottomCornerStroke(const int cx, const int cy, const int radius, const int thickness,
+                                   const bool left_side, const uint16_t color) {
+    const int r_out = radius;
+    const int r_in = radius - thickness;
+    const int r_out2 = r_out * r_out;
+    const int r_in2 = r_in > 0 ? r_in * r_in : -1;
+    for (int dy = 0; dy <= r_out; dy++) {
+        for (int dx = 0; dx <= r_out; dx++) {
+            const int d2 = dx * dx + dy * dy;
+            if (d2 > r_out2 || d2 < r_in2) {
+                continue;
+            }
+            const int px = left_side ? (cx - dx) : (cx + dx);
+            const int py = cy + dy;
+            M5Cardputer.Display.drawPixel(px, py, color);
+        }
+    }
+}
+
+// 贴紧 header 下缘的 2px 状态框；仅左下/右下 4px 圆角（适配外壳）
+void drawMijiaControlPowerBorder(const bool power_on) {
+    const int screen_w = M5Cardputer.Display.width();
+    const int screen_h = M5Cardputer.Display.height();
+    // 从 header 底边起画，去掉内容区与 header 之间的空隙
+    constexpr int y = APP_HEADER_H;
+    const int h = screen_h - y;
+    constexpr int t = 2;
+    constexpr int r = 4;
+    if (h <= t + r || screen_w <= 2 * r) {
+        return;
+    }
+    const uint16_t color = power_on ? APP_COLOR_OK : BLACK;
+
+    // 顶边 + 左右直边（底角留给圆角）
+    M5Cardputer.Display.fillRect(0, y, screen_w, t, color);
+    M5Cardputer.Display.fillRect(0, y, t, h - r, color);
+    M5Cardputer.Display.fillRect(screen_w - t, y, t, h - r, color);
+    // 底边（圆角之间）
+    M5Cardputer.Display.fillRect(r, screen_h - t, screen_w - 2 * r, t, color);
+    // 左下 / 右下圆角描边
+    drawBottomCornerStroke(r, screen_h - r, r, t, true, color);
+    drawBottomCornerStroke(screen_w - 1 - r, screen_h - r, r, t, false, color);
 }
 
 // 流程状态小字（跟在 tag 后面）
@@ -569,13 +622,47 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
         }
 
         case MijiaDevKind::FAN_P5: {
-            const int cy = drawMijiaLabeledBar(x, y, "speed", ui.speed, CYAN, w);
-            int cx = x;
-            cx += drawMijiaStatusTag(cx, cy, ui.roll ? "roll ON" : "roll OFF", ui.roll, CYAN,
-                                     text_size);
-            const char* mode_text = ui.mode == 1 ? "nature" : "normal";
-            drawMijiaStatusTag(cx, cy, mode_text, true, APP_COLOR_MUTED, text_size);
-            return cy + MIJIA_TAG_H + 4;
+            int cy = drawMijiaLabeledBar(x, y, "speed", ui.speed, CYAN, w);
+
+            // 选项行：标签普通字 + 全部选项 tag，当前项高亮
+            const auto drawOptionRow = [&](const int row_y, const char* label,
+                                           const char* const* opts, const int opt_count,
+                                           const int selected_idx,
+                                           const uint16_t active_bg) -> int {
+                M5Cardputer.Display.setTextSize(text_size);
+                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+                M5Cardputer.Display.setCursor(x, row_y + 2);
+                M5Cardputer.Display.print(label);
+                int cx = x + M5Cardputer.Display.textWidth(label) + 4;
+                for (int i = 0; i < opt_count; i++) {
+                    cx += drawMijiaStatusTag(cx, row_y, opts[i], i == selected_idx, active_bg,
+                                             text_size);
+                }
+                return row_y + MIJIA_TAG_H + 2;
+            };
+
+            static const char* kRollOpts[] = {"ON", "OFF"};
+            cy = drawOptionRow(cy, "roll", kRollOpts, 2, ui.roll ? 0 : 1, CYAN);
+
+            static const char* kModeOpts[] = {"Nature", "Normal"};
+            cy = drawOptionRow(cy, "mode", kModeOpts, 2, ui.mode == 1 ? 0 : 1, GREEN);
+
+            // angle：纯文字 + 颜色区分当前项（不用 tag wrap）
+            static const char* kAngleOpts[] = {"30", "60", "90", "120", "140"};
+            static const int kAngles[] = {30, 60, 90, 120, 140};
+            M5Cardputer.Display.setTextSize(text_size);
+            M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+            M5Cardputer.Display.setCursor(x, cy + 2);
+            M5Cardputer.Display.print("angle");
+            int ang_cx = x + M5Cardputer.Display.textWidth("angle") + 4;
+            for (int i = 0; i < 5; i++) {
+                const bool sel = (ui.roll_angle == kAngles[i]);
+                M5Cardputer.Display.setTextColor(sel ? ORANGE : APP_COLOR_HINT, BLACK);
+                M5Cardputer.Display.setCursor(ang_cx, cy + 2);
+                M5Cardputer.Display.print(kAngleOpts[i]);
+                ang_cx += M5Cardputer.Display.textWidth(kAngleOpts[i]) + 4;
+            }
+            return cy + INFO_LINE_H + 2;
         }
 
         case MijiaDevKind::FAN_GENERIC:

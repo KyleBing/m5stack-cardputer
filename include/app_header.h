@@ -5,7 +5,7 @@ static constexpr int APP_HEADER_H = 28;
 static constexpr int APP_CONTENT_X = 4;
 static constexpr int APP_CONTENT_Y = APP_HEADER_H + 5;
 
-// 子界面 header：应用名 + BtnA(GO) 返回按钮
+// 子界面 header：应用名 + btngo 返回图标（右侧）
 void drawAppScreenHeader(const char* title, bool draw_divider = true);
 
 // 主菜单 header：Logo + 应用名 + 电量/连接状态 + 分页圆点

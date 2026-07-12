@@ -217,27 +217,107 @@ String getPressedKey() {
     return key;
 }
 
-// 排空键盘/BtnA：等待全部松开，再吞掉唤醒/松开产生的边沿事件
-void flushCardputerInput() {
+// btngo：边沿检测用（休眠唤醒后需 resetBtnGoEdge）
+static bool s_btngo_last_down = false;
+
+// btngo：提示标签（UI 文案）
+const char* btnGoHintLabel() {
+#if BTNGO_USE_KEYBOARD
+    return "`";  // 键盘左上角
+#else
+    return "GO";  // 侧边 BtnA
+#endif
+}
+
+void resetBtnGoEdge() {
+    s_btngo_last_down = false;
+}
+
+// btngo：是否按下返回主菜单键（边沿触发）
+bool wasBtnGoPressed() {
+#if BTNGO_USE_KEYBOARD
+    // 勿调用 Keyboard.isChange()：它会改写 _last_key_size，吞掉边沿导致其它按键失效
+    bool down = false;
+    if (M5Cardputer.Keyboard.isPressed()) {
+        const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+        for (const uint8_t hid : status.hid_keys) {
+            if (hid == BTNGO_HID) {
+                down = true;
+                break;
+            }
+        }
+        if (!down) {
+            for (const char c : status.word) {
+                if (c == BTNGO_KEY_CHAR || c == '~') {
+                    down = true;
+                    break;
+                }
+            }
+        }
+    }
+    const bool edge = down && !s_btngo_last_down;
+    s_btngo_last_down = down;
+    return edge;
+#else
+    return M5Cardputer.BtnA.wasPressed();
+#endif
+}
+
+// 排空键盘/BtnA：等待松开，再吞掉唤醒/松开产生的边沿事件
+void flushCardputerInput(const bool wait_btn_a) {
     constexpr uint32_t kReleaseTimeoutMs = 3000;
     const uint32_t start = millis();
     while (millis() - start < kReleaseTimeoutMs) {
         M5Cardputer.update();
-        const bool any_down =
-            M5Cardputer.BtnA.isPressed() || M5Cardputer.Keyboard.isPressed() != 0;
-        if (!any_down) {
-            break;
+        const bool kb_down = M5Cardputer.Keyboard.isPressed() != 0;
+        const bool btn_down = wait_btn_a && M5Cardputer.BtnA.isPressed();
+        if (!kb_down && !btn_down) {
+            // 再稳定几帧，避免矩阵抖动留下鬼键
+            bool stable = true;
+            for (int i = 0; i < 5; i++) {
+                delay(10);
+                M5Cardputer.update();
+                if (M5Cardputer.Keyboard.isPressed() != 0 ||
+                    (wait_btn_a && M5Cardputer.BtnA.isPressed())) {
+                    stable = false;
+                    break;
+                }
+            }
+            if (stable) {
+                break;
+            }
         }
         delay(10);
     }
 
-    // 吞掉 isChange / wasPressed，避免休眠期间按键在醒来后触发菜单
-    for (int i = 0; i < 8; i++) {
+    // 吞掉 isChange / wasPressed，同步 Keyboard._last_key_size
+    for (int i = 0; i < 12; i++) {
         M5Cardputer.update();
         (void)M5Cardputer.Keyboard.isChange();
         (void)M5Cardputer.BtnA.wasPressed();
         (void)M5Cardputer.BtnA.wasReleased();
         delay(10);
+    }
+    resetBtnGoEdge();
+
+    // 唤醒键仍可能按住：短等松开并再吞一次边沿（不阻塞太久）
+    if (!wait_btn_a) {
+        const uint32_t btn_start = millis();
+        while (millis() - btn_start < 1200) {
+            M5Cardputer.update();
+            if (!M5Cardputer.BtnA.isPressed()) {
+                break;
+            }
+            delay(10);
+        }
+        for (int i = 0; i < 6; i++) {
+            M5Cardputer.update();
+            (void)M5Cardputer.Keyboard.isChange();
+            (void)M5Cardputer.BtnA.wasPressed();
+            (void)M5Cardputer.BtnA.wasReleased();
+            delay(10);
+        }
+        resetBtnGoEdge();
     }
 }
 

@@ -61,8 +61,25 @@ void releaseConfigWifi();
 // 获取当前按下的可打印字符
 String getPressedKey();
 
-// 排空键盘/BtnA 状态：等全部松开后吞掉 isChange / wasPressed 边沿（休眠唤醒后用）
-void flushCardputerInput();
+// ===== btngo：返回主菜单键（可改）=====
+// 原硬件为侧边 BtnA(GO)/GPIO0；休眠唤醒仍固定用 BtnA。
+// 改回 BtnA：把 BTNGO_USE_KEYBOARD 改为 0。
+#ifndef BTNGO_USE_KEYBOARD
+#define BTNGO_USE_KEYBOARD 1
+#endif
+// 键盘左上角 `（grave / HID 0x35）；改键时同步改 CHAR 与 HID
+static constexpr char BTNGO_KEY_CHAR = '`';
+static constexpr uint8_t BTNGO_HID = 0x35;
+// 提示文案用短标签（如 "`" / "GO"）
+const char* btnGoHintLabel();
+// 本帧是否触发返回主菜单（边沿）
+bool wasBtnGoPressed();
+// 重置 btngo 边沿状态（休眠唤醒后调用）
+void resetBtnGoEdge();
+
+// 排空键盘/BtnA：等松开后吞掉边沿（休眠唤醒后用）
+// wait_btn_a=false：不因侧边 BtnA 仍按住而长时间阻塞（light sleep 唤醒后）
+void flushCardputerInput(bool wait_btn_a = true);
 
 // 翻页键：-1 上一页，0 无，1 下一页（方向键 / ; , . /）
 int getMenuNavDelta(const Keyboard_Class::KeysState& status);

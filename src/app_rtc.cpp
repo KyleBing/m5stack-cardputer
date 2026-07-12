@@ -235,6 +235,7 @@ static void drawTimeHelpScreen() {
     M5Cardputer.Display.setCursor(cx, y);
     M5Cardputer.Display.print("cd/sw ");
     cx += M5Cardputer.Display.textWidth("cd/sw ");
+    cx += drawTextBadge(cx, y, "BtnA", hint_ts);
     cx += drawTextBadge(cx, y, "sp", hint_ts);
     cx += drawTextBadge(cx, y, "ent", hint_ts);
 
@@ -619,6 +620,18 @@ void updateRtcApp() {
         case TimeMode::STOPWATCH:
             updateStopwatchApp();
             break;
+    }
+}
+
+// BtnA 须每帧轮询：wasPressed 仅在按下边沿当帧为 true
+void pollTimeAppBtnA() {
+    if (timeHelpVisible) {
+        return;
+    }
+    if (timeMode == TimeMode::COUNTDOWN) {
+        pollCountdownBtnA();
+    } else if (timeMode == TimeMode::STOPWATCH) {
+        pollStopwatchBtnA();
     }
 }
 

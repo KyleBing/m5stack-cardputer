@@ -169,7 +169,10 @@ static void showMenuNoAppPrompt(const char key) {
 
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
-    M5Cardputer.Display.drawCenterString("BtnA: menu", center_x, text_y + line_h + 4);
+    // btngo：返回主菜单提示
+    char hint[24];
+    snprintf(hint, sizeof(hint), "%s: menu", btnGoHintLabel());
+    M5Cardputer.Display.drawCenterString(hint, center_x, text_y + line_h + 4);
 }
 
 // 绘制单个菜单项：按键块 + 名称
@@ -236,11 +239,16 @@ bool handleMenuPageNav(const Keyboard_Class::KeysState& status) {
 
 // 菜单按键
 void handleMenuKey(const String& key) {
-    if (key.length() != 1) {
-        return;
+    // 休眠唤醒后可能残留鬼键导致多字符；取第一个字母
+    char c = '\0';
+    for (unsigned i = 0; i < key.length(); i++) {
+        const char ch = key[i];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+            c = ch;
+            break;
+        }
     }
-    const char c = key[0];
-    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+    if (c == '\0') {
         return;
     }
 
@@ -1549,14 +1557,15 @@ static void enterLightSleep() {
     M5Cardputer.Display.waitDisplay();
     M5Cardputer.Display.setBrightness(0);
     shutdownRadiosForSleep();
-    flushCardputerInput();
+    flushCardputerInput(true);
     prepareBtnAWake();
     esp_light_sleep_start();
 
-    flushCardputerInput();
+    // 先亮屏再清输入：避免等 BtnA 松开时黑屏卡住数秒
     sleepPhase = SleepPhase::NONE;
     M5Cardputer.Display.wakeup();
     M5Cardputer.Display.setBrightness(sleepSavedBrightness);
+    flushCardputerInput(false);
     showMenu();
 }
 
@@ -1790,7 +1799,8 @@ void loop() {
     // 休眠提示倒计时
     if (sleepPhase == SleepPhase::PROMPT_LIGHT || sleepPhase == SleepPhase::PROMPT_DEEP) {
         updateSleepPrompt();
-        if (M5Cardputer.BtnA.wasPressed()) {
+        // btngo：取消休眠倒计时并回主菜单（入睡唤醒仍用侧边 BtnA）
+        if (wasBtnGoPressed()) {
             sleepPhase = SleepPhase::NONE;
             showMenu();
             return;
@@ -1804,8 +1814,8 @@ void loop() {
         return;
     }
 
-    // BtnA：无 app 提示页 / 子界面返回主菜单
-    if (M5Cardputer.BtnA.wasPressed()) {
+    // btngo：无 app 提示页 / 子界面返回主菜单
+    if (wasBtnGoPressed()) {
         if (menuNoAppPrompt || currentState != AppState::MENU) {
             showMenu();
             return;
@@ -1863,6 +1873,8 @@ void loop() {
     }
 
     if (currentState == AppState::RTC) {
+        // BtnA 边沿只在当帧有效，不能跟 30ms 刷新绑在一起
+        pollTimeAppBtnA();
         static uint32_t lastRtcUpdateMs = 0;
         if (now - lastRtcUpdateMs >= 30) {
             lastRtcUpdateMs = now;

@@ -269,9 +269,11 @@ static void drawCountdownSetupBottomHints() {
     M5Cardputer.Display.print("input ");
     cx += M5Cardputer.Display.textWidth("input ");
 
-    cx += drawKeyBadge(cx, y, 'g', 1);
+    // BtnA（侧边唤醒键）开始，替代 g
+    cx += drawTextBadge(cx, y, "BtnA", 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, y);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT);
     M5Cardputer.Display.print("start ");
     cx += M5Cardputer.Display.textWidth("start ");
 
@@ -290,21 +292,45 @@ static void drawCountdownActionHints() {
         return;
     }
 
-    const char* g_text = "start";
+    const char* go_text = "start";
     if (cdPhase == CountdownPhase::RUNNING) {
-        g_text = "pause";
+        go_text = "pause";
     } else if (cdPhase == CountdownPhase::PAUSED) {
-        g_text = "resume";
+        go_text = "resume";
     } else if (cdPhase == CountdownPhase::FINISHED) {
-        g_text = "again";
+        go_text = "again";
     }
 
-    const KeyHintItem items[] = {
-        {'g', g_text},
-        {'r', "reset"},
-        {'p', "pure"},
-    };
-    drawTimeBottomHints(items, 3);
+    const int y = M5Cardputer.Display.height() - TIME_HINT_ROW_H;
+    const int screen_w = M5Cardputer.Display.width();
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, screen_w - APP_CONTENT_X * 2, TIME_HINT_ROW_H,
+                                 BLACK);
+
+    int cx = APP_CONTENT_X;
+    cx += drawTextBadge(cx, y, "BtnA", 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print(go_text);
+    cx += M5Cardputer.Display.textWidth(go_text);
+    M5Cardputer.Display.print(" ");
+    cx += M5Cardputer.Display.textWidth(" ");
+
+    const KeyHintItem extras[] = {{'r', "reset"}, {'p', "pure"}};
+    for (int i = 0; i < 2; i++) {
+        cx += drawKeyBadge(cx, y, extras[i].key, 1);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, y);
+        M5Cardputer.Display.print(extras[i].text);
+        cx += M5Cardputer.Display.textWidth(extras[i].text);
+        if (i != 1) {
+            M5Cardputer.Display.print(" ");
+            cx += M5Cardputer.Display.textWidth(" ");
+        }
+    }
+
+    drawTimeHelpHintRight("help");
 }
 
 static void drawCountdownChrome() {
@@ -507,6 +533,13 @@ void updateCountdownApp() {
     }
 }
 
+void pollCountdownBtnA() {
+    // wasPressed 只在按下当帧为 true，须每帧调用
+    if (M5Cardputer.BtnA.wasPressed()) {
+        cdToggleRun();
+    }
+}
+
 void handleCountdownApp(const Keyboard_Class::KeysState& status) {
     if (cdPhase == CountdownPhase::SETUP) {
         const int field_delta = getCountdownFieldDelta(status);
@@ -537,9 +570,7 @@ void handleCountdownApp(const Keyboard_Class::KeysState& status) {
     }
 
     const char key = cdPressedLetter(status);
-    if (key == 'g') {
-        cdToggleRun();
-    } else if (key == 'r') {
+    if (key == 'r') {
         cdResetToSetup();
     }
 }

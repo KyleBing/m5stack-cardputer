@@ -30,9 +30,9 @@ MiioResult miioSetBright(const char* ip, const char* token_hex, int bright);
 // 灯：设置色温（Kelvin，set_ct_abx）
 MiioResult miioSetColorTemp(const char* ip, const char* token_hex, int kelvin);
 
-// dmaker.fan.p5：查询 power/speed/roll/mode(0=normal 1=nature)
+// dmaker.fan.p5：查询 power/speed/roll/mode(0=normal 1=nature)/roll_angle
 MiioResult miioFanP5GetStatus(const char* ip, const char* token_hex, bool& on, int& speed,
-                              bool& roll, int& mode);
+                              bool& roll, int& mode, int& roll_angle);
 
 // dmaker.fan.p5：开关（s_power，bool）
 MiioResult miioFanP5SetPower(const char* ip, const char* token_hex, bool on);
@@ -45,6 +45,9 @@ MiioResult miioFanP5SetRoll(const char* ip, const char* token_hex, bool on);
 
 // dmaker.fan.p5：模式 normal / nature
 MiioResult miioFanP5SetMode(const char* ip, const char* token_hex, const char* mode);
+
+// dmaker.fan.p5：摇头角度 30/60/90/120/140（s_angle）
+MiioResult miioFanP5SetAngle(const char* ip, const char* token_hex, int angle);
 
 // 通用风扇：查询 power + speed_level(1-4)
 MiioResult miioFanGetStatus(const char* ip, const char* token_hex, bool& on, int& speed_level);

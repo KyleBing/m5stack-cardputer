@@ -545,7 +545,7 @@ MiioResult miioSetColorTemp(const char* ip, const char* token_hex, const int kel
 }
 
 MiioResult miioFanP5GetStatus(const char* ip, const char* token_hex, bool& on, int& speed,
-                              bool& roll, int& mode) {
+                              bool& roll, int& mode, int& roll_angle) {
     const MiioQueryScope query_scope(miioQueryTimeoutMs());
     char resp[384];
     if (!miioParseTokenHex(token_hex, g_token)) {
@@ -554,7 +554,8 @@ MiioResult miioFanP5GetStatus(const char* ip, const char* token_hex, bool& on, i
         return result;
     }
     if (!miioCommand(ip, "get_prop",
-                     "[\"power\",\"mode\",\"speed\",\"roll_enable\"]", resp, sizeof(resp))) {
+                     "[\"power\",\"mode\",\"speed\",\"roll_enable\",\"roll_angle\"]", resp,
+                     sizeof(resp))) {
         MiioResult result{};
         setResult(result, false, g_last_error);
         return result;
@@ -599,6 +600,11 @@ MiioResult miioFanP5GetStatus(const char* ip, const char* token_hex, bool& on, i
     mode = 0;
     if (arr[1].is<const char*>()) {
         mode = strcmp(arr[1].as<const char*>(), "nature") == 0 ? 1 : 0;
+    }
+
+    roll_angle = 90;
+    if (arr.size() >= 5 && arr[4].is<int>()) {
+        roll_angle = arr[4].as<int>();
     }
 
     char msg[32];
@@ -649,6 +655,19 @@ MiioResult miioFanP5SetMode(const char* ip, const char* token_hex, const char* m
     MiioResult result = miioRun(ip, token_hex, "s_mode", params, resp, sizeof(resp));
     if (result.ok) {
         setResult(result, true, mode);
+    }
+    return result;
+}
+
+MiioResult miioFanP5SetAngle(const char* ip, const char* token_hex, const int angle) {
+    char params[8];
+    snprintf(params, sizeof(params), "[%d]", angle);
+    char resp[256];
+    MiioResult result = miioRun(ip, token_hex, "s_angle", params, resp, sizeof(resp));
+    if (result.ok) {
+        char msg[16];
+        snprintf(msg, sizeof(msg), "ang %d", angle);
+        setResult(result, true, msg);
     }
     return result;
 }

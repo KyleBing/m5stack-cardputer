@@ -1,0 +1,45 @@
+---
+description: 固件改动完成后自动 pio upload 到设备
+alwaysApply: true
+---
+
+# 自动 Upload
+
+完成会影响设备运行的代码修改后，**自动**编译并烧录，无需等用户再要求。
+
+## 何时执行
+
+- 修改了 `src/`、`include/`、`platformio.ini` 等固件代码
+- 修改了 `data/` 下会打包进 LittleFS 的资源
+
+以下情况**不要** upload：
+
+- 仅回答问题、代码审阅、未改文件
+- 只改了文档、注释、`.cursor/rules/`、设计稿等非固件文件
+
+## 命令
+
+固件：
+
+```bash
+pio run -e m5stack-cardputer -t upload
+```
+
+仅当改动了 `data/` 时，额外执行：
+
+```bash
+pio run -e m5stack-cardputer -t uploadfs
+```
+
+在项目根目录运行；需要 USB 访问时申请 `all` 权限。
+
+## 执行顺序
+
+1. 先完成代码修改
+2. 再 upload（`data/` 有改动时先 `uploadfs`，再 `upload`）
+3. 向用户简要报告成功或失败原因
+
+## 失败处理
+
+- 设备未连接 / 端口占用：说明错误，不要反复重试
+- 编译失败：先修编译错误，再重新 upload

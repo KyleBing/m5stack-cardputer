@@ -27,7 +27,8 @@ struct MijiaUiState {
     int ct_max;
     int speed;       // 风扇 0-100 或 1-4
     bool roll;       // 风扇摇头
-    int mode;        // 净化器 0-5
+    int roll_angle;  // 风扇摇头角度（P5: 30/60/90/120/140）
+    int mode;        // 风扇 0=normal 1=nature；净化器 0-5
     int fan_level;   // 净化器风速 0-5
     int aqi;         // 净化器 AQI
     char status[48];
@@ -64,6 +65,9 @@ void mijiaToggleFanP5Roll(const MijiaDevice* dev, MijiaUiState& state);
 
 // 风扇 P5：切换模式
 void mijiaToggleFanP5Mode(const MijiaDevice* dev, MijiaUiState& state);
+
+// 风扇 P5：循环摇头角度 30/60/90/120/140
+void mijiaCycleFanP5Angle(const MijiaDevice* dev, MijiaUiState& state);
 
 // 通用风扇：设档位 1-4
 void mijiaSetFanSpeedLevel(const MijiaDevice* dev, MijiaUiState& state, int level);

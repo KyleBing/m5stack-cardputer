@@ -19,26 +19,79 @@ static uint32_t swElapsedMs() {
     return swAccumMs;
 }
 
+// 底栏：BtnA（侧边唤醒键）开始/暂停，替代原 g 键
 static void drawStopwatchActionHints() {
-    const char* g_text = "start";
+    const char* go_text = "start";
     if (swRunning) {
-        g_text = "pause";
+        go_text = "pause";
     } else if (swAccumMs > 0) {
-        g_text = "resume";
+        go_text = "resume";
     }
-    const KeyHintItem items[] = {
-        {'g', g_text},
-        {'r', "reset"},
-        {'p', "pure"},
-    };
-    drawTimeBottomHints(items, 3);
+
+    const int y = M5Cardputer.Display.height() - TIME_HINT_ROW_H;
+    const int screen_w = M5Cardputer.Display.width();
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, screen_w - APP_CONTENT_X * 2, TIME_HINT_ROW_H,
+                                 BLACK);
+
+    int cx = APP_CONTENT_X;
+    cx += drawTextBadge(cx, y, "BtnA", 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print(go_text);
+    cx += M5Cardputer.Display.textWidth(go_text);
+    M5Cardputer.Display.print(" ");
+    cx += M5Cardputer.Display.textWidth(" ");
+
+    const KeyHintItem extras[] = {{'r', "reset"}, {'p', "pure"}};
+    for (int i = 0; i < 2; i++) {
+        cx += drawKeyBadge(cx, y, extras[i].key, 1);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, y);
+        M5Cardputer.Display.print(extras[i].text);
+        cx += M5Cardputer.Display.textWidth(extras[i].text);
+        if (i != 1) {
+            M5Cardputer.Display.print(" ");
+            cx += M5Cardputer.Display.textWidth(" ");
+        }
+    }
+
+    drawTimeHelpHintRight("help");
+}
+
+// 与 countdown 相同的 RUN / PAUSED 提示
+static void drawStopwatchStateBanner() {
+    int area_y = 0;
+    int area_h = 0;
+    if (isTimePureMode()) {
+        getTimePureDisplayArea(area_y, area_h);
+    } else {
+        getTimeDisplayArea(area_y, area_h);
+    }
+
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, area_y + area_h - 10,
+                                 M5Cardputer.Display.width() - APP_CONTENT_X * 2, 10, BLACK);
+    if (swRunning) {
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
+        M5Cardputer.Display.print("RUN");
+    } else if (swAccumMs > 0) {
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
+        M5Cardputer.Display.print("PAUSED");
+    }
 }
 
 static void drawStopwatchChrome() {
     if (isTimePureMode()) {
+        drawStopwatchStateBanner();
         return;
     }
     drawTimeModeTag("SW");
+    drawStopwatchStateBanner();
     drawStopwatchActionHints();
 }
 
@@ -113,6 +166,17 @@ void enterStopwatchApp() {
     drawStopwatchApp(true);
 }
 
+static void swToggleRun() {
+    if (swRunning) {
+        swAccumMs += millis() - swStartMs;
+        swRunning = false;
+    } else {
+        swStartMs = millis();
+        swRunning = true;
+    }
+    drawStopwatchChrome();
+}
+
 void updateStopwatchApp() {
     if (!swRunning) {
         return;
@@ -125,15 +189,11 @@ void updateStopwatchApp() {
     }
 }
 
-static void swToggleRun() {
-    if (swRunning) {
-        swAccumMs += millis() - swStartMs;
-        swRunning = false;
-    } else {
-        swStartMs = millis();
-        swRunning = true;
+void pollStopwatchBtnA() {
+    // wasPressed 只在按下当帧为 true，须每帧调用
+    if (M5Cardputer.BtnA.wasPressed()) {
+        swToggleRun();
     }
-    drawStopwatchChrome();
 }
 
 void handleStopwatchApp(const Keyboard_Class::KeysState& status) {
@@ -142,9 +202,7 @@ void handleStopwatchApp(const Keyboard_Class::KeysState& status) {
         return;
     }
     const String key = getPressedKey();
-    if (key == "g") {
-        swToggleRun();
-    } else if (key == "r") {
+    if (key == "r") {
         swReset();
     }
 }
