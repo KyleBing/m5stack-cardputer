@@ -14,6 +14,7 @@
 #include "app_icon_demo.h"
 #include "app_cursor.h"
 #include "app_morse.h"
+#include "app_ir.h"
 #include "app_font_demo.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
@@ -56,7 +57,9 @@ enum class AppState {
     WEB,
     CURSOR,
     MORSE,
+    IR,
     FONT_DEMO,
+    LED,
 };
 
 struct MenuItem {
@@ -79,6 +82,7 @@ static const MenuItem MENU_ITEMS[] = {
     {'c', "Cur", "Cursor", AppState::CURSOR},
     {'v', "Ver", "Version", AppState::VERSION},
     {'j', "Mor", "Morse", AppState::MORSE},
+    {'x', "IR", "Infrared", AppState::IR},
 
     // 系统功能测试
     {'i', "Info", "Info", AppState::INFO},
@@ -92,6 +96,7 @@ static const MenuItem MENU_ITEMS[] = {
     {'f', "Fnt", "Font", AppState::FONT_DEMO},
     {'n', "InI2", "InI2", AppState::IN_I2C},
     {'e', "ExI2", "ExI2", AppState::EX_I2C},
+    {'p', "LED", "RGB LED", AppState::LED},
 };
 
 static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
@@ -208,9 +213,14 @@ void drawMenuPage() {
     }
 }
 
+// 离开 LED 测试页时关灯并恢复背光
+static void leaveLedApp();
+
 // 绘制主菜单（header + 可翻页菜单区）
 void showMenu() {
     menuNoAppPrompt = false;
+    leaveCursorApp();
+    leaveLedApp();
     stopConfigWebServer();
     releaseConfigWifi();
     currentState = AppState::MENU;
@@ -412,23 +422,23 @@ static void drawVersionFireworks() {
         drawFireworkBurst(cx, cy, color, glow);
     }
 
-    constexpr int spark_margin = 8;
-    for (int i = 0; i < random(8, 14); i++) {
-        int cx = 0;
-        int cy = 0;
-        if (!pickVersionFireworkSpot(y_min, screen_h, layout, spark_margin, cx, cy)) {
-            continue;
-        }
-        const uint16_t color = versionColor565(palette[random(5)]);
-        const int rays = random(3, 6);
-        for (int r = 0; r < rays; r++) {
-            const float angle = random(0, 628) / 100.0f;
-            const int len = random(2, 6);
-            M5Cardputer.Display.drawLine(cx, cy, cx + static_cast<int>(cosf(angle) * len),
-                                         cy + static_cast<int>(sinf(angle) * len), color);
-        }
-        M5Cardputer.Display.drawPixel(cx, cy, color);
-    }
+    // constexpr int spark_margin = 8;
+    // for (int i = 0; i < random(8, 14); i++) {
+    //     int cx = 0;
+    //     int cy = 0;
+    //     if (!pickVersionFireworkSpot(y_min, screen_h, layout, spark_margin, cx, cy)) {
+    //         continue;
+    //     }
+    //     const uint16_t color = versionColor565(palette[random(5)]);
+    //     const int rays = random(3, 6);
+    //     for (int r = 0; r < rays; r++) {
+    //         const float angle = random(0, 628) / 100.0f;
+    //         const int len = random(2, 6);
+    //         M5Cardputer.Display.drawLine(cx, cy, cx + static_cast<int>(cosf(angle) * len),
+    //                                      cy + static_cast<int>(sinf(angle) * len), color);
+    //     }
+    //     M5Cardputer.Display.drawPixel(cx, cy, color);
+    // }
 }
 
 // Version 页 logo + 版本信息（叠在烟花背景上）
@@ -761,153 +771,393 @@ void drawBmiApp() {
 
 // ===== INFO =====
 
-static constexpr int INFO_ICON_SIZE = ICON_INFO_H;
-static constexpr int INFO_CARD_LINE_H = 8;
-static constexpr int INFO_CARD_GAP = 6;
-static int infoScrollIdx = 0;
-static bool infoPowerCardVisible = false;
-static int infoPowerCardY = -1;
+static constexpr int INFO_TITLE_SIZE = 2;
+static constexpr int INFO_BODY_SIZE = 1;
+static constexpr int INFO_TITLE_GAP = 2;
+static constexpr int INFO_MAX_LINES = 8;
+static constexpr int INFO_MAX_PAGES = 6;
+static constexpr int INFO_POWER_PAGE = 3; // Chip Mem Fw Power Net Run
+
+static int infoPage = 0;
+static bool infoPowerPageVisible = false;
+static int infoPowerBodyY = -1;
 static char infoLastBat[8] = "";
 static char infoLastVolt[12] = "";
+static char infoLastCurr[12] = "";
 static char infoLastChg[8] = "";
+static char infoLastVbus[12] = "";
 
-struct InfoListItem {
-    void (*draw_icon)(int x, int y, uint16_t color);
-    const char* l1_label;
-    const char* l1_value;
-    const char* l2_label;
-    const char* l2_value;
-    const char* l3_label;
-    const char* l3_value;
+struct InfoLine {
+    const char* label;
+    const char* value;
 };
 
-// 绘制卡片右侧单行（行高 8px，与 24px 图标对齐）
-static void drawInfoCardLine(const int x, const int y, const char* label, const char* value) {
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
-    M5Cardputer.Display.setCursor(x, y);
-    M5Cardputer.Display.print(label);
-    M5Cardputer.Display.print(": ");
-    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
-    M5Cardputer.Display.print(value);
-}
+struct InfoSection {
+    const char* title;
+    InfoLine lines[INFO_MAX_LINES];
+    int line_count;
+};
 
 static void resetInfoPowerCache() {
     infoLastBat[0] = '\0';
     infoLastVolt[0] = '\0';
+    infoLastCurr[0] = '\0';
     infoLastChg[0] = '\0';
+    infoLastVbus[0] = '\0';
 }
 
-static void copyInfoPowerCache(const InfoListItem& item) {
-    strncpy(infoLastBat, item.l1_value, sizeof(infoLastBat) - 1);
-    infoLastBat[sizeof(infoLastBat) - 1] = '\0';
-    strncpy(infoLastVolt, item.l2_value, sizeof(infoLastVolt) - 1);
-    infoLastVolt[sizeof(infoLastVolt) - 1] = '\0';
-    strncpy(infoLastChg, item.l3_value, sizeof(infoLastChg) - 1);
-    infoLastChg[sizeof(infoLastChg) - 1] = '\0';
+// 复位原因文案
+static const char* infoResetReasonText() {
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:
+            return "poweron";
+        case ESP_RST_EXT:
+            return "ext";
+        case ESP_RST_SW:
+            return "sw";
+        case ESP_RST_PANIC:
+            return "panic";
+        case ESP_RST_INT_WDT:
+            return "int_wdt";
+        case ESP_RST_TASK_WDT:
+            return "task_wdt";
+        case ESP_RST_WDT:
+            return "wdt";
+        case ESP_RST_DEEPSLEEP:
+            return "deepsleep";
+        case ESP_RST_BROWNOUT:
+            return "brownout";
+        case ESP_RST_SDIO:
+            return "sdio";
+        default:
+            return "unknown";
+    }
 }
 
-// 绘制单项：左图标 + 右三行
-static void drawInfoCardItem(const InfoListItem& item, const int x, const int y) {
-    item.draw_icon(x, y, APP_COLOR_VALUE);
-    const int text_x = x + INFO_ICON_SIZE + 6;
-    drawInfoCardLine(text_x, y, item.l1_label, item.l1_value);
-    drawInfoCardLine(text_x, y + INFO_CARD_LINE_H, item.l2_label, item.l2_value);
-    drawInfoCardLine(text_x, y + INFO_CARD_LINE_H * 2, item.l3_label, item.l3_value);
+// Flash 模式文案
+static const char* infoFlashModeText() {
+    switch (ESP.getFlashChipMode()) {
+        case FM_QIO:
+            return "QIO";
+        case FM_QOUT:
+            return "QOUT";
+        case FM_DIO:
+            return "DIO";
+        case FM_DOUT:
+            return "DOUT";
+        default:
+            return "N/A";
+    }
 }
 
-// 组装 Info 列表数据
-static int buildInfoListItems(InfoListItem* items, const int max_items) {
-    const esp_chip_info_t chipInfo = []() {
-        esp_chip_info_t info{};
-        esp_chip_info(&info);
-        return info;
-    }();
+// 芯片特性摘要（WiFi/BT/BLE）
+static void formatInfoFeatures(char* out, const size_t out_size, const uint32_t features) {
+    out[0] = '\0';
+    auto append = [&](const char* token) {
+        if (out[0] != '\0') {
+            strncat(out, "/", out_size - strlen(out) - 1);
+        }
+        strncat(out, token, out_size - strlen(out) - 1);
+    };
+    if (features & CHIP_FEATURE_WIFI_BGN) {
+        append("WiFi");
+    }
+    if (features & CHIP_FEATURE_BT) {
+        append("BT");
+    }
+    if (features & CHIP_FEATURE_BLE) {
+        append("BLE");
+    }
+    if (out[0] == '\0') {
+        strncpy(out, "none", out_size - 1);
+        out[out_size - 1] = '\0';
+    }
+}
+
+// 运行时长
+static void formatInfoUptime(char* out, const size_t out_size) {
+    const uint32_t sec = millis() / 1000UL;
+    const uint32_t h = sec / 3600UL;
+    const uint32_t m = (sec % 3600UL) / 60UL;
+    const uint32_t s = sec % 60UL;
+    if (h > 0) {
+        snprintf(out, out_size, "%luh %lum %lus", static_cast<unsigned long>(h),
+                 static_cast<unsigned long>(m), static_cast<unsigned long>(s));
+    } else if (m > 0) {
+        snprintf(out, out_size, "%lum %lus", static_cast<unsigned long>(m),
+                 static_cast<unsigned long>(s));
+    } else {
+        snprintf(out, out_size, "%lus", static_cast<unsigned long>(s));
+    }
+}
+
+// MAC（efuse，不依赖 WiFi 已连接）
+static void formatInfoMac(char* out, const size_t out_size) {
+    const uint64_t mac = ESP.getEfuseMac();
+    snprintf(out, out_size, "%02X:%02X:%02X:%02X:%02X:%02X",
+             static_cast<unsigned>((mac >> 0) & 0xFF), static_cast<unsigned>((mac >> 8) & 0xFF),
+             static_cast<unsigned>((mac >> 16) & 0xFF), static_cast<unsigned>((mac >> 24) & 0xFF),
+             static_cast<unsigned>((mac >> 32) & 0xFF), static_cast<unsigned>((mac >> 40) & 0xFF));
+}
+
+static void infoAddLine(InfoSection& sec, const char* label, const char* value) {
+    if (sec.line_count >= INFO_MAX_LINES) {
+        return;
+    }
+    sec.lines[sec.line_count++] = {label, value};
+}
+
+// 组装各分区（一区一页）
+static int buildInfoSections(InfoSection* sections, const int max_sections) {
+    if (sections == nullptr || max_sections <= 0) {
+        return 0;
+    }
+
+    esp_chip_info_t chipInfo{};
+    esp_chip_info(&chipInfo);
 
     static char buf_model[24];
+    static char buf_rev[8];
     static char buf_cores[8];
     static char buf_freq[16];
+    static char buf_feat[20];
     static char buf_flash[16];
+    static char buf_fspd[16];
+    static char buf_fmode[8];
     static char buf_heap[16];
-    static char buf_sdk[20];
+    static char buf_htot[16];
+    static char buf_hmin[16];
+    static char buf_psram[16];
+    static char buf_sdk[24];
+    static char buf_sketch[16];
+    static char buf_free_sk[16];
     static char buf_bat[8];
     static char buf_volt[12];
+    static char buf_curr[12];
     static char buf_chg[8];
+    static char buf_vbus[12];
+    static char buf_mac[20];
+    static char buf_ssid[20];
+    static char buf_ip[20];
+    static char buf_rssi[12];
+    static char buf_net[16];
+    static char buf_uptime[24];
+    static char buf_reset[16];
 
     snprintf(buf_model, sizeof(buf_model), "%s", ESP.getChipModel());
+    snprintf(buf_rev, sizeof(buf_rev), "%d", ESP.getChipRevision());
     snprintf(buf_cores, sizeof(buf_cores), "%d", chipInfo.cores);
     snprintf(buf_freq, sizeof(buf_freq), "%d MHz", ESP.getCpuFreqMHz());
+    formatInfoFeatures(buf_feat, sizeof(buf_feat), chipInfo.features);
+
     snprintf(buf_flash, sizeof(buf_flash), "%d MB", ESP.getFlashChipSize() / (1024 * 1024));
+    snprintf(buf_fspd, sizeof(buf_fspd), "%d MHz", ESP.getFlashChipSpeed() / 1000000);
+    strncpy(buf_fmode, infoFlashModeText(), sizeof(buf_fmode));
+    buf_fmode[sizeof(buf_fmode) - 1] = '\0';
     snprintf(buf_heap, sizeof(buf_heap), "%d KB", ESP.getFreeHeap() / 1024);
+    snprintf(buf_htot, sizeof(buf_htot), "%d KB", ESP.getHeapSize() / 1024);
+    snprintf(buf_hmin, sizeof(buf_hmin), "%d KB", ESP.getMinFreeHeap() / 1024);
+    if (ESP.getPsramSize() > 0) {
+        snprintf(buf_psram, sizeof(buf_psram), "%d/%d KB", ESP.getFreePsram() / 1024,
+                 ESP.getPsramSize() / 1024);
+    } else {
+        strncpy(buf_psram, "none", sizeof(buf_psram));
+        buf_psram[sizeof(buf_psram) - 1] = '\0';
+    }
+
     snprintf(buf_sdk, sizeof(buf_sdk), "%s", ESP.getSdkVersion());
+    snprintf(buf_sketch, sizeof(buf_sketch), "%d KB", ESP.getSketchSize() / 1024);
+    snprintf(buf_free_sk, sizeof(buf_free_sk), "%d KB", ESP.getFreeSketchSpace() / 1024);
+
     snprintf(buf_bat, sizeof(buf_bat), "%d%%", M5Cardputer.Power.getBatteryLevel());
     snprintf(buf_volt, sizeof(buf_volt), "%dmV", M5Cardputer.Power.getBatteryVoltage());
+    const int32_t curr_ma = M5Cardputer.Power.getBatteryCurrent();
+    const int16_t vbus_mv = M5Cardputer.Power.getVBUSVoltage();
+    if (vbus_mv >= 0) {
+        snprintf(buf_curr, sizeof(buf_curr), "%dmA", static_cast<int>(curr_ma));
+        snprintf(buf_vbus, sizeof(buf_vbus), "%dmV", vbus_mv);
+    } else {
+        strncpy(buf_curr, "N/A", sizeof(buf_curr));
+        buf_curr[sizeof(buf_curr) - 1] = '\0';
+        strncpy(buf_vbus, "N/A", sizeof(buf_vbus));
+        buf_vbus[sizeof(buf_vbus) - 1] = '\0';
+    }
     strncpy(buf_chg, getChargingStatusText(), sizeof(buf_chg));
     buf_chg[sizeof(buf_chg) - 1] = '\0';
 
+    formatInfoMac(buf_mac, sizeof(buf_mac));
+    if (WiFi.status() == WL_CONNECTED) {
+        strncpy(buf_net, "up", sizeof(buf_net));
+        buf_net[sizeof(buf_net) - 1] = '\0';
+        strncpy(buf_ssid, WiFi.SSID().c_str(), sizeof(buf_ssid) - 1);
+        buf_ssid[sizeof(buf_ssid) - 1] = '\0';
+        strncpy(buf_ip, WiFi.localIP().toString().c_str(), sizeof(buf_ip) - 1);
+        buf_ip[sizeof(buf_ip) - 1] = '\0';
+        snprintf(buf_rssi, sizeof(buf_rssi), "%d dBm", WiFi.RSSI());
+    } else {
+        strncpy(buf_net, "down", sizeof(buf_net));
+        buf_net[sizeof(buf_net) - 1] = '\0';
+        strncpy(buf_ssid, "-", sizeof(buf_ssid));
+        buf_ssid[sizeof(buf_ssid) - 1] = '\0';
+        strncpy(buf_ip, "-", sizeof(buf_ip));
+        buf_ip[sizeof(buf_ip) - 1] = '\0';
+        strncpy(buf_rssi, "-", sizeof(buf_rssi));
+        buf_rssi[sizeof(buf_rssi) - 1] = '\0';
+    }
+
+    formatInfoUptime(buf_uptime, sizeof(buf_uptime));
+    strncpy(buf_reset, infoResetReasonText(), sizeof(buf_reset));
+    buf_reset[sizeof(buf_reset) - 1] = '\0';
+
     int count = 0;
-    if (count < max_items) {
-        items[count++] = {drawIconInfoChip, "model", buf_model, "cores", buf_cores, "freq",
-                          buf_freq};
+
+    // Chip
+    if (count < max_sections) {
+        InfoSection& sec = sections[count++];
+        sec = {};
+        sec.title = "Chip";
+        infoAddLine(sec, "model", buf_model);
+        infoAddLine(sec, "rev", buf_rev);
+        infoAddLine(sec, "cores", buf_cores);
+        infoAddLine(sec, "freq", buf_freq);
+        infoAddLine(sec, "feat", buf_feat);
     }
-    if (count < max_items) {
-        items[count++] = {drawIconInfoStorage, "flash", buf_flash, "heap", buf_heap, "sdk", buf_sdk};
+
+    // Mem
+    if (count < max_sections) {
+        InfoSection& sec = sections[count++];
+        sec = {};
+        sec.title = "Mem";
+        infoAddLine(sec, "flash", buf_flash);
+        infoAddLine(sec, "fspd", buf_fspd);
+        infoAddLine(sec, "fmode", buf_fmode);
+        infoAddLine(sec, "heap", buf_heap);
+        infoAddLine(sec, "htot", buf_htot);
+        infoAddLine(sec, "hmin", buf_hmin);
+        infoAddLine(sec, "psram", buf_psram);
     }
-    if (count < max_items) {
-        items[count++] = {drawIconInfoBattery, "bat", buf_bat, "volt", buf_volt, "chg", buf_chg};
+
+    // Fw
+    if (count < max_sections) {
+        InfoSection& sec = sections[count++];
+        sec = {};
+        sec.title = "Fw";
+        infoAddLine(sec, "sdk", buf_sdk);
+        infoAddLine(sec, "sketch", buf_sketch);
+        infoAddLine(sec, "free", buf_free_sk);
     }
+
+    // Power
+    if (count < max_sections) {
+        InfoSection& sec = sections[count++];
+        sec = {};
+        sec.title = "Power";
+        infoAddLine(sec, "bat", buf_bat);
+        infoAddLine(sec, "volt", buf_volt);
+        infoAddLine(sec, "curr", buf_curr);
+        infoAddLine(sec, "chg", buf_chg);
+        infoAddLine(sec, "vbus", buf_vbus);
+    }
+
+    // Net
+    if (count < max_sections) {
+        InfoSection& sec = sections[count++];
+        sec = {};
+        sec.title = "Net";
+        infoAddLine(sec, "mac", buf_mac);
+        infoAddLine(sec, "link", buf_net);
+        infoAddLine(sec, "ssid", buf_ssid);
+        infoAddLine(sec, "ip", buf_ip);
+        infoAddLine(sec, "rssi", buf_rssi);
+    }
+
+    // Run
+    if (count < max_sections) {
+        InfoSection& sec = sections[count++];
+        sec = {};
+        sec.title = "Run";
+        infoAddLine(sec, "up", buf_uptime);
+        infoAddLine(sec, "reset", buf_reset);
+    }
+
     return count;
 }
 
-static int getInfoVisibleCount() {
-    const int avail_h = M5Cardputer.Display.height() - APP_CONTENT_Y - 12;
-    return avail_h / (INFO_ICON_SIZE + INFO_CARD_GAP);
+// 底栏：箭头徽章 + page 页码
+static void drawInfoPageHints(const int page, const int page_count) {
+    const int hint_y = M5Cardputer.Display.height() - 12;
+    int cx = APP_CONTENT_X;
+    cx += drawArrowBadge(cx, hint_y, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("page ");
+    char pager[12];
+    snprintf(pager, sizeof(pager), "%d/%d", page + 1, page_count);
+    M5Cardputer.Display.print(pager);
 }
 
-// 绘制 Info 列表（支持滚动）
-void drawInfoApp() {
-    InfoListItem items[6];
-    const int item_count = buildInfoListItems(items, 6);
-    const int visible = getInfoVisibleCount();
-    const int max_scroll = item_count > visible ? item_count - visible : 0;
-    if (infoScrollIdx > max_scroll) {
-        infoScrollIdx = max_scroll;
+// 绘制一区：标题 x2 + 正文小字
+static int drawInfoSection(const InfoSection& sec, const int x, const int y) {
+    M5Cardputer.Display.setTextSize(INFO_TITLE_SIZE);
+    M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(sec.title);
+
+    int cy = y + INFO_LINE_H_2X + INFO_TITLE_GAP;
+    for (int i = 0; i < sec.line_count; i++) {
+        drawInfoLineAt(x, cy, sec.lines[i].label, sec.lines[i].value, INFO_BODY_SIZE);
+        cy += INFO_LINE_H;
     }
-    if (infoScrollIdx < 0) {
-        infoScrollIdx = 0;
+    return y + INFO_LINE_H_2X + INFO_TITLE_GAP; // 正文起始 y（局部刷新用）
+}
+
+// 绘制 Info：一页一区
+void drawInfoApp() {
+    InfoSection sections[INFO_MAX_PAGES];
+    const int page_count = buildInfoSections(sections, INFO_MAX_PAGES);
+    if (page_count <= 0) {
+        return;
+    }
+    if (infoPage >= page_count) {
+        infoPage = page_count - 1;
+    }
+    if (infoPage < 0) {
+        infoPage = 0;
     }
 
     beginAppScreen("Info");
-    infoPowerCardVisible = false;
-    infoPowerCardY = -1;
-    int y = APP_CONTENT_Y;
-    for (int i = 0; i < visible; i++) {
-        const int idx = infoScrollIdx + i;
-        if (idx >= item_count) {
-            break;
+    infoPowerPageVisible = false;
+    infoPowerBodyY = -1;
+
+    const int body_y = drawInfoSection(sections[infoPage], APP_CONTENT_X, APP_CONTENT_Y);
+    if (infoPage == INFO_POWER_PAGE) {
+        infoPowerPageVisible = true;
+        infoPowerBodyY = body_y;
+        // 缓存电源行，供局部刷新对比
+        const InfoSection& power = sections[INFO_POWER_PAGE];
+        if (power.line_count >= 5) {
+            strncpy(infoLastBat, power.lines[0].value, sizeof(infoLastBat) - 1);
+            infoLastBat[sizeof(infoLastBat) - 1] = '\0';
+            strncpy(infoLastVolt, power.lines[1].value, sizeof(infoLastVolt) - 1);
+            infoLastVolt[sizeof(infoLastVolt) - 1] = '\0';
+            strncpy(infoLastCurr, power.lines[2].value, sizeof(infoLastCurr) - 1);
+            infoLastCurr[sizeof(infoLastCurr) - 1] = '\0';
+            strncpy(infoLastChg, power.lines[3].value, sizeof(infoLastChg) - 1);
+            infoLastChg[sizeof(infoLastChg) - 1] = '\0';
+            strncpy(infoLastVbus, power.lines[4].value, sizeof(infoLastVbus) - 1);
+            infoLastVbus[sizeof(infoLastVbus) - 1] = '\0';
         }
-        drawInfoCardItem(items[idx], APP_CONTENT_X, y);
-        if (idx == 2) {
-            infoPowerCardVisible = true;
-            infoPowerCardY = y;
-            copyInfoPowerCache(items[idx]);
-        }
-        y += INFO_ICON_SIZE + INFO_CARD_GAP;
     }
 
-    if (item_count > visible) {
-        char hint[24];
-        snprintf(hint, sizeof(hint), "%d/%d  , . scroll", infoScrollIdx + 1, max_scroll + 1);
-        drawHintText(APP_CONTENT_X, M5Cardputer.Display.height() - 12, hint);
-    }
+    drawInfoPageHints(infoPage, page_count);
 }
 
-// Info 列表滚动
+// Info 翻页（循环）
 bool handleInfoPageNav(const Keyboard_Class::KeysState& status) {
-    InfoListItem items[6];
-    const int item_count = buildInfoListItems(items, 6);
-    const int visible = getInfoVisibleCount();
-    if (item_count <= visible) {
+    InfoSection sections[INFO_MAX_PAGES];
+    const int page_count = buildInfoSections(sections, INFO_MAX_PAGES);
+    if (page_count <= 1) {
         return false;
     }
 
@@ -916,50 +1166,61 @@ bool handleInfoPageNav(const Keyboard_Class::KeysState& status) {
         return false;
     }
 
-    const int max_scroll = item_count - visible;
-    infoScrollIdx = constrain(infoScrollIdx + delta, 0, max_scroll);
+    infoPage = (infoPage + delta + page_count) % page_count;
     drawInfoApp();
     return true;
 }
 
 void enterInfoApp() {
-    infoScrollIdx = 0;
+    infoPage = 0;
     resetInfoPowerCache();
     drawInfoApp();
 }
 
-// Info 页只局部刷新会变化的电源行，避免整屏闪烁
+// 电源行局部刷新（小字）
 static void updateInfoPowerLine(const int y, const char* label, const char* value, char* cache,
                                 const size_t cache_size) {
     if (strncmp(cache, value, cache_size) == 0 && cache[0] != '\0') {
         return;
     }
 
-    const int text_x = APP_CONTENT_X + INFO_ICON_SIZE + 6;
-    const int w = M5Cardputer.Display.width() - text_x - APP_CONTENT_X;
-    M5Cardputer.Display.fillRect(text_x, y, w, INFO_CARD_LINE_H, BLACK);
-    drawInfoCardLine(text_x, y, label, value);
+    const int w = M5Cardputer.Display.width() - APP_CONTENT_X * 2;
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, w, INFO_LINE_H, BLACK);
+    drawInfoLineAt(APP_CONTENT_X, y, label, value, INFO_BODY_SIZE);
     strncpy(cache, value, cache_size - 1);
     cache[cache_size - 1] = '\0';
 }
 
 void updateInfoApp() {
-    if (!infoPowerCardVisible || infoPowerCardY < 0) {
+    if (!infoPowerPageVisible || infoPowerBodyY < 0) {
         return;
     }
 
-    InfoListItem items[6];
-    if (buildInfoListItems(items, 6) < 3) {
+    InfoSection sections[INFO_MAX_PAGES];
+    if (buildInfoSections(sections, INFO_MAX_PAGES) <= INFO_POWER_PAGE) {
         return;
     }
 
-    const InfoListItem& power = items[2];
-    updateInfoPowerLine(infoPowerCardY, power.l1_label, power.l1_value, infoLastBat,
+    const InfoSection& power = sections[INFO_POWER_PAGE];
+    if (power.line_count < 5) {
+        return;
+    }
+
+    int y = infoPowerBodyY;
+    updateInfoPowerLine(y, power.lines[0].label, power.lines[0].value, infoLastBat,
                         sizeof(infoLastBat));
-    updateInfoPowerLine(infoPowerCardY + INFO_CARD_LINE_H, power.l2_label, power.l2_value,
-                        infoLastVolt, sizeof(infoLastVolt));
-    updateInfoPowerLine(infoPowerCardY + INFO_CARD_LINE_H * 2, power.l3_label, power.l3_value,
-                        infoLastChg, sizeof(infoLastChg));
+    y += INFO_LINE_H;
+    updateInfoPowerLine(y, power.lines[1].label, power.lines[1].value, infoLastVolt,
+                        sizeof(infoLastVolt));
+    y += INFO_LINE_H;
+    updateInfoPowerLine(y, power.lines[2].label, power.lines[2].value, infoLastCurr,
+                        sizeof(infoLastCurr));
+    y += INFO_LINE_H;
+    updateInfoPowerLine(y, power.lines[3].label, power.lines[3].value, infoLastChg,
+                        sizeof(infoLastChg));
+    y += INFO_LINE_H;
+    updateInfoPowerLine(y, power.lines[4].label, power.lines[4].value, infoLastVbus,
+                        sizeof(infoLastVbus));
 }
 
 // ===== MIC =====
@@ -1306,6 +1567,221 @@ void handleSpeakerApp(const String& key) {
         M5Cardputer.Speaker.stop();
     }
     drawSpeakerApp(key);
+}
+
+// ===== RGB LED（Stamp-S3A 板载 WS2812，GPIO21；与背光共电）=====
+
+static constexpr int LED_PIN_FALLBACK = 21;
+static bool g_led_app_active = false;
+static bool g_led_on = false;
+static uint8_t g_led_r = 255;
+static uint8_t g_led_g = 255;
+static uint8_t g_led_b = 255;
+static uint8_t g_led_saved_brightness = 30;
+
+// 取板载 RGB 数据线脚位
+static int getRgbLedPin() {
+    const int pin = M5.getPin(m5::pin_name_t::rgb_led);
+    return pin >= 0 ? pin : LED_PIN_FALLBACK;
+}
+
+// 写入板载 WS2812（neopixelWrite 按 RGB 字节序发送）
+static void writeRgbLed(const uint8_t r, const uint8_t g, const uint8_t b) {
+    neopixelWrite(static_cast<uint8_t>(getRgbLedPin()), r, g, b);
+}
+
+static void applyRgbLed() {
+    if (g_led_on) {
+        writeRgbLed(g_led_r, g_led_g, g_led_b);
+    } else {
+        writeRgbLed(0, 0, 0);
+    }
+}
+
+static void leaveLedApp() {
+    if (!g_led_app_active) {
+        return;
+    }
+    writeRgbLed(0, 0, 0);
+    g_led_on = false;
+    g_led_app_active = false;
+    M5Cardputer.Display.setBrightness(g_led_saved_brightness);
+}
+
+static const char* ledColorName() {
+    if (!g_led_on) {
+        return "OFF";
+    }
+    if (g_led_r == 255 && g_led_g == 0 && g_led_b == 0) {
+        return "RED";
+    }
+    if (g_led_r == 0 && g_led_g == 255 && g_led_b == 0) {
+        return "GREEN";
+    }
+    if (g_led_r == 0 && g_led_g == 0 && g_led_b == 255) {
+        return "BLUE";
+    }
+    if (g_led_r == 255 && g_led_g == 255 && g_led_b == 0) {
+        return "YELLOW";
+    }
+    if (g_led_r == 0 && g_led_g == 255 && g_led_b == 255) {
+        return "CYAN";
+    }
+    if (g_led_r == 255 && g_led_g == 0 && g_led_b == 255) {
+        return "MAGENTA";
+    }
+    if (g_led_r == 255 && g_led_g == 255 && g_led_b == 255) {
+        return "WHITE";
+    }
+    return "RGB";
+}
+
+// 状态 wrap 背景色（与当前 LED 颜色对应）
+static uint16_t ledStateBgColor() {
+    if (!g_led_on) {
+        return DARKGREY;
+    }
+    if (g_led_r == 255 && g_led_g == 0 && g_led_b == 0) {
+        return RED;
+    }
+    if (g_led_r == 0 && g_led_g == 255 && g_led_b == 0) {
+        return GREEN;
+    }
+    if (g_led_r == 0 && g_led_g == 0 && g_led_b == 255) {
+        return BLUE;
+    }
+    if (g_led_r == 255 && g_led_g == 255 && g_led_b == 0) {
+        return YELLOW;
+    }
+    if (g_led_r == 0 && g_led_g == 255 && g_led_b == 255) {
+        return CYAN;
+    }
+    if (g_led_r == 255 && g_led_g == 0 && g_led_b == 255) {
+        return MAGENTA;
+    }
+    if (g_led_r == 255 && g_led_g == 255 && g_led_b == 255) {
+        return WHITE;
+    }
+    return M5Cardputer.Display.color565(g_led_r, g_led_g, g_led_b);
+}
+
+// 亮色底用黑字，暗色底用白字
+static uint16_t ledStateFgColor() {
+    if (!g_led_on) {
+        return LIGHTGREY;
+    }
+    const int lum = (g_led_r * 299 + g_led_g * 587 + g_led_b * 114) / 1000;
+    return lum >= 140 ? BLACK : WHITE;
+}
+
+void drawLedApp() {
+    beginAppScreen("RGB LED");
+
+    int y = APP_CONTENT_Y;
+
+    // state 标签 + 对应颜色 wrap
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y + 2);
+    M5Cardputer.Display.print("state ");
+
+    const char* name = ledColorName();
+    const uint16_t bg = ledStateBgColor();
+    const uint16_t fg = ledStateFgColor();
+    const int label_w = M5Cardputer.Display.textWidth("state ");
+    const int tw = M5Cardputer.Display.textWidth(name);
+    constexpr int pad_x = 6;
+    constexpr int pad_y = 2;
+    const int bx = APP_CONTENT_X + label_w;
+    const int bw = tw + pad_x * 2;
+    const int bh = 16 + pad_y * 2;
+    M5Cardputer.Display.fillRoundRect(bx, y, bw, bh, 4, bg);
+    M5Cardputer.Display.setTextColor(fg, bg);
+    M5Cardputer.Display.setCursor(bx + pad_x, y + pad_y);
+    M5Cardputer.Display.print(name);
+
+    y += bh + 6;
+
+    char pin_buf[16];
+    snprintf(pin_buf, sizeof(pin_buf), "GPIO%d", getRgbLedPin());
+    drawInfoLineAt(APP_CONTENT_X, y, "pin", pin_buf, 2);
+    y += INFO_LINE_H_2X + 2;
+    drawInfoLineAt(APP_CONTENT_X, y, "note", "look Stamp module", 2);
+
+    // 底栏 tip
+    const int hint_y = M5Cardputer.Display.height() - 12;
+    const KeyHintItem hints[] = {
+        {'t', "toggle"},
+        {'1', "R"},
+        {'2', "G"},
+        {'3', "B"},
+        {'0', "off"},
+    };
+    drawKeyHintsRow(APP_CONTENT_X, hint_y, hints, 5, 1);
+}
+
+void enterLedApp() {
+    // 背光与 RGB 共电：进入时拉满亮度，离开时恢复
+    g_led_saved_brightness = M5Cardputer.Display.getBrightness();
+    M5Cardputer.Display.setBrightness(255);
+    g_led_app_active = true;
+    g_led_on = true;
+    g_led_r = 255;
+    g_led_g = 255;
+    g_led_b = 255;
+    applyRgbLed();
+    drawLedApp();
+}
+
+void handleLedApp(const String& key) {
+    if (key.length() == 0) {
+        return;
+    }
+    const char c = key[0];
+    if (c == 't' || c == 'T') {
+        g_led_on = !g_led_on;
+    } else if (c == '0') {
+        g_led_on = false;
+    } else if (c == '1') {
+        g_led_on = true;
+        g_led_r = 255;
+        g_led_g = 0;
+        g_led_b = 0;
+    } else if (c == '2') {
+        g_led_on = true;
+        g_led_r = 0;
+        g_led_g = 255;
+        g_led_b = 0;
+    } else if (c == '3') {
+        g_led_on = true;
+        g_led_r = 0;
+        g_led_g = 0;
+        g_led_b = 255;
+    } else if (c == '4') {
+        g_led_on = true;
+        g_led_r = 255;
+        g_led_g = 255;
+        g_led_b = 0;
+    } else if (c == '5') {
+        g_led_on = true;
+        g_led_r = 0;
+        g_led_g = 255;
+        g_led_b = 255;
+    } else if (c == '6') {
+        g_led_on = true;
+        g_led_r = 255;
+        g_led_g = 0;
+        g_led_b = 255;
+    } else if (c == '7') {
+        g_led_on = true;
+        g_led_r = 255;
+        g_led_g = 255;
+        g_led_b = 255;
+    } else {
+        return;
+    }
+    applyRgbLed();
+    drawLedApp();
 }
 
 // ===== IN I2C =====
@@ -1758,8 +2234,14 @@ void enterApp(const AppState state) {
         case AppState::MORSE:
             enterMorseApp();
             break;
+        case AppState::IR:
+            enterIrApp();
+            break;
         case AppState::FONT_DEMO:
             enterFontDemoApp();
+            break;
+        case AppState::LED:
+            enterLedApp();
             break;
         default:
             break;
@@ -1831,7 +2313,8 @@ void loop() {
         if (currentState == AppState::MENU) {
             updateMenuHeaderStatus(getMenuPageCount());
         } else if (currentState != AppState::SLEEP && currentState != AppState::DISP &&
-                   !(currentState == AppState::RTC && isTimePureMode())) {
+                   !(currentState == AppState::RTC && isTimePureMode()) &&
+                   !(currentState == AppState::CURSOR && isCursorDisplayBlanked())) {
             updateAppHeaderStatus();
         }
     }
@@ -1869,9 +2352,13 @@ void loop() {
     } else if (currentState == AppState::WEB) {
         updateWebApp();
     } else if (currentState == AppState::CURSOR) {
+        // BtnA 边沿只在当帧有效，需每帧轮询
+        pollCursorBtnA();
         updateCursorApp();
     } else if (currentState == AppState::MORSE) {
         updateMorseApp();
+    } else if (currentState == AppState::IR) {
+        updateIrApp();
     }
 
     if (currentState == AppState::RTC) {
@@ -1968,9 +2455,19 @@ void loop() {
                     handleMorseApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
+            case AppState::IR:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleIrApp(M5Cardputer.Keyboard.keysState());
+                }
+                break;
             case AppState::FONT_DEMO:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleFontDemoNav(M5Cardputer.Keyboard.keysState());
+                }
+                break;
+            case AppState::LED:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleLedApp(getPressedKey());
                 }
                 break;
             default:

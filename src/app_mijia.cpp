@@ -14,22 +14,25 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-static int mijiaDeviceIdx = 0;
-static bool mijiaOverviewMode = false;
-static bool mijiaOverviewGridMode = false;
-static bool mijiaHelpVisible = false;
-static int mijiaOverviewScrollIdx = 0;
-static int mijiaOverviewEntryDeviceIdx = 0;
-static MijiaUiState mijiaUi{};
-static int mijiaRefreshGen = 0;
-static volatile bool mijiaRefreshTaskRunning = false;
-static volatile bool mijiaRefreshTimedOut = false;
-static volatile bool mijiaNeedRedraw = false;
-static uint32_t mijiaRefreshDeadlineMs = 0;
 
-static constexpr uint32_t MIJIA_REFRESH_TIMEOUT_MS = 2000;
-static constexpr uint32_t MIJIA_GRID_REFRESH_TIMEOUT_MS = 2000;
-static constexpr uint32_t MIJIA_WIFI_TIMEOUT_MS = 12000;
+// 米家状态值定义
+static int mijiaDeviceIdx = 0;  // 当前选中的设备索引
+static bool mijiaOverviewMode = false; // 是否在概览模式
+static bool mijiaOverviewGridMode = false; // 是否在宫格模式
+static bool mijiaHelpVisible = false; // 是否在帮助模式
+static int mijiaOverviewScrollIdx = 0; // 概览模式下的滚动索引
+static int mijiaOverviewEntryDeviceIdx = 0; // 概览模式下的入口设备索引
+static MijiaUiState mijiaUi{}; // 当前设备的UI状态
+static int mijiaRefreshGen = 0; // 刷新生成器
+static volatile bool mijiaRefreshTaskRunning = false; // 刷新任务是否正在运行
+static volatile bool mijiaRefreshTimedOut = false; // 刷新任务是否超时
+static volatile bool mijiaNeedRedraw = false; // 是否需要重绘
+static uint32_t mijiaRefreshDeadlineMs = 0; // 刷新任务的截止时间
+
+// 米家状态值常量定义
+static constexpr uint32_t MIJIA_REFRESH_TIMEOUT_MS = 2000;  // 刷新任务超时时间
+static constexpr uint32_t MIJIA_GRID_REFRESH_TIMEOUT_MS = 2000;  // 宫格刷新任务超时时间
+static constexpr uint32_t MIJIA_WIFI_TIMEOUT_MS = 12000;  // 联网超时时间
 
 enum class MijiaWifiPhase : uint8_t {
     IDLE,
@@ -352,7 +355,8 @@ static void queueMijiaGridCellRefresh(const int device_idx) {
 }
 
 static void flushMijiaGridCellUpdates() {
-    if (!mijiaOverviewMode || !mijiaOverviewGridMode) {
+    // Help 打开时不刷格子，避免盖住帮助页
+    if (!mijiaOverviewMode || !mijiaOverviewGridMode || mijiaHelpVisible) {
         mijiaOverviewPendingCellCount = 0;
         return;
     }
@@ -398,6 +402,10 @@ static void finishMijiaRefreshTask(const int job_gen) {
         MijiaRefreshJob* job = mijiaDeferredJob;
         mijiaDeferredJob = nullptr;
         scheduleMijiaJob(job);
+        return;
+    }
+    // Help 打开时结束宫格查询链，不再排下一个
+    if (mijiaHelpVisible) {
         return;
     }
     // 宫格概览队列优先于控制页单设备查询
@@ -1081,14 +1089,7 @@ static void drawMijiaGridBottomHints(const AppConfig& cfg) {
     M5Cardputer.Display.setCursor(cx, hint_y);
     M5Cardputer.Display.print("tog");
 
-    const KeyHintItem help_item = {'h', "help"};
-    const int help_w = mijiaMeasureHintItem(help_item);
-    const int hx = screen_w - APP_CONTENT_X - help_w;
-    cx = hx + drawKeyBadge(hx, hint_y, 'h', 1);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, hint_y);
-    M5Cardputer.Display.print("help");
+    drawHelpHintRight("help");
 }
 
 // 绘制概览底栏按键提示
@@ -1264,6 +1265,9 @@ static int mijiaGridSlotForIdx(const int device_idx) {
 
 // 局部刷新宫格单个格子（状态变更或选中切换）
 static void refreshMijiaGridCell(const int device_idx) {
+    if (mijiaHelpVisible) {
+        return;
+    }
     const int slot = mijiaGridSlotForIdx(device_idx);
     if (slot < 0) {
         return;
@@ -1988,7 +1992,16 @@ void pollMijiaBtnA() {
 void handleMijiaApp(const String& key) {
     if (key == "h") {
         if (mijiaOverviewGridMode || !mijiaOverviewMode) {
+            const bool opening = !mijiaHelpVisible;
             mijiaHelpVisible = !mijiaHelpVisible;
+            // 打开 Help：取消宫格状态查询，避免返回结果盖住帮助页
+            if (opening && mijiaOverviewGridMode) {
+                cancelMijiaPendingJobs();
+            }
+            // 关闭 Help：继续查本页尚未拿到状态的设备
+            if (!opening && mijiaOverviewMode && mijiaOverviewGridMode) {
+                requestMijiaOverviewPageRefresh();
+            }
             redrawMijiaScreen();
         }
         return;

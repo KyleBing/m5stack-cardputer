@@ -10,12 +10,14 @@
 
 ### 新增
 
+- **Infrared** 红外应用（`x`）：板载 GPIO44 发射；TV（Samsung / Sony / LG / Panasonic / NEC）常用短码；空调（美的 / 格力 / 海尔 / 奥克斯 / 海信 / 小米）状态帧；`t` 切类型，方向键切品牌/字段，Enter 发送，`h` Help
 - **Mijia** 空气炸锅（`careli.fryer.*`）MIoT 控制：查询状态 / 目标温与时长；`o`/`i`/`t`/BtnA 开始或取消烹饪；`-`/`=` 调温；`[`/`]` 调时
 - **Mijia** 灯色相（HSV）：`bslamp2` / `color8` / `color2` 支持 `j`/`k` 调节，控制页显示彩虹进度条
 - **Mijia** 控制页 / Grid：侧键 **BtnA** 切换当前设备开关（同 `t`）
 
 ### 改进
 
+- **Help**：各应用底栏 `h help` 统一右下角（`drawHelpHintRight`）；IR Help 标题 2x；IR 主界面 `type` 2x
 - **Mijia** 炸锅开锅流程：先写温时长再 `start-cook`，失败回退自定义烹饪（含 `recipe-name`）；开关后回读状态，待机不算“开”，未进入烹饪时提示 `need wake?`
 - **Mijia** Help：内容靠上排列；能排开用 2x，否则 1x；风扇 / 炸锅固定 1x
 - **Mijia** 控制页布局：图标左右留白、信息区上边距；风扇 / 彩灯进度条改为紧凑 1x；宫格状态标签缩短为 ≤3 字符

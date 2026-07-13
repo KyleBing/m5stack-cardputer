@@ -81,12 +81,24 @@ static int g_last_countdown_sec = -1;
 static uint32_t g_last_activity_ms = 0;
 static uint32_t g_last_scheduled_refresh_ms = 0;
 static bool g_periodic_refresh_active = false;
+// 熄屏：关背光/面板，后台仍按 5 分钟刷新
+static bool g_display_blanked = false;
+static uint8_t g_saved_brightness = 30;
+// Help 页（方向键翻页）
+static bool g_help_visible = false;
+static int g_help_page = 0;
+static constexpr int CURSOR_HELP_PAGE_COUNT = 3;
+static constexpr int CURSOR_HELP_LINE_H = 11;
 
 static void beginCursorFetch(const CursorFetchMode mode);
 static void beginCursorChartFetch(const int days, const bool silent);
 static void startChartFetchTimer(const int days);
 static int chartFetchCountdownSec();
 static void refreshChartLoadingFrame();
+static void blankCursorDisplay();
+static void wakeCursorDisplay(bool redraw);
+static void drawCursorHelpPage();
+static void drawCursorHelpHints();
 
 // 记录用户操作，重置空闲刷新计时
 static void noteCursorActivity() {
@@ -137,6 +149,35 @@ static void redrawCursorContent() {
         beginAppScreen("Cursor");
         g_screen_ready = true;
     }
+}
+
+// BtnA：灭屏（后台刷新继续）
+static void blankCursorDisplay() {
+  if (g_display_blanked) {
+    return;
+  }
+  g_saved_brightness = M5Cardputer.Display.getBrightness();
+  if (g_saved_brightness == 0) {
+    g_saved_brightness = 30;
+  }
+  M5Cardputer.Display.sleep();
+  M5Cardputer.Display.waitDisplay();
+  M5Cardputer.Display.setBrightness(0);
+  g_display_blanked = true;
+}
+
+// 任意键 / BtnA：亮屏；redraw 时用内存最新数据重画
+static void wakeCursorDisplay(const bool redraw) {
+  if (!g_display_blanked) {
+    return;
+  }
+  M5Cardputer.Display.wakeup();
+  M5Cardputer.Display.setBrightness(g_saved_brightness);
+  g_display_blanked = false;
+  if (redraw) {
+    g_screen_ready = false;
+    drawCursorApp();
+  }
 }
 
 // Base64url 解码 JWT payload 段
@@ -634,7 +675,7 @@ static void drawChartLoadingOverlay(const int x, const int y, const int w, const
 
 // 仅刷新图表 loading 区与 header（拉取过程中每秒更新倒计时）
 static void refreshChartLoadingFrame() {
-  if (g_silent_fetch || g_page == CursorPage::SUMMARY) {
+  if (g_display_blanked || g_silent_fetch || g_page == CursorPage::SUMMARY) {
     return;
   }
   const int y = APP_CONTENT_Y;
@@ -679,16 +720,117 @@ static void drawCursorHints() {
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
   M5Cardputer.Display.setCursor(cx, hint_y);
-  M5Cardputer.Display.print("page ");
-  cx += M5Cardputer.Display.textWidth("page ");
+  M5Cardputer.Display.print("pg ");
+  cx += M5Cardputer.Display.textWidth("pg ");
   cx += drawKeyBadge(cx, hint_y, 'r', 1);
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
   M5Cardputer.Display.setCursor(cx, hint_y);
-  M5Cardputer.Display.setTextColor(APP_COLOR_OK);
-  M5Cardputer.Display.print("refresh");
+  M5Cardputer.Display.print("rf ");
+  cx += M5Cardputer.Display.textWidth("rf ");
+  cx += drawTextBadge(cx, hint_y, "BtnA", 1);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-  M5Cardputer.Display.setCursor(APP_CONTENT_X + 120, hint_y);
+  M5Cardputer.Display.setCursor(cx, hint_y);
+  M5Cardputer.Display.print("off ");
+  cx += M5Cardputer.Display.textWidth("off ");
+  M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
+  M5Cardputer.Display.setCursor(cx, hint_y);
   M5Cardputer.Display.print(page_text);
+  drawHelpHintRight("help");
+}
+
+// Help：x2 分区标题
+static int drawCursorHelpTitle(const int y, const char* title) {
+  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+  M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+  M5Cardputer.Display.print(title);
+  return y + INFO_LINE_H_2X;
+}
+
+// Help：x1 纯文本行
+static int drawCursorHelpText(const int y, const char* text) {
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+  M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+  M5Cardputer.Display.print(text);
+  return y + CURSOR_HELP_LINE_H;
+}
+
+// Help：按键徽章 + 说明（徽章后恢复 hint 色）
+static int drawCursorHelpKey(const int y, const char key, const char* text) {
+  const int cx = APP_CONTENT_X + drawKeyBadge(APP_CONTENT_X, y, key, 1);
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+  M5Cardputer.Display.setCursor(cx, y + 1);
+  M5Cardputer.Display.print(text);
+  return y + CURSOR_HELP_LINE_H;
+}
+
+// Help：文本徽章（如 BtnA）+ 说明
+static int drawCursorHelpBadge(const int y, const char* badge, const char* text) {
+  const int cx = APP_CONTENT_X + drawTextBadge(APP_CONTENT_X, y, badge, 1);
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+  M5Cardputer.Display.setCursor(cx, y + 1);
+  M5Cardputer.Display.print(text);
+  return y + CURSOR_HELP_LINE_H;
+}
+
+// Help：箭头徽章 + 说明
+static int drawCursorHelpArrows(const int y, const char* text) {
+  const int cx = APP_CONTENT_X + drawArrowBadge(APP_CONTENT_X, y, 1);
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+  M5Cardputer.Display.setCursor(cx, y + 1);
+  M5Cardputer.Display.print(text);
+  return y + CURSOR_HELP_LINE_H;
+}
+
+static void drawCursorHelpHints() {
+  const int hint_y = M5Cardputer.Display.height() - 12;
+  M5Cardputer.Display.fillRect(APP_CONTENT_X, hint_y, 236, 12, BLACK);
+  int cx = APP_CONTENT_X;
+  cx += drawArrowBadge(cx, hint_y, 1);
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+  M5Cardputer.Display.setCursor(cx, hint_y);
+  M5Cardputer.Display.print("page ");
+  cx += M5Cardputer.Display.textWidth("page ");
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%d/%d", g_help_page + 1, CURSOR_HELP_PAGE_COUNT);
+  M5Cardputer.Display.setCursor(cx, hint_y);
+  M5Cardputer.Display.print(buf);
+  drawHelpHintRight("close");
+}
+
+static void drawCursorHelpPage() {
+  beginAppScreen("Help");
+  int y = APP_CONTENT_Y;
+
+  if (g_help_page == 0) {
+    y = drawCursorHelpTitle(y, "Keys");
+    y = drawCursorHelpArrows(y, "usage / 7d / 30d");
+    y = drawCursorHelpKey(y, 'r', "refresh now");
+    y = drawCursorHelpBadge(y, "BtnA", "screen off");
+    y = drawCursorHelpText(y, "any key wakes");
+    y = drawCursorHelpKey(y, 'h', "help / close");
+  } else if (g_help_page == 1) {
+    y = drawCursorHelpTitle(y, "Refresh");
+    y = drawCursorHelpText(y, "idle 1m: first auto");
+    y = drawCursorHelpText(y, "then every 5m");
+    y = drawCursorHelpText(y, "silent: no UI flash");
+    y = drawCursorHelpText(y, "blank: still refreshes");
+  } else {
+    y = drawCursorHelpTitle(y, "WiFi");
+    y = drawCursorHelpText(y, "connect only to fetch");
+    y = drawCursorHelpText(y, "disconnect after done");
+    y = drawCursorHelpText(y, "token: web config");
+  }
+
+  drawCursorHelpHints();
+  updateAppHeaderStatus();
 }
 
 static void drawCursorSummaryPage(const int y) {
@@ -783,6 +925,15 @@ static void drawCursorChartPage(const int days, const float* daily_cents, const 
 }
 
 void drawCursorApp() {
+  // 熄屏时只更新内存数据，亮屏后再画
+  if (g_display_blanked) {
+    return;
+  }
+  // Help 打开时保持帮助页（后台静默刷新不打断）
+  if (g_help_visible) {
+    drawCursorHelpPage();
+    return;
+  }
   redrawCursorContent();
 
   int y = APP_CONTENT_Y;
@@ -921,7 +1072,32 @@ void enterCursorApp() {
   g_page = CursorPage::SUMMARY;
   g_periodic_refresh_active = false;
   g_last_activity_ms = millis();
+  g_display_blanked = false;
+  g_help_visible = false;
+  g_help_page = 0;
   beginCursorFetch(CursorFetchMode::FULL);
+}
+
+// 离开 Cursor：若熄屏则先亮屏，避免菜单黑屏
+void leaveCursorApp() {
+  g_help_visible = false;
+  wakeCursorDisplay(false);
+}
+
+bool isCursorDisplayBlanked() {
+  return g_display_blanked;
+}
+
+// BtnA：亮屏时灭屏，灭屏时亮屏（wasPressed 仅单帧有效）
+void pollCursorBtnA() {
+  if (!M5Cardputer.BtnA.wasPressed()) {
+    return;
+  }
+  if (g_display_blanked) {
+    wakeCursorDisplay(true);
+  } else {
+    blankCursorDisplay();
+  }
 }
 
 void updateCursorApp() {
@@ -1030,13 +1206,41 @@ void updateCursorApp() {
 }
 
 void handleCursorApp(const Keyboard_Class::KeysState& status) {
+  // 任意键亮屏，本帧不执行翻页/刷新
+  if (g_display_blanked) {
+    wakeCursorDisplay(true);
+    return;
+  }
+
+  const String key = getPressedKey();
+  if (g_help_visible) {
+    noteCursorActivity();
+    const int delta = getMenuNavDelta(status);
+    if (delta != 0) {
+      g_help_page = (g_help_page + delta + CURSOR_HELP_PAGE_COUNT) % CURSOR_HELP_PAGE_COUNT;
+      drawCursorHelpPage();
+      return;
+    }
+    if (key == "h") {
+      g_help_visible = false;
+      g_screen_ready = false;
+      drawCursorApp();
+    }
+    return;
+  }
+
   noteCursorActivity();
+  if (key == "h") {
+    g_help_visible = true;
+    g_help_page = 0;
+    drawCursorHelpPage();
+    return;
+  }
   const int delta = getMenuNavDelta(status);
   if (delta != 0) {
     cursorPageNav(delta);
     return;
   }
-  const String key = getPressedKey();
   if (key == "r") {
     beginCursorFetch(CursorFetchMode::FULL);
   }

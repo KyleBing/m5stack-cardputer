@@ -120,6 +120,29 @@ void drawKeyHintsRow(const int x, const int y, const KeyHintItem* items, const i
     }
 }
 
+// 底栏右下角 h help/close
+void drawHelpHintRight(const char* help_label) {
+    const char* label = (help_label != nullptr && help_label[0] != '\0') ? help_label : "help";
+    const int y = M5Cardputer.Display.height() - 12;
+    const int screen_w = M5Cardputer.Display.width();
+    const KeyHintItem help_item = {'h', label};
+
+    M5Cardputer.Display.setTextSize(1);
+    const char letter = static_cast<char>(toupper(static_cast<unsigned char>(help_item.key)));
+    const char str[2] = {letter, '\0'};
+    const int tw = M5Cardputer.Display.textWidth(str);
+    constexpr int pad_x = 2;
+    const int badge_w = tw + pad_x * 2 + 3;
+    const int help_w = badge_w + M5Cardputer.Display.textWidth(help_item.text);
+    const int hx = screen_w - APP_CONTENT_X - help_w;
+
+    int cx = hx + drawKeyBadge(hx, y, help_item.key, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print(help_item.text);
+}
+
 // 提示小字：',' 左箭头，'.' 右箭头
 void drawHintText(const int x, const int y, const char* text, const int text_size) {
     const int size = (text_size == 2) ? 2 : 1;

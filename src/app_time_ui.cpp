@@ -14,19 +14,6 @@ void drawTimeModeTag(const char* tag) {
     M5Cardputer.Display.print(tag);
 }
 
-static int measureKeyHintItem(const KeyHintItem& item, const int text_size) {
-    const int size = (text_size == 2) ? 2 : 1;
-    const char letter = static_cast<char>(toupper(static_cast<unsigned char>(item.key)));
-    const char str[2] = {letter, '\0'};
-    M5Cardputer.Display.setTextSize(size);
-    const int tw = M5Cardputer.Display.textWidth(str);
-    const int th = 8 * size;
-    constexpr int pad_x = 2;
-    const int bw = tw + pad_x * 2;
-    const int badge_w = bw + 3;
-    return badge_w + M5Cardputer.Display.textWidth(item.text);
-}
-
 static int drawKeyHintItemAt(const int x, const int y, const KeyHintItem& item, const int text_size,
                              const uint16_t color) {
     int cx = x;
@@ -61,20 +48,11 @@ void drawTimeBottomHints(const KeyHintItem* action_items, const int action_count
     }
 
     const KeyHintItem help_item = {'h', help_label != nullptr ? help_label : "help"};
-    M5Cardputer.Display.setTextSize(1);
-    const int help_w = measureKeyHintItem(help_item, 1);
-    const int hx = screen_w - APP_CONTENT_X - help_w;
-    drawKeyHintItemAt(hx, y, help_item, 1, APP_COLOR_HINT);
+    drawHelpHintRight(help_item.text);
 }
 
 void drawTimeHelpHintRight(const char* help_label) {
-    const int y = M5Cardputer.Display.height() - TIME_HINT_ROW_H;
-    const int screen_w = M5Cardputer.Display.width();
-    const KeyHintItem help_item = {'h', help_label != nullptr ? help_label : "help"};
-    M5Cardputer.Display.setTextSize(1);
-    const int help_w = measureKeyHintItem(help_item, 1);
-    const int hx = screen_w - APP_CONTENT_X - help_w;
-    drawKeyHintItemAt(hx, y, help_item, 1, APP_COLOR_HINT);
+    drawHelpHintRight(help_label != nullptr ? help_label : "help");
 }
 
 void getTimeDisplayArea(int& area_y, int& area_h) {

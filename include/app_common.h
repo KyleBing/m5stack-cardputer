@@ -49,6 +49,9 @@ struct KeyHintItem {
 void drawKeyHintsRow(int x, int y, const KeyHintItem* items, int item_count, int text_size = 1,
                      uint16_t color = APP_COLOR_HINT);
 
+// 底栏右下角 h help（各应用统一位置）
+void drawHelpHintRight(const char* help_label = "help");
+
 // 提示小字：',' 左箭头，'.' 右箭头
 void drawHintText(int x, int y, const char* text, int text_size = 1);
 
