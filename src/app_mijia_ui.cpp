@@ -194,8 +194,8 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         tag.bg = APP_COLOR_LABEL;
         return;
     }
-    // 其他操作中间态（亮度/风速/摇头等）
-    if (strcmp(s, "query...") == 0 || strcmp(s, "listening") == 0 || strcmp(s, "bright...") == 0 ||
+    // 其他操作中间态（亮度/风速/摇头等）；listening 放后面，避免盖住已有 BLE 读数
+    if (strcmp(s, "query...") == 0 || strcmp(s, "bright...") == 0 ||
         strcmp(s, "ct...") == 0 || strcmp(s, "hue...") == 0 || strcmp(s, "speed...") == 0 ||
         strcmp(s, "roll...") == 0 || strcmp(s, "mode...") == 0 || strcmp(s, "angle...") == 0 ||
         strcmp(s, "fan lv...") == 0 || strcmp(s, "temp...") == 0 || strcmp(s, "time...") == 0) {
@@ -240,8 +240,23 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         strncpy(tag.text, "R?", sizeof(tag.text));
         return;
     }
+    if (strcmp(s, "listening") == 0) {
+        strncpy(tag.text, "...", sizeof(tag.text));
+        return;
+    }
+    if (strstr(s, "ago") != nullptr) {
+        strncpy(tag.text, "BLE", sizeof(tag.text));
+        tag.active = true;
+        tag.bg = CYAN;
+        return;
+    }
     if (strcmp(s, "ble") == 0) {
         strncpy(tag.text, "BLE", sizeof(tag.text));
+        return;
+    }
+    if (strcmp(s, "no key") == 0) {
+        strncpy(tag.text, "KEY", sizeof(tag.text));
+        tag.bg = APP_COLOR_WARN;
         return;
     }
     if (strcmp(s, "no adv") == 0 || strcmp(s, "parse fail") == 0 ||
@@ -565,6 +580,46 @@ void drawMijiaPowerTags(const int x, const int y, const bool known, const bool o
     }
 }
 
+// 说明与数值均为 2x；key 左、value 右对齐
+static int drawMijiaKvRow(const int x, const int y, const int w, const char* key, const char* value,
+                          const uint16_t value_color, const int text_size) {
+    const int row_h = text_size == 2 ? INFO_LINE_H_2X : INFO_LINE_H;
+
+    M5Cardputer.Display.setTextSize(text_size);
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(key);
+
+    M5Cardputer.Display.setTextColor(value_color, BLACK);
+    M5Cardputer.Display.drawRightString(value, x + w, y);
+    return y + row_h + 2;
+}
+
+// 温湿度控制页右下角：r 仍可主动扫（避开底边状态框）
+static void drawMijiaBleRefreshHint() {
+    const int screen_w = M5Cardputer.Display.width();
+    const int screen_h = M5Cardputer.Display.height();
+    // 底边状态框约 2~3px，再留 2px 空隙，避免贴边
+    constexpr int border_b = 3;
+    constexpr int gap = 2;
+    constexpr int badge_h = 10; // 1x 徽章高
+    const int y = screen_h - border_b - gap - badge_h;
+    M5Cardputer.Display.setTextSize(1);
+    const char* label = "scan";
+    const int text_w = M5Cardputer.Display.textWidth(label);
+    const int badge_w = M5Cardputer.Display.textWidth("R") + 4 + 3;
+    const int total_w = badge_w + text_w;
+    int cx = screen_w - MIJIA_PANEL_RIGHT_PAD - total_w;
+    if (cx < 0) {
+        cx = 0;
+    }
+    cx += drawKeyBadge(cx, y, 'r', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK); // 徽章后恢复 tip 色
+    M5Cardputer.Display.setCursor(cx, y + 1);
+    M5Cardputer.Display.print(label);
+}
+
 // 说明在左、数值右对齐（上行）；下行进度条
 int drawMijiaBarRow(const int x, const int y, const char* label, const char* value,
                     const int percent, const int total_w, const uint16_t fill_color,
@@ -854,35 +909,37 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
         }
 
         case MijiaDevKind::SENSOR_HT: {
+            // 温湿度常分开发；两行固定占位，后到的字段补齐
             int cy = y;
-            M5Cardputer.Display.setTextSize(text_size);
+            char buf[16];
             if (ui.temp_known) {
-                snprintf(buf, sizeof(buf), "%.1fC", ui.temperature);
-                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-                M5Cardputer.Display.setCursor(x, cy);
-                M5Cardputer.Display.print("temp ");
-                M5Cardputer.Display.setTextColor(CYAN, BLACK);
-                M5Cardputer.Display.print(buf);
-                cy += INFO_LINE_H;
+                snprintf(buf, sizeof(buf), "%.1f", ui.temperature);
+            } else {
+                strncpy(buf, "--", sizeof(buf));
             }
+            cy = drawMijiaKvRow(x, cy, w, "temp", buf, CYAN, 2);
+
             if (ui.humidity_known) {
                 snprintf(buf, sizeof(buf), "%.0f%%", ui.humidity);
-                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-                M5Cardputer.Display.setCursor(x, cy);
-                M5Cardputer.Display.print("hum  ");
-                M5Cardputer.Display.setTextColor(CYAN, BLACK);
-                M5Cardputer.Display.print(buf);
-                cy += INFO_LINE_H;
+            } else {
+                strncpy(buf, "--", sizeof(buf));
             }
+            cy = drawMijiaKvRow(x, cy, w, "hum", buf, CYAN, 2);
+
             if (ui.battery_known) {
                 snprintf(buf, sizeof(buf), "%d%%", ui.battery);
-                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+                cy = drawMijiaKvRow(x, cy, w, "bat", buf, APP_COLOR_VALUE, 1);
+            }
+
+            // 有读数后 inline status 会被隐藏，这里单独显示 listening / Xs ago
+            if (ui.status[0] != '\0' && strcmp(ui.status, "ok") != 0) {
+                M5Cardputer.Display.setTextSize(1);
+                M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
                 M5Cardputer.Display.setCursor(x, cy);
-                M5Cardputer.Display.print("bat  ");
-                M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
-                M5Cardputer.Display.print(buf);
+                M5Cardputer.Display.print(ui.status);
                 cy += INFO_LINE_H;
             }
+            drawMijiaBleRefreshHint();
             return cy;
         }
 
@@ -914,6 +971,14 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
                 M5Cardputer.Display.print(buf);
                 cy += INFO_LINE_H;
             }
+            if (ui.status[0] != '\0' && strcmp(ui.status, "ok") != 0) {
+                M5Cardputer.Display.setTextSize(1);
+                M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+                M5Cardputer.Display.setCursor(x, cy);
+                M5Cardputer.Display.print(ui.status);
+                cy += INFO_LINE_H;
+            }
+            drawMijiaBleRefreshHint();
             return cy;
         }
 

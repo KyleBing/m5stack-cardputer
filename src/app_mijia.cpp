@@ -29,14 +29,34 @@ static int mijiaRefreshGen = 0; // 刷新生成器
 static volatile bool mijiaRefreshTaskRunning = false; // 刷新任务是否正在运行
 static volatile bool mijiaRefreshTimedOut = false; // 刷新任务是否超时
 static volatile bool mijiaNeedRedraw = false; // 是否需要重绘
-static bool mijiaBleScanPending = false;      // 主循环启动非阻塞 BLE 扫描
+static bool mijiaBleScanPending = false;      // 主循环启动聚焦 BLE 扫描
+static bool mijiaBleBgEnabled = false;        // 米家前台：后台持续听 BLE
+static bool mijiaBleFocusActive = false;      // 正在对当前设备做 r 聚焦扫
 static uint32_t mijiaRefreshDeadlineMs = 0; // 刷新任务的截止时间
 
 // 米家状态值常量定义
 static constexpr uint32_t MIJIA_REFRESH_TIMEOUT_MS = 2000;  // 刷新任务超时时间
 static constexpr uint32_t MIJIA_GRID_REFRESH_TIMEOUT_MS = 2000;  // 宫格刷新任务超时时间
-static constexpr uint32_t MIJIA_BLE_REFRESH_TIMEOUT_MS = 9000;   // BLE 短扫超时
+static constexpr uint32_t MIJIA_BLE_FOCUS_SCAN_S = 30;      // r 聚焦扫秒数（脏包可丢弃后继续）
+static constexpr uint32_t MIJIA_BLE_BG_SCAN_S = 30;         // 后台一轮监听秒数
 static constexpr uint32_t MIJIA_WIFI_TIMEOUT_MS = 12000;  // 联网超时时间
+
+// 按设备缓存最近一次成功的 BLE 读数
+struct MijiaBleCache {
+    bool valid;
+    uint32_t updated_ms;
+    bool has_temp;
+    bool has_humidity;
+    bool has_battery;
+    bool has_motion;
+    bool has_button;
+    float temperature;
+    float humidity;
+    int battery;
+    bool motion;
+    bool button;
+};
+static MijiaBleCache mijiaBleCache[MIJIA_DEVICE_MAX];
 
 enum class MijiaWifiPhase : uint8_t {
     IDLE,
@@ -83,6 +103,11 @@ static void requestMijiaOverviewPageRefresh();
 static void cancelMijiaPendingJobs();
 static bool scheduleMijiaJob(MijiaRefreshJob* job);
 static void queueMijiaGridCellRefresh(int device_idx);
+static void applyBleReadingToUi(MijiaUiState& ui, const MijiaBleReading& reading, const char* status);
+static void storeBleCache(int device_idx, const MijiaBleReading& reading);
+static bool applyBleCacheToUi(int device_idx, MijiaUiState& ui, bool with_age_status);
+static void requestMijiaBleBackground();
+static void formatBleCacheAgeStatus(uint32_t updated_ms, char* out, size_t out_size);
 static void flushMijiaGridCellUpdates();
 static void onMijiaGridDeviceChanged(int old_idx, int new_idx);
 static void mijiaJobTaskFn(void* arg);
@@ -216,12 +241,13 @@ static bool mijiaPanelControlsVisualChanged(const MijiaUiState& old_ui, const Mi
 
 static bool mijiaPanelRightVisualChanged(const MijiaUiState& old_ui, const MijiaUiState& new_ui,
                                          const char* old_net, const char* new_net) {
+    // 状态文案变化也要重绘（BLE 有读数后仍会改 listening / Xs ago）
+    if (strcmp(old_ui.status, new_ui.status) != 0) {
+        return true;
+    }
     const bool old_inline = mijiaPanelShowsInlineStatus(old_ui.status, old_ui.power_known);
     const bool new_inline = mijiaPanelShowsInlineStatus(new_ui.status, new_ui.power_known);
     if (old_inline != new_inline) {
-        return true;
-    }
-    if (new_inline && strcmp(old_ui.status, new_ui.status) != 0) {
         return true;
     }
     if (strcmp(old_net != nullptr ? old_net : "", new_net != nullptr ? new_net : "") != 0) {
@@ -333,6 +359,144 @@ static const MijiaDevice* getCurrentMijiaDevice() {
         mijiaDeviceIdx = cfg.device_count - 1;
     }
     return &cfg.devices[mijiaDeviceIdx];
+}
+
+static void formatBleCacheAgeStatus(const uint32_t updated_ms, char* out, const size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return;
+    }
+    const uint32_t age_s = (millis() - updated_ms) / 1000UL;
+    if (age_s < 3) {
+        strncpy(out, "ok", out_size - 1);
+        out[out_size - 1] = '\0';
+        return;
+    }
+    if (age_s < 120) {
+        snprintf(out, out_size, "%lus ago", static_cast<unsigned long>(age_s));
+        return;
+    }
+    snprintf(out, out_size, "%lum ago", static_cast<unsigned long>(age_s / 60UL));
+}
+
+static void applyBleReadingToUi(MijiaUiState& ui, const MijiaBleReading& reading, const char* status) {
+    if (reading.has_temp) {
+        ui.temp_known = true;
+        ui.temperature = reading.temperature;
+    }
+    if (reading.has_humidity) {
+        ui.humidity_known = true;
+        ui.humidity = reading.humidity;
+    }
+    if (reading.has_battery) {
+        ui.battery_known = true;
+        ui.battery = reading.battery;
+    }
+    if (reading.has_motion) {
+        ui.motion_known = true;
+        ui.motion = reading.motion;
+    }
+    if (reading.has_button) {
+        ui.button_known = true;
+        ui.button = reading.button;
+    }
+    ui.extra_known = ui.temp_known || ui.humidity_known || ui.battery_known || ui.motion_known ||
+                     ui.button_known;
+    ui.power_known = ui.extra_known;
+    ui.power_on = ui.extra_known;
+    if (status != nullptr) {
+        strncpy(ui.status, status, sizeof(ui.status) - 1);
+        ui.status[sizeof(ui.status) - 1] = '\0';
+    }
+}
+
+static void storeBleCache(const int device_idx, const MijiaBleReading& reading) {
+    if (device_idx < 0 || device_idx >= MIJIA_DEVICE_MAX || !reading.ok) {
+        return;
+    }
+    MijiaBleCache& c = mijiaBleCache[device_idx];
+    // 合并字段：温湿度/电量常分开发，保留上次有效值
+    if (reading.has_temp) {
+        c.has_temp = true;
+        c.temperature = reading.temperature;
+    }
+    if (reading.has_humidity) {
+        c.has_humidity = true;
+        c.humidity = reading.humidity;
+    }
+    if (reading.has_battery) {
+        c.has_battery = true;
+        c.battery = reading.battery;
+    }
+    if (reading.has_motion) {
+        c.has_motion = true;
+        c.motion = reading.motion;
+    }
+    if (reading.has_button) {
+        c.has_button = true;
+        c.button = reading.button;
+    }
+    c.valid = c.has_temp || c.has_humidity || c.has_battery || c.has_motion || c.has_button;
+    c.updated_ms = millis();
+}
+
+static bool applyBleCacheToUi(const int device_idx, MijiaUiState& ui, const bool with_age_status) {
+    if (device_idx < 0 || device_idx >= MIJIA_DEVICE_MAX) {
+        return false;
+    }
+    const MijiaBleCache& c = mijiaBleCache[device_idx];
+    if (!c.valid) {
+        return false;
+    }
+    if (c.has_temp) {
+        ui.temp_known = true;
+        ui.temperature = c.temperature;
+    }
+    if (c.has_humidity) {
+        ui.humidity_known = true;
+        ui.humidity = c.humidity;
+    }
+    if (c.has_battery) {
+        ui.battery_known = true;
+        ui.battery = c.battery;
+    }
+    if (c.has_motion) {
+        ui.motion_known = true;
+        ui.motion = c.motion;
+    }
+    if (c.has_button) {
+        ui.button_known = true;
+        ui.button = c.button;
+    }
+    ui.extra_known = ui.temp_known || ui.humidity_known || ui.battery_known || ui.motion_known ||
+                     ui.button_known;
+    ui.power_known = ui.extra_known;
+    ui.power_on = ui.extra_known;
+    if (with_age_status) {
+        formatBleCacheAgeStatus(c.updated_ms, ui.status, sizeof(ui.status));
+    }
+    return true;
+}
+
+// 米家在前台时开启/重启后台多设备 BLE 监听
+static void requestMijiaBleBackground() {
+    if (!mijiaBleBgEnabled || mijiaBleFocusActive || mijiaBleScanIsRunning()) {
+        return;
+    }
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.device_count <= 0) {
+        return;
+    }
+    bool any_ble = false;
+    for (int i = 0; i < cfg.device_count; i++) {
+        if (mijiaBleCanScan(cfg.devices[i])) {
+            any_ble = true;
+            break;
+        }
+    }
+    if (!any_ble) {
+        return;
+    }
+    mijiaBleWatchStart(cfg.devices, cfg.device_count, MIJIA_BLE_BG_SCAN_S);
 }
 
 // 取消进行中的查询/控制，切换设备或新操作时丢弃旧任务
@@ -586,11 +750,15 @@ static void requestMijiaRefresh() {
         mijiaRefreshTimedOut = false;
         mijiaRefreshDeadlineMs = 0;
         if (mijiaBleCanScan(*dev)) {
+            // 聚焦扫：打断后台，拉长窗口；脏包不早停
+            mijiaBleScanAbort();
+            mijiaBleFocusActive = true;
             strncpy(mijiaUi.status, "listening", sizeof(mijiaUi.status));
             mijiaBleScanPending = true;
         } else {
             strncpy(mijiaUi.status, "ble n/a", sizeof(mijiaUi.status));
             mijiaBleScanPending = false;
+            mijiaBleFocusActive = false;
         }
         mijiaNeedRedraw = true;
         return;
@@ -629,18 +797,27 @@ static void updateMijiaRefreshTimeout() {
 // 立即切换设备并异步拉状态（取消上一台未完成的操作）
 static void switchMijiaDevice(const int delta, const int device_count) {
     cancelMijiaPendingJobs();
-    mijiaBleScanPending = false;
-    mijiaBleScanAbort();
+    // 聚焦扫打断；后台监听保留，继续给各设备灌缓存
+    if (mijiaBleFocusActive) {
+        mijiaBleScanPending = false;
+        mijiaBleFocusActive = false;
+        mijiaBleScanAbort();
+    }
     mijiaDeviceIdx = (mijiaDeviceIdx + delta + device_count) % device_count;
     mijiaResetUiState(mijiaUi);
     const MijiaDevice* dev = getCurrentMijiaDevice();
     if (dev != nullptr && mijiaDeviceUsesBle(*dev)) {
-        // BLE：切换时绝不启动后台任务 / BLE 栈，避免闪退
-        strncpy(mijiaUi.status, mijiaBleCanScan(*dev) ? "press r" : "ble n/a",
-                sizeof(mijiaUi.status));
+        if (applyBleCacheToUi(mijiaDeviceIdx, mijiaUi, true)) {
+            // 已有缓存：直接显示最近读数
+        } else if (mijiaBleCanScan(*dev)) {
+            strncpy(mijiaUi.status, "listening", sizeof(mijiaUi.status));
+        } else {
+            strncpy(mijiaUi.status, "ble n/a", sizeof(mijiaUi.status));
+        }
         applyMijiaControlRefresh(true);
         mijiaRefreshTimedOut = false;
         mijiaRefreshDeadlineMs = 0;
+        requestMijiaBleBackground();
         return;
     }
     strncpy(mijiaUi.status, "query...", sizeof(mijiaUi.status));
@@ -648,6 +825,19 @@ static void switchMijiaDevice(const int delta, const int device_count) {
     mijiaRefreshTimedOut = false;
     mijiaRefreshDeadlineMs = millis() + MIJIA_REFRESH_TIMEOUT_MS;
     scheduleMijiaRefresh();
+}
+
+// 开关提示音：开升调 / 关降调，受 Setup sound 开关控制（喇叭 <800Hz 几乎听不见）
+static void playMijiaPowerTone(const bool on) {
+    if (on) {
+        playTimeKeyTone(1000, 35);
+        delay(40);
+        playTimeKeyTone(1400, 45);
+    } else {
+        playTimeKeyTone(1200, 35);
+        delay(40);
+        playTimeKeyTone(880, 50);
+    }
 }
 
 // 异步设置当前设备开关
@@ -663,6 +853,7 @@ static void requestMijiaPower(const bool on) {
         return;
     }
 
+    playMijiaPowerTone(on);
     cancelMijiaPendingJobs();
     strncpy(mijiaUi.status, on ? "turn on..." : "turn off...", sizeof(mijiaUi.status));
     applyMijiaControlRefresh(false);
@@ -705,8 +896,7 @@ static void scheduleMijiaOverviewRefreshJob() {
     job->gen = mijiaRefreshGen;
     job->device_idx = idx;
     job->device = cfg.devices[idx];
-    job->deadline_ms = millis() + (mijiaDeviceUsesBle(cfg.devices[idx]) ? MIJIA_BLE_REFRESH_TIMEOUT_MS
-                                                                        : MIJIA_GRID_REFRESH_TIMEOUT_MS);
+    job->deadline_ms = millis() + MIJIA_GRID_REFRESH_TIMEOUT_MS;
     job->overview_cache = true;
     job->type = MijiaJobType::QUERY;
 
@@ -760,9 +950,14 @@ static void requestMijiaOverviewPageRefresh() {
         if (mijiaOverviewUi[idx].power_known) {
             continue;
         }
-        // BLE 设备不进后台查询队列（会闪退）
+        // BLE 设备：用缓存填宫格，不进 miIO 后台队列
         if (mijiaDeviceUsesBle(cfg.devices[idx])) {
-            strncpy(mijiaOverviewUi[idx].status, "ble", sizeof(mijiaOverviewUi[idx].status));
+            if (applyBleCacheToUi(idx, mijiaOverviewUi[idx], false)) {
+                formatBleCacheAgeStatus(mijiaBleCache[idx].updated_ms, mijiaOverviewUi[idx].status,
+                                        sizeof(mijiaOverviewUi[idx].status));
+            } else {
+                strncpy(mijiaOverviewUi[idx].status, "ble", sizeof(mijiaOverviewUi[idx].status));
+            }
             queueMijiaGridCellRefresh(idx);
             continue;
         }
@@ -784,6 +979,7 @@ static void requestMijiaOverviewPower(const int device_idx, const bool on) {
         return;
     }
 
+    playMijiaPowerTone(on);
     cancelMijiaPendingJobs();
     MijiaUiState& state = mijiaOverviewUi[device_idx];
     strncpy(state.status, on ? "turn on..." : "turn off...", sizeof(state.status));
@@ -1585,6 +1781,12 @@ bool handleMijiaOverviewPageNav(const Keyboard_Class::KeysState& status) {
     if (!mijiaOverviewMode || mijiaHelpVisible) {
         return false;
     }
+    // 回车：确认当前选中设备，回到控制页
+    if (status.enter) {
+        exitMijiaOverview();
+        redrawMijiaScreen();
+        return true;
+    }
     if (mijiaOverviewGridMode) {
         const int bracket = getMijiaOverviewBracketDelta(status);
         if (bracket != 0) {
@@ -2097,6 +2299,7 @@ static void drawMijiaGridHelpContent(const int text_size) {
 static void drawMijiaGridHelpPage() {
     beginAppScreen("Help");
     drawMijiaGridHelpContent(2);
+    drawHelpHintRight("close help");
 }
 
 // 按 H 切换显示的帮助页
@@ -2105,6 +2308,7 @@ static void drawMijiaHelpPage() {
     const MijiaDevice* dev = getCurrentMijiaDevice();
     // 能排开用 2x，否则 1x；内容靠上显示
     drawMijiaHelpContent(dev, mijiaPickHelpTextSize(dev));
+    drawHelpHintRight("close help");
 }
 
 void drawMijiaApp() {
@@ -2126,6 +2330,9 @@ void enterMijiaApp() {
     mijiaOverviewScrollIdx = 0;
     mijiaOverviewRefreshQueueLen = 0;
     mijiaOverviewRefreshQueuePos = 0;
+    mijiaBleScanPending = false;
+    mijiaBleFocusActive = false;
+    mijiaBleBgEnabled = true;
     if (mijiaDeferredJob != nullptr) {
         delete mijiaDeferredJob;
         mijiaDeferredJob = nullptr;
@@ -2139,8 +2346,24 @@ void enterMijiaApp() {
     mijiaNetStatus[0] = '\0';
     invalidateMijiaControlSurface();
     mijiaResetUiState(mijiaUi);
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev != nullptr && mijiaDeviceUsesBle(*dev)) {
+        if (!applyBleCacheToUi(mijiaDeviceIdx, mijiaUi, true)) {
+            strncpy(mijiaUi.status, mijiaBleCanScan(*dev) ? "listening" : "ble n/a",
+                    sizeof(mijiaUi.status));
+        }
+    }
     applyMijiaControlRefresh(true);
     startMijiaWifiConnect();
+    requestMijiaBleBackground();
+}
+
+void leaveMijiaApp() {
+    mijiaBleBgEnabled = false;
+    mijiaBleScanPending = false;
+    mijiaBleFocusActive = false;
+    mijiaBleScanAbort();
+    cancelMijiaPendingJobs();
 }
 
 void updateMijiaApp() {
@@ -2148,54 +2371,81 @@ void updateMijiaApp() {
     updateMijiaRefreshTimeout();
     flushMijiaGridCellUpdates();
 
-    // BLE：非阻塞分帧扫描（不会卡死在 listening）
-    if (mijiaBleScanPending && !mijiaBleScanIsRunning() && !mijiaOverviewMode && !mijiaHelpVisible) {
+    // BLE 聚焦扫（r）：非阻塞，解析失败继续听直到超时
+    if (mijiaBleScanPending && !mijiaBleScanIsRunning() && !mijiaHelpVisible) {
         mijiaBleScanPending = false;
         const MijiaDevice* dev = getCurrentMijiaDevice();
         if (dev != nullptr && mijiaBleCanScan(*dev)) {
             strncpy(mijiaUi.status, "listening", sizeof(mijiaUi.status));
             applyMijiaControlRefresh(false);
-            // Sensor_DK1 等青萍广播偏慢，扫 4 秒；分帧 poll 不卡死
-            if (!mijiaBleScanStart(*dev, 4)) {
+            if (!mijiaBleScanStart(*dev, MIJIA_BLE_FOCUS_SCAN_S, mijiaDeviceIdx)) {
                 strncpy(mijiaUi.status, "ble fail", sizeof(mijiaUi.status));
+                mijiaBleFocusActive = false;
                 applyMijiaControlRefresh(false);
+                requestMijiaBleBackground();
             }
+        } else {
+            mijiaBleFocusActive = false;
+            requestMijiaBleBackground();
         }
+    }
+
+    // 无聚焦待启动时，维持后台多设备监听
+    if (mijiaBleBgEnabled && !mijiaBleFocusActive && !mijiaBleScanPending &&
+        !mijiaBleScanIsRunning()) {
+        requestMijiaBleBackground();
     }
 
     if (mijiaBleScanIsRunning()) {
         MijiaBleReading reading{};
-        if (mijiaBleScanPoll(reading)) {
-            strncpy(mijiaUi.status, reading.message, sizeof(mijiaUi.status) - 1);
-            mijiaUi.status[sizeof(mijiaUi.status) - 1] = '\0';
-            if (reading.ok) {
-                if (reading.has_temp) {
-                    mijiaUi.temp_known = true;
-                    mijiaUi.temperature = reading.temperature;
-                }
-                if (reading.has_humidity) {
-                    mijiaUi.humidity_known = true;
-                    mijiaUi.humidity = reading.humidity;
-                }
-                if (reading.has_battery) {
-                    mijiaUi.battery_known = true;
-                    mijiaUi.battery = reading.battery;
-                }
-                if (reading.has_motion) {
-                    mijiaUi.motion_known = true;
-                    mijiaUi.motion = reading.motion;
-                }
-                if (reading.has_button) {
-                    mijiaUi.button_known = true;
-                    mijiaUi.button = reading.button;
-                }
-                mijiaUi.extra_known = mijiaUi.temp_known || mijiaUi.humidity_known ||
-                                      mijiaUi.battery_known || mijiaUi.motion_known ||
-                                      mijiaUi.button_known;
-                mijiaUi.power_known = mijiaUi.extra_known;
-                mijiaUi.power_on = mijiaUi.extra_known;
+        int device_idx = -1;
+        const bool done = mijiaBleScanPoll(reading, &device_idx);
+        if (reading.ok) {
+            if (device_idx < 0 && mijiaBleFocusActive) {
+                device_idx = mijiaDeviceIdx;
             }
-            applyMijiaControlRefresh(false);
+            if (device_idx >= 0) {
+                storeBleCache(device_idx, reading);
+                applyBleReadingToUi(mijiaOverviewUi[device_idx], reading, "ok");
+                queueMijiaGridCellRefresh(device_idx);
+                if (device_idx == mijiaDeviceIdx && !mijiaOverviewMode) {
+                    applyBleReadingToUi(mijiaUi, reading, "ok");
+                    applyMijiaControlRefresh(false);
+                }
+            }
+        }
+        if (done) {
+            if (mijiaBleFocusActive) {
+                mijiaBleFocusActive = false;
+                if (!reading.ok) {
+                    // 超时失败：尽量保留缓存数值，状态显示失败原因
+                    applyBleCacheToUi(mijiaDeviceIdx, mijiaUi, false);
+                    strncpy(mijiaUi.status, reading.message, sizeof(mijiaUi.status) - 1);
+                    mijiaUi.status[sizeof(mijiaUi.status) - 1] = '\0';
+                    applyMijiaControlRefresh(false);
+                }
+                requestMijiaBleBackground();
+            } else if (mijiaBleBgEnabled) {
+                // 一轮后台结束，下一帧再开
+                requestMijiaBleBackground();
+            }
+        }
+    }
+
+    // 控制页 BLE：刷新「Xs ago」年龄文案
+    if (!mijiaOverviewMode && !mijiaHelpVisible && !mijiaBleFocusActive) {
+        const MijiaDevice* dev = getCurrentMijiaDevice();
+        if (dev != nullptr && mijiaDeviceUsesBle(*dev) && mijiaBleCache[mijiaDeviceIdx].valid) {
+            const char* st = mijiaUi.status;
+            if (strcmp(st, "ok") == 0 || strstr(st, "ago") != nullptr) {
+                char age[48];
+                formatBleCacheAgeStatus(mijiaBleCache[mijiaDeviceIdx].updated_ms, age, sizeof(age));
+                if (strcmp(st, age) != 0) {
+                    strncpy(mijiaUi.status, age, sizeof(mijiaUi.status) - 1);
+                    mijiaUi.status[sizeof(mijiaUi.status) - 1] = '\0';
+                    applyMijiaControlRefresh(false);
+                }
+            }
         }
     }
 
@@ -2234,18 +2484,31 @@ void pollMijiaBtnA() {
     setMijiaPower(!mijiaUi.power_on);
 }
 
+// 关闭帮助页
+static void dismissMijiaHelp() {
+    if (!mijiaHelpVisible) {
+        return;
+    }
+    mijiaHelpVisible = false;
+    // 关闭 Help：继续查本页尚未拿到状态的设备
+    if (mijiaOverviewMode && mijiaOverviewGridMode) {
+        requestMijiaOverviewPageRefresh();
+    }
+    redrawMijiaScreen();
+}
+
 void handleMijiaApp(const String& key) {
     if (key == "h") {
         if (mijiaOverviewGridMode || !mijiaOverviewMode) {
             const bool opening = !mijiaHelpVisible;
-            mijiaHelpVisible = !mijiaHelpVisible;
-            // 打开 Help：取消宫格状态查询，避免返回结果盖住帮助页
-            if (opening && mijiaOverviewGridMode) {
-                cancelMijiaPendingJobs();
+            if (!opening) {
+                dismissMijiaHelp();
+                return;
             }
-            // 关闭 Help：继续查本页尚未拿到状态的设备
-            if (!opening && mijiaOverviewMode && mijiaOverviewGridMode) {
-                requestMijiaOverviewPageRefresh();
+            mijiaHelpVisible = true;
+            // 打开 Help：取消宫格状态查询，避免返回结果盖住帮助页
+            if (mijiaOverviewGridMode) {
+                cancelMijiaPendingJobs();
             }
             redrawMijiaScreen();
         }
@@ -2338,12 +2601,10 @@ void handleMijiaApp(const String& key) {
         }
     } else if (key == "r") {
         if (ble_dev) {
-            applyMijiaControlRefresh(false);
             requestMijiaRefresh();
         } else if (mijiaWifiPhase == MijiaWifiPhase::FAILED || mijiaWifiPhase == MijiaWifiPhase::IDLE) {
             startMijiaWifiConnect();
         } else {
-            applyMijiaControlRefresh(false);
             requestMijiaRefresh();
         }
     } else if (key == "," || key == ";") {

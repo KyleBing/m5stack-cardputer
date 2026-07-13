@@ -4,9 +4,10 @@
 #include <WString.h>
 
 void enterMijiaApp();
+void leaveMijiaApp();
 void drawMijiaApp();
 void handleMijiaApp(const String& key);
-// 概览导航：宫格方向键选设备、[ ] 翻页；列表上下选中、左右翻页
+// 概览导航：宫格方向键选设备、[ ] 翻页；列表上下选中、左右翻页；回车回控制页
 bool handleMijiaOverviewPageNav(const Keyboard_Class::KeysState& status);
 // 控制页切换设备（方向键 / ; , . / / [ ]）
 bool handleMijiaDeviceNav(const Keyboard_Class::KeysState& status);

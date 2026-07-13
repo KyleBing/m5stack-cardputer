@@ -309,7 +309,7 @@ static bool cursorHttpRequest(const char* method, const char* path, const char* 
 
 // 快速 NTP 同步（已有 WiFi 时）
 static bool quickSyncTime() {
-    configTime(8 * 3600, 0, "ntp.aliyun.com", "pool.ntp.org");
+    configTzTime(getAppTimezone(), "ntp.aliyun.com", "pool.ntp.org");
     for (int i = 0; i < 20; i++) {
         time_t now = time(nullptr);
         if (now > 1700000000) {

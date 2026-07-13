@@ -11,7 +11,7 @@
 ### 新增
 
 - **Mijia BLE**：被动扫描 MiBeacon / 青萍广播；温湿度计（温度 / 湿度 / 电量）与人体 / 无线开关等事件设备；`r` 短扫刷新，主循环非阻塞 poll
-- **配置**：设备支持 `name_zh`、`ble.key`（bindkey）；Web 配网表增加 BLE Key；显示名优先中文
+- **配置**：设备支持 `name_zh`、`ble.key`（bindkey）；Web 配网表增加 BLE Key；显示名优先中文；`timezone`（POSIX TZ，默认 `CST-8`）
 - **Countdown** 电子闹钟：到点哔-哔-歇（最多 30s），结束页 `x` 取消并回到设置
 - **Settings**：左右分栏（Screen / Sound）；Sound 可开关 Time 按键声（`time_key_sound`，倒计时闹钟不受影响）
 - **Infrared** 红外应用（`x`）：板载 GPIO44 发射；TV（Samsung / Sony / LG / Panasonic / NEC）常用短码；空调（美的 / 格力 / 海尔 / 奥克斯 / 海信 / 小米）状态帧；`t` 切类型，方向键切品牌/字段，Enter 发送，`h` Help
@@ -21,8 +21,12 @@
 
 ### 改进
 
+- **时区**：启动 / 唤醒后 `applyLocalTimezone`；RTC 按 UTC 存储、本地显示；NTP 同步写入 `config.json` 时区
+- **Countdown**：修复全量重绘盖住左下角 `RUN`/`PAUSED`；去掉结束态 `Time's up!`；开始 / 暂停 / 重置音效对齐秒表
+- **Mijia BLE**：前台后台多设备监听 + 读数缓存；`r` 聚焦扫脏包可继续听；温湿度控制页 KV 布局与 `Xs ago` / listening 状态；开关提示音
+- **Mijia**：概览回车回控制页；离开米家停 BLE；回菜单调用 `leaveMijiaApp`
 - **BLE / WiFi 共存**：Central-only 初始化与扫描会话互斥；按 BLE 状态配置 WiFi modem sleep，避免 ESP-IDF coexist abort
-- **音频**：I2S/功放冷启动预热；统一 `playUiTone`；Time 按键声走 `playTimeKeyTone`
+- **音频**：I2S/功放冷启动预热；统一 `playUiTone`；Time 按键声走 `playTimeKeyTone`；Morse 默认频率改为 1000Hz
 - **Mijia** 宫格 / 控制页展示 BLE 温湿度与事件状态；BLE 设备不走后台 miIO 查询队列
 - **Help**：各应用底栏 `h help` 统一右下角（`drawHelpHintRight`）；IR Help 标题 2x；IR 主界面 `type` 2x
 - **Mijia** 炸锅开锅流程：先写温时长再 `start-cook`，失败回退自定义烹饪（含 `recipe-name`）；开关后回读状态，待机不算“开”，未进入烹饪时提示 `need wake?`

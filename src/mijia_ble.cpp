@@ -1,4 +1,5 @@
 #include "mijia_ble.h"
+#include "mijia_control.h"
 #include "app_connectivity.h"
 #include <BLEAdvertisedDevice.h>
 #include <BLEDevice.h>
@@ -10,6 +11,7 @@
 static constexpr uint16_t MI_SERVICE_UUID = 0xFE95;
 static constexpr uint16_t QINGPING_SERVICE_UUID = 0xFDCD;
 static constexpr size_t MIJIA_BLE_SD_MAX = 31;
+static constexpr int MIJIA_BLE_WATCH_MAX = 16;
 
 static void setMsg(MijiaBleReading& out, const char* msg) {
     strncpy(out.message, msg, sizeof(out.message) - 1);
@@ -59,6 +61,21 @@ static bool parseBindKey(const char* hex, uint8_t key[16]) {
         key[i] = static_cast<uint8_t>(v);
     }
     return true;
+}
+
+static bool loadBindKey(const char* ble_key, uint8_t key[16]) {
+    if (parseBindKey(ble_key, key)) {
+        return true;
+    }
+    if (ble_key == nullptr || ble_key[0] == '\0' || strlen(ble_key) >= 32) {
+        return false;
+    }
+    char padded[33] = {};
+    strncpy(padded, ble_key, 32);
+    for (size_t i = strlen(padded); i < 32; i++) {
+        padded[i] = '0';
+    }
+    return parseBindKey(padded, key);
 }
 
 static uint16_t u16le(const uint8_t* p) {
@@ -270,25 +287,43 @@ static bool processQingpingServiceData(const uint8_t* data, const size_t size, M
     return success;
 }
 
-struct MijiaBleHit {
+struct MijiaBleTarget {
+    char mac[18];
+    uint8_t mac_bytes[6];
+    uint8_t bindkey[16];
+    bool have_bindkey;
+    int device_idx;
+};
+
+struct MijiaBlePending {
     bool have;
     bool is_qingping;
+    int target_idx;
     uint8_t len;
     uint8_t data[MIJIA_BLE_SD_MAX];
 };
 
-static char g_want_mac[18];
-static uint8_t g_want_mac_bytes[6];
-static uint8_t g_bindkey[16];
-static bool g_have_bindkey = false;
-static MijiaBleHit g_hit{};
+static MijiaBleTarget g_targets[MIJIA_BLE_WATCH_MAX];
+static int g_target_count = 0;
+static bool g_stop_on_ok = true;
+static MijiaBlePending g_pending{};
+static char g_last_fail[48] = "";
 static volatile bool g_scan_done = false;
 static bool g_scan_running = false;
 static uint32_t g_scan_deadline_ms = 0;
 static bool g_session_held = false;
 
-static void captureServiceData(BLEAdvertisedDevice& adv) {
-    if (!adv.haveServiceData() || g_hit.have) {
+static int findTargetByMac(const char* mac) {
+    for (int i = 0; i < g_target_count; i++) {
+        if (macEqualIgnoreCase(mac, g_targets[i].mac)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void captureServiceData(BLEAdvertisedDevice& adv, const int target_idx) {
+    if (!adv.haveServiceData() || g_pending.have) {
         return;
     }
     const int count = adv.getServiceDataCount();
@@ -304,27 +339,26 @@ static void captureServiceData(BLEAdvertisedDevice& adv) {
         if (!mi && !qp) {
             continue;
         }
-        g_hit.have = true;
-        g_hit.is_qingping = qp;
-        g_hit.len = static_cast<uint8_t>(sd.size());
-        memcpy(g_hit.data, sd.data(), g_hit.len);
+        g_pending.have = true;
+        g_pending.is_qingping = qp;
+        g_pending.target_idx = target_idx;
+        g_pending.len = static_cast<uint8_t>(sd.size());
+        memcpy(g_pending.data, sd.data(), g_pending.len);
         return;
     }
 }
 
 class MijiaBleCaptureCbs : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) override {
-        if (g_hit.have) {
+        if (g_pending.have || g_target_count <= 0) {
             return;
         }
-        if (!macEqualIgnoreCase(advertisedDevice.getAddress().toString().c_str(), g_want_mac)) {
+        const int idx = findTargetByMac(advertisedDevice.getAddress().toString().c_str());
+        if (idx < 0) {
             return;
         }
-        captureServiceData(advertisedDevice);
-        // 命中后只置位，禁止在 GAP 回调里 stop（易死锁）
-        if (g_hit.have) {
-            g_scan_done = true;
-        }
+        captureServiceData(advertisedDevice, idx);
+        // 仅缓存原始包，解析放主循环；脏包可丢弃后继续听
     }
 };
 
@@ -343,6 +377,98 @@ static void finishSession() {
     }
     g_scan_running = false;
     g_scan_done = false;
+    g_pending.have = false;
+}
+
+static bool beginScanSession(const uint32_t scan_seconds) {
+    if (g_scan_running || g_target_count <= 0) {
+        return false;
+    }
+    if (ESP.getFreeHeap() < 28000) {
+        return false;
+    }
+    if (!beginBleScanSession()) {
+        return false;
+    }
+    g_session_held = true;
+
+    BLEScan* scan = BLEDevice::getScan();
+    if (scan == nullptr) {
+        finishSession();
+        return false;
+    }
+
+    g_pending = {};
+    g_last_fail[0] = '\0';
+    g_scan_done = false;
+
+    // wantDuplicates=true：有回调时不往结果集堆积，省内存
+    scan->setAdvertisedDeviceCallbacks(&g_cbs, true);
+    scan->setActiveScan(true);
+    scan->setInterval(100);
+    scan->setWindow(80);
+
+    const uint32_t seconds = scan_seconds == 0 ? 30 : scan_seconds;
+    if (!scan->start(seconds, nullptr, false)) {
+        finishSession();
+        return false;
+    }
+
+    g_scan_running = true;
+    g_scan_deadline_ms = millis() + (seconds + 2) * 1000UL;
+    return true;
+}
+
+static bool fillTargetFromDevice(MijiaBleTarget& t, const MijiaDevice& dev, const int device_idx) {
+    if (dev.mac[0] == '\0' || !parseMacBytes(dev.mac, t.mac_bytes)) {
+        return false;
+    }
+    strncpy(t.mac, dev.mac, sizeof(t.mac) - 1);
+    t.mac[sizeof(t.mac) - 1] = '\0';
+    t.have_bindkey = loadBindKey(dev.ble_key, t.bindkey);
+    t.device_idx = device_idx;
+    return true;
+}
+
+static bool tryParsePending(MijiaBleReading& out, int& device_idx) {
+    out = {};
+    device_idx = -1;
+    if (!g_pending.have) {
+        return false;
+    }
+    const int tidx = g_pending.target_idx;
+    const bool is_qp = g_pending.is_qingping;
+    const uint8_t len = g_pending.len;
+    uint8_t data[MIJIA_BLE_SD_MAX];
+    memcpy(data, g_pending.data, len);
+    g_pending.have = false;
+
+    if (tidx < 0 || tidx >= g_target_count) {
+        setMsg(out, "parse fail");
+        strncpy(g_last_fail, out.message, sizeof(g_last_fail) - 1);
+        return false;
+    }
+
+    const MijiaBleTarget& t = g_targets[tidx];
+    device_idx = t.device_idx;
+    bool parsed = false;
+    if (is_qp) {
+        parsed = processQingpingServiceData(data, len, out);
+    } else {
+        parsed = processXiaomiServiceData(data, len, t.mac_bytes, t.bindkey, t.have_bindkey, out);
+    }
+    if (parsed) {
+        out.ok = true;
+        setMsg(out, "ok");
+        g_last_fail[0] = '\0';
+        return true;
+    }
+    if (out.message[0] == '\0') {
+        setMsg(out, "parse fail");
+    }
+    strncpy(g_last_fail, out.message, sizeof(g_last_fail) - 1);
+    g_last_fail[sizeof(g_last_fail) - 1] = '\0';
+    return false;
 }
 
 bool mijiaBleScanIsRunning() {
@@ -357,100 +483,83 @@ void mijiaBleScanAbort() {
     finishSession();
 }
 
-bool mijiaBleScanStart(const MijiaDevice& dev, const uint32_t scan_seconds) {
+bool mijiaBleScanStart(const MijiaDevice& dev, const uint32_t scan_seconds, const int device_idx) {
     if (g_scan_running) {
         return false;
     }
-    if (dev.mac[0] == '\0') {
+    g_target_count = 0;
+    if (!fillTargetFromDevice(g_targets[0], dev, device_idx)) {
         return false;
     }
-    if (!parseMacBytes(dev.mac, g_want_mac_bytes)) {
-        return false;
-    }
-
-    g_have_bindkey = parseBindKey(dev.ble_key, g_bindkey);
-    if (!g_have_bindkey && strlen(dev.ble_key) > 0 && strlen(dev.ble_key) < 32) {
-        char padded[33] = {};
-        strncpy(padded, dev.ble_key, 32);
-        for (size_t i = strlen(padded); i < 32; i++) {
-            padded[i] = '0';
-        }
-        g_have_bindkey = parseBindKey(padded, g_bindkey);
-    }
-
-    if (ESP.getFreeHeap() < 28000) {
-        return false;
-    }
-
-    if (!beginBleScanSession()) {
-        return false;
-    }
-    g_session_held = true;
-
-    BLEScan* scan = BLEDevice::getScan();
-    if (scan == nullptr) {
-        finishSession();
-        return false;
-    }
-
-    strncpy(g_want_mac, dev.mac, sizeof(g_want_mac) - 1);
-    g_want_mac[sizeof(g_want_mac) - 1] = '\0';
-    memset(&g_hit, 0, sizeof(g_hit));
-    g_scan_done = false;
-
-    // wantDuplicates=true：有回调时不往结果集堆积设备，省内存、避免完成时大拷贝
-    scan->setAdvertisedDeviceCallbacks(&g_cbs, true);
-    scan->setActiveScan(true);
-    scan->setInterval(100);
-    scan->setWindow(80);
-
-    // 青萍广播间隔可能偏长，默认略加长；仍异步，不堵主循环
-    const uint32_t seconds = scan_seconds == 0 ? 4 : scan_seconds;
-    // 传 nullptr：不走 BLEScanResults 完成回调（大对象拷贝易搞死 BT 任务）
-    if (!scan->start(seconds, nullptr, false)) {
-        finishSession();
-        return false;
-    }
-
-    g_scan_running = true;
-    g_scan_deadline_ms = millis() + (seconds + 2) * 1000UL;
-    return true;
+    g_target_count = 1;
+    g_stop_on_ok = true;
+    return beginScanSession(scan_seconds);
 }
 
-bool mijiaBleScanPoll(MijiaBleReading& out) {
+bool mijiaBleWatchStart(const MijiaDevice* devices, const int device_count, const uint32_t scan_seconds) {
+    if (g_scan_running || devices == nullptr || device_count <= 0) {
+        return false;
+    }
+    g_target_count = 0;
+    for (int i = 0; i < device_count && g_target_count < MIJIA_BLE_WATCH_MAX; i++) {
+        if (!mijiaBleCanScan(devices[i])) {
+            continue;
+        }
+        if (!fillTargetFromDevice(g_targets[g_target_count], devices[i], i)) {
+            continue;
+        }
+        g_target_count++;
+    }
+    if (g_target_count <= 0) {
+        return false;
+    }
+    g_stop_on_ok = false;
+    return beginScanSession(scan_seconds);
+}
+
+bool mijiaBleScanPoll(MijiaBleReading& out, int* device_idx) {
     out = {};
     setMsg(out, "listening");
+    if (device_idx != nullptr) {
+        *device_idx = -1;
+    }
 
     if (!g_scan_running) {
         setMsg(out, "idle");
         return true;
     }
 
-    // 命中或超时才结束；否则继续等（主循环可刷新 UI）
-    if (!g_hit.have && !g_scan_done && millis() < g_scan_deadline_ms) {
+    // 有待解析包：成功则按模式收尾或继续；失败丢弃继续听
+    if (g_pending.have) {
+        int idx = -1;
+        MijiaBleReading parsed{};
+        if (tryParsePending(parsed, idx)) {
+            out = parsed;
+            if (device_idx != nullptr) {
+                *device_idx = idx;
+            }
+            if (g_stop_on_ok) {
+                finishSession();
+                return true;
+            }
+            // 后台：上报读数，扫描继续
+            return false;
+        }
+        // 脏包 / 解密失败：继续听
+        setMsg(out, "listening");
+        return false;
+    }
+
+    if (!g_scan_done && millis() < g_scan_deadline_ms) {
         setMsg(out, "listening");
         return false;
     }
 
     finishSession();
-
-    if (!g_hit.have) {
-        setMsg(out, "no adv");
-        return true;
-    }
-
-    bool parsed = false;
-    if (g_hit.is_qingping) {
-        parsed = processQingpingServiceData(g_hit.data, g_hit.len, out);
+    if (g_last_fail[0] != '\0') {
+        setMsg(out, g_last_fail);
     } else {
-        parsed = processXiaomiServiceData(g_hit.data, g_hit.len, g_want_mac_bytes, g_bindkey,
-                                          g_have_bindkey, out);
-    }
-    if (parsed) {
-        out.ok = true;
-        setMsg(out, "ok");
-    } else if (out.message[0] == '\0' || strcmp(out.message, "listening") == 0) {
-        setMsg(out, "parse fail");
+        setMsg(out, "no adv");
     }
     return true;
 }

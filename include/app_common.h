@@ -61,6 +61,9 @@ bool ensureConfigWifi(uint32_t timeout_ms = 12000);
 // 断开 WiFi 并关闭射频（离开应用或用完网络后调用）
 void releaseConfigWifi();
 
+// 启动/唤醒后调用，避免 deep sleep 恢复了 UTC 时钟却未设 TZ
+void applyLocalTimezone();
+
 // 获取当前按下的可打印字符
 String getPressedKey();
 

@@ -19,9 +19,15 @@ struct MijiaBleReading {
     char message[48];
 };
 
-// 非阻塞扫描：start 后每帧 poll，禁止在调用线程里死等
-bool mijiaBleScanStart(const MijiaDevice& dev, uint32_t scan_seconds = 2);
-// 返回 true 表示本轮结束（成功或失败都写进 out）
-bool mijiaBleScanPoll(MijiaBleReading& out);
+// 单设备聚焦扫描：解析成功即停；脏包（配对广播等）丢弃后继续听
+bool mijiaBleScanStart(const MijiaDevice& dev, uint32_t scan_seconds = 30, int device_idx = -1);
+
+// 后台多设备监听：扫满时长，命中任一 BLE 设备则上报读数（不提前停）
+bool mijiaBleWatchStart(const MijiaDevice* devices, int device_count, uint32_t scan_seconds = 30);
+
+// false=仍在扫；若 out.ok 表示本帧有新成功读数（后台可持续多次）
+// true=本轮结束（超时 / 聚焦成功后收尾）
+bool mijiaBleScanPoll(MijiaBleReading& out, int* device_idx = nullptr);
+
 bool mijiaBleScanIsRunning();
 void mijiaBleScanAbort();

@@ -223,6 +223,7 @@ void showMenu() {
     leaveCursorApp();
     leaveLedApp();
     leaveCountdownApp();
+    leaveMijiaApp();
     stopConfigWebServer();
     releaseConfigWifi();
     currentState = AppState::MENU;
@@ -2383,6 +2384,8 @@ void setup() {
     } else {
         Serial.println("config: LittleFS mount failed");
     }
+    // config 加载后再设时区（deep sleep 唤醒后时钟可能已是 UTC）
+    applyLocalTimezone();
     WiFi.mode(WIFI_OFF);
     M5Cardputer.Display.setRotation(1);
     uint8_t brightness = 30;

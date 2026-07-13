@@ -6,6 +6,14 @@
 #include <WiFi.h>
 #include <cctype>
 #include <cstring>
+#include <cstdlib>
+#include <time.h>
+
+// 应用本地时区（优先 config.json 的 timezone，否则默认东八区）
+void applyLocalTimezone() {
+    setenv("TZ", getAppTimezone(), 1);
+    tzset();
+}
 
 // 绘制按键字母块（黄底黑字）
 int drawKeyBadge(const int x, const int y, char key, const int text_size) {

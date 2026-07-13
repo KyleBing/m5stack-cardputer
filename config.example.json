@@ -27,5 +27,9 @@
   "cursor": {
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
   },
-  "brightness": 30
+  "timezone": "CST-8",
+  "brightness": 30,
+  "sound": {
+    "time_key": false
+  }
 }

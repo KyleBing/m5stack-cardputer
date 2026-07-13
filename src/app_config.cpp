@@ -50,6 +50,7 @@ bool loadAppConfig() {
     g_config.loaded = false;
     g_config.brightness = 30;
     g_config.time_key_sound = true; // 默认开
+    copyField(g_config.timezone, sizeof(g_config.timezone), APP_TIMEZONE_DEFAULT);
 
     if (!LittleFS.exists(CONFIG_PATH)) {
         return false;
@@ -88,6 +89,12 @@ bool loadAppConfig() {
     JsonObject sound = doc["sound"];
     if (!sound.isNull()) {
         g_config.time_key_sound = sound["time_key"] | true;
+    }
+
+    // 时区：缺字段时保持默认 CST-8
+    const char* tz = doc["timezone"];
+    if (tz != nullptr && tz[0] != '\0') {
+        copyField(g_config.timezone, sizeof(g_config.timezone), tz);
     }
 
     JsonArray devices = doc["devices"].as<JsonArray>();
@@ -129,6 +136,13 @@ bool loadAppConfig() {
 
 const AppConfig& getAppConfig() {
     return g_config;
+}
+
+const char* getAppTimezone() {
+    if (g_config.timezone[0] != '\0') {
+        return g_config.timezone;
+    }
+    return APP_TIMEZONE_DEFAULT;
 }
 
 const char* mijiaDeviceDisplayName(const MijiaDevice& dev) {
@@ -247,6 +261,38 @@ bool saveAppConfigTimeKeySound(const bool enabled) {
 
     JsonObject sound = doc["sound"].to<JsonObject>();
     sound["time_key"] = enabled;
+
+    if (doc["devices"].isNull()) {
+        doc["devices"].to<JsonArray>();
+    }
+
+    File out = LittleFS.open(CONFIG_PATH, "w");
+    if (!out) {
+        return false;
+    }
+    serializeJsonPretty(doc, out);
+    out.close();
+    return loadAppConfig();
+}
+
+bool saveAppConfigTimezone(const char* timezone) {
+    if (timezone == nullptr || timezone[0] == '\0') {
+        return false;
+    }
+
+    JsonDocument doc;
+    if (LittleFS.exists(CONFIG_PATH)) {
+        File in = LittleFS.open(CONFIG_PATH, "r");
+        if (in) {
+            const DeserializationError err = deserializeJson(doc, in);
+            in.close();
+            if (err) {
+                doc.clear();
+            }
+        }
+    }
+
+    doc["timezone"] = timezone;
 
     if (doc["devices"].isNull()) {
         doc["devices"].to<JsonArray>();

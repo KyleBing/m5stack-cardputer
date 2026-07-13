@@ -253,6 +253,11 @@ static void drawCountdownTime(const int y, const int h, const bool force) {
 }
 
 static void drawCountdownStateBanner() {
+    // 结束页只保留 x cancel，不画 Time's up
+    if (cdPhase == CountdownPhase::SETUP || cdPhase == CountdownPhase::FINISHED) {
+        return;
+    }
+
     int area_y = 0;
     int area_h = 0;
     getCountdownDisplayArea(area_y, area_h);
@@ -269,11 +274,6 @@ static void drawCountdownStateBanner() {
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
         M5Cardputer.Display.print("PAUSED");
-    } else if (cdPhase == CountdownPhase::FINISHED) {
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
-        M5Cardputer.Display.print("Time's up!");
     }
 }
 
@@ -425,15 +425,16 @@ static void drawCountdownApp(const bool full_init) {
             cdScreenReady = true;
             cdInvalidateTimeCache();
             cdTs = 0;
-            drawCountdownChrome();
+            // 先画时间再画 chrome：force fillRect 会盖住左下角 RUN/PAUSED
             drawCountdownTime(area_y, area_h, true);
+            drawCountdownChrome();
             return;
         }
         beginAppScreen("Time");
         cdScreenReady = true;
         cdInvalidateTimeCache();
-        drawCountdownChrome();
         drawCountdownTime(area_y, area_h, true);
+        drawCountdownChrome();
         return;
     }
 
@@ -502,11 +503,11 @@ static void cdStart() {
     if (total == 0) {
         return;
     }
+    playTimeKeyTone(1200, 50); // start / resume，与 stopwatch 一致
     cdRemainMs = total;
     cdEndMs = millis() + total;
     cdPhase = CountdownPhase::RUNNING;
     cdInvalidateTimeCache();
-    drawCountdownChrome();
     drawCountdownApp(true);
 }
 
@@ -560,16 +561,15 @@ static void cdUpdateAlarm() {
 
 // 取消闹钟并回到设置页
 static void cdDismissFinished() {
+    playTimeKeyTone(880, 35);
+    delay(75);
+    playTimeKeyTone(880, 35);
     cdStopAlarm();
     cdPhase = CountdownPhase::SETUP;
     cdField = 0;
     cdRemainMs = 0;
     cdInvalidateTimeCache();
-    drawCountdownChrome();
-    int area_y = 0;
-    int area_h = 0;
-    getCountdownDisplayArea(area_y, area_h);
-    drawCountdownTime(area_y, area_h, true);
+    drawCountdownApp(true);
 }
 
 static void cdToggleRun() {
@@ -578,43 +578,41 @@ static void cdToggleRun() {
         return;
     }
     if (cdPhase == CountdownPhase::RUNNING) {
+        playTimeKeyTone(1000, 50); // pause
         const int32_t left = static_cast<int32_t>(cdEndMs - millis());
         cdRemainMs = left > 0 ? static_cast<uint32_t>(left) : 0;
         cdPhase = CountdownPhase::PAUSED;
         drawCountdownChrome();
-        drawCountdownApp(false);
         return;
     }
     if (cdPhase == CountdownPhase::PAUSED) {
         if (cdRemainMs == 0) {
             return;
         }
+        playTimeKeyTone(1200, 50); // resume
         cdEndMs = millis() + cdRemainMs;
         cdPhase = CountdownPhase::RUNNING;
         drawCountdownChrome();
-        drawCountdownApp(false);
         return;
     }
     if (cdPhase == CountdownPhase::FINISHED) {
         // BtnA：停闹钟后重新开始
         cdStopAlarm();
         cdInvalidateTimeCache();
-        drawCountdownChrome();
         cdStart();
     }
 }
 
 static void cdResetToSetup() {
+    playTimeKeyTone(880, 35);
+    delay(75); // 双击间隔，与 stopwatch 一致
+    playTimeKeyTone(880, 35);
     cdStopAlarm();
     cdPhase = CountdownPhase::SETUP;
     cdField = 0;
     cdRemainMs = 0;
     cdInvalidateTimeCache();
-    drawCountdownChrome();
-    int area_y = 0;
-    int area_h = 0;
-    getCountdownDisplayArea(area_y, area_h);
-    drawCountdownTime(area_y, area_h, true);
+    drawCountdownApp(true);
 }
 
 void redrawCountdownApp() {
@@ -631,6 +629,9 @@ void enterCountdownApp() {
     cdRemainMs = 0;
     cdScreenReady = false;
     cdInvalidateTimeCache();
+    if (isTimeKeySoundEnabled()) {
+        warmUpSpeakerIfNeeded();
+    }
     drawCountdownApp(true);
 }
 
@@ -648,7 +649,6 @@ void updateCountdownApp() {
             cdPhase = CountdownPhase::FINISHED;
             cdStartAlarm();
             cdInvalidateTimeCache();
-            drawCountdownChrome();
             drawCountdownApp(true);
             return;
         }

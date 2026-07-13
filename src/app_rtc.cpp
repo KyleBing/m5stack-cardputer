@@ -9,6 +9,7 @@
 #include <WiFi.h>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <time.h>
 
@@ -286,15 +287,25 @@ static bool trySyncNtpTime(const uint32_t deadline_ms) {
         return false;
     }
 
-    configTzTime("CST-8", "ntp.aliyun.com", "pool.ntp.org", "time.windows.com");
+    // NTP 只返回 UTC；显示时区来自 config（缺省 CST-8）
+    const char* tz = getAppTimezone();
+    configTzTime(tz, "ntp.aliyun.com", "pool.ntp.org", "time.windows.com");
 
     struct tm timeinfo{};
     while (static_cast<int32_t>(millis() - deadline_ms) < 0) {
         if (getLocalTime(&timeinfo, 200)) {
             if (M5.Rtc.isEnabled()) {
-                M5.Rtc.setDateTime(&timeinfo);
+                // 硬件 RTC 按 UTC 存：与 M5 setSystemTimeFromRtc 约定一致
+                const time_t now = time(nullptr);
+                struct tm utc{};
+                gmtime_r(&now, &utc);
+                M5.Rtc.setDateTime(&utc);
                 M5.Rtc.setSystemTimeFromRtc();
+                // setSystemTimeFromRtc 会临时改 TZ，写回本地时区
+                applyLocalTimezone();
             }
+            // 同步成功后把时区写入 config.json
+            saveAppConfigTimezone(tz);
             return true;
         }
         delay(100);
@@ -303,18 +314,29 @@ static bool trySyncNtpTime(const uint32_t deadline_ms) {
 }
 
 static bool readCurrentTime(struct tm& out, const char*& source) {
+    // 保证 TZ 有效（deep sleep 重启后系统时钟可能仍在，但 TZ 会丢）
+    applyLocalTimezone();
+
     if (M5.Rtc.isEnabled()) {
         const m5::rtc_datetime_t dt = M5.Rtc.getDateTime();
         if (dt.date.year >= 2020) {
-            out.tm_year = dt.date.year - 1900;
-            out.tm_mon = dt.date.month - 1;
-            out.tm_mday = dt.date.date;
-            out.tm_hour = dt.time.hours;
-            out.tm_min = dt.time.minutes;
-            out.tm_sec = dt.time.seconds;
-            out.tm_wday = dt.date.weekDay;
-            source = "RTC";
-            return true;
+            // RTC 存 UTC：临时用 GMT0 做 mktime，再按本地时区显示
+            struct tm utc{};
+            utc.tm_year = dt.date.year - 1900;
+            utc.tm_mon = dt.date.month - 1;
+            utc.tm_mday = dt.date.date;
+            utc.tm_hour = dt.time.hours;
+            utc.tm_min = dt.time.minutes;
+            utc.tm_sec = dt.time.seconds;
+            utc.tm_isdst = 0;
+            setenv("TZ", "GMT0", 1);
+            tzset();
+            const time_t epoch = mktime(&utc);
+            applyLocalTimezone();
+            if (epoch > 1600000000 && localtime_r(&epoch, &out) != nullptr) {
+                source = "RTC";
+                return true;
+            }
         }
     }
 

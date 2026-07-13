@@ -17,11 +17,14 @@ struct MijiaDevice {
 static constexpr int MIJIA_DEVICE_MAX = 50;
 
 static constexpr int CURSOR_TOKEN_MAX = 1024;
+// POSIX TZ 默认东八区（NTP 为 UTC，显示靠此字段）
+static constexpr const char* APP_TIMEZONE_DEFAULT = "CST-8";
 
 struct AppConfig {
     char wifi_ssid[33];
     char wifi_password[65];
     char cursor_token[CURSOR_TOKEN_MAX];
+    char timezone[48]; // POSIX TZ，如 CST-8；缺省东八区
     uint8_t brightness;
     bool time_key_sound; // Time 内按键声（countdown 到点闹钟不受影响）
     MijiaDevice devices[MIJIA_DEVICE_MAX];
@@ -47,10 +50,16 @@ bool saveAppConfigBrightness(uint8_t brightness);
 // 更新 Time 按键声开关并写回
 bool saveAppConfigTimeKeySound(bool enabled);
 
+// 更新时区（POSIX TZ）并写回
+bool saveAppConfigTimezone(const char* timezone);
+
 // 读取原始 config.json 文本（用于 Web 展示）
 bool readAppConfigRaw(String& out);
 
 const AppConfig& getAppConfig();
+
+// 当前生效时区：config 有值用 config，否则默认 CST-8
+const char* getAppTimezone();
 
 // 显示名：优先 name_zh，否则 name
 const char* mijiaDeviceDisplayName(const MijiaDevice& dev);

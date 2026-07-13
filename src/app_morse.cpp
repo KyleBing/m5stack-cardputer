@@ -12,7 +12,7 @@ static constexpr int MORSE_ROW_H = 12;
 static constexpr uint32_t MORSE_UNIT_MS = 80;
 
 static bool g_screen_ready = false;
-static int g_tone_hz = 700;
+static int g_tone_hz = 1000;
 static char g_last_key = '\0';
 static const char* g_last_pattern = nullptr;
 
