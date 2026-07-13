@@ -212,8 +212,8 @@ static void copySafe(char* dest, const size_t size, const char* src) {
 }
 
 static void scanNearbyBleDevices() {
-    if (!isBleStackReady()) {
-        startBleStack();
+    if (!beginBleScanSession()) {
+        return;
     }
 
     bleScanning = true;
@@ -243,6 +243,7 @@ static void scanNearbyBleDevices() {
     scan->clearResults();
     bleScanning = false;
     bleListDirty = true;
+    endBleScanSession(true);
 }
 
 // 扫描列表全屏（内容区），支持上下翻页

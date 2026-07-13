@@ -22,6 +22,20 @@ static uint32_t cdEndMs = 0;
 static uint32_t cdRemainMs = 0;
 static bool cdScreenReady = false;
 
+// 电子闹钟滴滴：哔-哔-歇，最多响 30s，x 取消
+static constexpr float CD_ALARM_HZ = 1200.0f;
+static constexpr uint32_t CD_ALARM_BEEP_MS = 120;
+static constexpr uint32_t CD_ALARM_GAP_MS = 100;
+static constexpr uint32_t CD_ALARM_REST_MS = 500;
+static constexpr uint32_t CD_ALARM_MAX_MS = 30000;
+static constexpr char CD_ALARM_CANCEL_KEY = 'x';
+static constexpr int CD_FINISH_HINT_H = 20; // size2 徽章高度
+
+static bool cdAlarmActive = false;
+static uint32_t cdAlarmStartMs = 0;
+static uint32_t cdAlarmNextMs = 0;
+static uint8_t cdAlarmStep = 0; // 0=哔1 1=间隙 2=哔2 3=长歇
+
 // 时间区布局缓存（进入/全量重绘时计算）
 static int cdTs = 1;
 static int cdMainX = 0;
@@ -53,6 +67,24 @@ static uint32_t cdSetupTotalMs() {
         static_cast<uint32_t>(cdHours) * 3600u + static_cast<uint32_t>(cdMinutes) * 60u +
         static_cast<uint32_t>(cdSeconds);
     return total_sec * 1000u;
+}
+
+// 结束页底栏更高，时间区相应上收，避免与 x2 取消提示重叠
+static void getCountdownDisplayArea(int& area_y, int& area_h) {
+    if (isTimePureMode()) {
+        getTimePureDisplayArea(area_y, area_h);
+        if (cdPhase == CountdownPhase::FINISHED && area_h > CD_FINISH_HINT_H + 20) {
+            area_h -= CD_FINISH_HINT_H;
+        }
+        return;
+    }
+    getTimeDisplayArea(area_y, area_h);
+    if (cdPhase == CountdownPhase::FINISHED) {
+        const int extra = CD_FINISH_HINT_H - TIME_HINT_ROW_H;
+        if (extra > 0 && area_h > extra + 20) {
+            area_h -= extra;
+        }
+    }
 }
 
 static void cdGetDisplayHms(int& hours, int& minutes, int& seconds) {
@@ -223,11 +255,7 @@ static void drawCountdownTime(const int y, const int h, const bool force) {
 static void drawCountdownStateBanner() {
     int area_y = 0;
     int area_h = 0;
-    if (isTimePureMode()) {
-        getTimePureDisplayArea(area_y, area_h);
-    } else {
-        getTimeDisplayArea(area_y, area_h);
-    }
+    getCountdownDisplayArea(area_y, area_h);
 
     M5Cardputer.Display.fillRect(APP_CONTENT_X, area_y + area_h - 10,
                                  M5Cardputer.Display.width() - APP_CONTENT_X * 2, 10, BLACK);
@@ -247,6 +275,32 @@ static void drawCountdownStateBanner() {
         M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
         M5Cardputer.Display.print("Time's up!");
     }
+}
+
+// 结束页：x2 取消提示（取消闹钟并回到设置）
+static void drawCountdownFinishedCancelHint() {
+    const int screen_w = M5Cardputer.Display.width();
+    const int y = M5Cardputer.Display.height() - CD_FINISH_HINT_H;
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, screen_w - APP_CONTENT_X * 2, CD_FINISH_HINT_H,
+                                 BLACK);
+
+    const char* label = "cancel";
+    M5Cardputer.Display.setTextSize(2);
+    const int letter_tw = M5Cardputer.Display.textWidth("X");
+    constexpr int pad_x = 2;
+    constexpr int gap = 3;
+    const int badge_w = letter_tw + pad_x * 2;
+    const int label_tw = M5Cardputer.Display.textWidth(label);
+    const int total_w = badge_w + gap + label_tw;
+    int cx = APP_CONTENT_X + (screen_w - APP_CONTENT_X * 2 - total_w) / 2;
+    if (cx < APP_CONTENT_X) {
+        cx = APP_CONTENT_X;
+    }
+    cx += drawKeyBadge(cx, y + 1, CD_ALARM_CANCEL_KEY, 2);
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y + 1);
+    M5Cardputer.Display.print(label);
 }
 
 static void drawCountdownSetupBottomHints() {
@@ -291,14 +345,16 @@ static void drawCountdownActionHints() {
         drawCountdownSetupBottomHints();
         return;
     }
+    if (cdPhase == CountdownPhase::FINISHED) {
+        drawCountdownFinishedCancelHint();
+        return;
+    }
 
     const char* go_text = "start";
     if (cdPhase == CountdownPhase::RUNNING) {
         go_text = "pause";
     } else if (cdPhase == CountdownPhase::PAUSED) {
         go_text = "resume";
-    } else if (cdPhase == CountdownPhase::FINISHED) {
-        go_text = "again";
     }
 
     const int y = M5Cardputer.Display.height() - TIME_HINT_ROW_H;
@@ -338,6 +394,10 @@ static void drawCountdownChrome() {
         if (cdPhase != CountdownPhase::SETUP) {
             drawCountdownStateBanner();
         }
+        // Pure 结束页也要能看到取消键
+        if (cdPhase == CountdownPhase::FINISHED) {
+            drawCountdownFinishedCancelHint();
+        }
         return;
     }
     drawTimeModeTag("CD");
@@ -355,11 +415,7 @@ static void cdInvalidateTimeCache() {
 static void drawCountdownApp(const bool full_init) {
     int area_y = 0;
     int area_h = 0;
-    if (isTimePureMode()) {
-        getTimePureDisplayArea(area_y, area_h);
-    } else {
-        getTimeDisplayArea(area_y, area_h);
-    }
+    getCountdownDisplayArea(area_y, area_h);
 
     if (full_init || !cdScreenReady) {
         if (isTimePureMode()) {
@@ -454,6 +510,68 @@ static void cdStart() {
     drawCountdownApp(true);
 }
 
+// 停止电子闹钟滴滴声
+static void cdStopAlarm() {
+    cdAlarmActive = false;
+    cdAlarmStep = 0;
+    M5Cardputer.Speaker.stop();
+}
+
+// 开始电子闹钟：哔-哔-歇，最长 30s
+static void cdStartAlarm() {
+    warmUpSpeakerIfNeeded();
+    cdAlarmActive = true;
+    cdAlarmStartMs = millis();
+    cdAlarmNextMs = cdAlarmStartMs;
+    cdAlarmStep = 0;
+}
+
+// 非阻塞推进滴滴节奏
+static void cdUpdateAlarm() {
+    if (!cdAlarmActive) {
+        return;
+    }
+    const uint32_t now = millis();
+    if (now - cdAlarmStartMs >= CD_ALARM_MAX_MS) {
+        cdStopAlarm();
+        return;
+    }
+    if (now < cdAlarmNextMs) {
+        return;
+    }
+
+    switch (cdAlarmStep) {
+        case 0: // 第一声
+            playUiTone(CD_ALARM_HZ, CD_ALARM_BEEP_MS);
+            cdAlarmNextMs = now + CD_ALARM_BEEP_MS + CD_ALARM_GAP_MS;
+            cdAlarmStep = 1;
+            break;
+        case 1: // 间隙结束 → 第二声
+            playUiTone(CD_ALARM_HZ, CD_ALARM_BEEP_MS);
+            cdAlarmNextMs = now + CD_ALARM_BEEP_MS + CD_ALARM_REST_MS;
+            cdAlarmStep = 2;
+            break;
+        default: // 长歇结束 → 下一轮
+            cdAlarmStep = 0;
+            cdAlarmNextMs = now;
+            break;
+    }
+}
+
+// 取消闹钟并回到设置页
+static void cdDismissFinished() {
+    cdStopAlarm();
+    cdPhase = CountdownPhase::SETUP;
+    cdField = 0;
+    cdRemainMs = 0;
+    cdInvalidateTimeCache();
+    drawCountdownChrome();
+    int area_y = 0;
+    int area_h = 0;
+    getCountdownDisplayArea(area_y, area_h);
+    drawCountdownTime(area_y, area_h, true);
+}
+
 static void cdToggleRun() {
     if (cdPhase == CountdownPhase::SETUP) {
         cdStart();
@@ -478,6 +596,8 @@ static void cdToggleRun() {
         return;
     }
     if (cdPhase == CountdownPhase::FINISHED) {
+        // BtnA：停闹钟后重新开始
+        cdStopAlarm();
         cdInvalidateTimeCache();
         drawCountdownChrome();
         cdStart();
@@ -485,6 +605,7 @@ static void cdToggleRun() {
 }
 
 static void cdResetToSetup() {
+    cdStopAlarm();
     cdPhase = CountdownPhase::SETUP;
     cdField = 0;
     cdRemainMs = 0;
@@ -492,7 +613,7 @@ static void cdResetToSetup() {
     drawCountdownChrome();
     int area_y = 0;
     int area_h = 0;
-    getTimeDisplayArea(area_y, area_h);
+    getCountdownDisplayArea(area_y, area_h);
     drawCountdownTime(area_y, area_h, true);
 }
 
@@ -501,6 +622,7 @@ void redrawCountdownApp() {
 }
 
 void enterCountdownApp() {
+    cdStopAlarm();
     cdPhase = CountdownPhase::SETUP;
     cdHours = 0;
     cdMinutes = 5;
@@ -512,13 +634,19 @@ void enterCountdownApp() {
     drawCountdownApp(true);
 }
 
+void leaveCountdownApp() {
+    cdStopAlarm();
+}
+
 void updateCountdownApp() {
+    cdUpdateAlarm();
+
     if (cdPhase == CountdownPhase::RUNNING) {
         const int32_t left = static_cast<int32_t>(cdEndMs - millis());
         if (left <= 0) {
             cdRemainMs = 0;
             cdPhase = CountdownPhase::FINISHED;
-            M5Cardputer.Speaker.tone(880, 400);
+            cdStartAlarm();
             cdInvalidateTimeCache();
             drawCountdownChrome();
             drawCountdownApp(true);
@@ -541,6 +669,23 @@ void pollCountdownBtnA() {
 }
 
 void handleCountdownApp(const Keyboard_Class::KeysState& status) {
+    if (cdPhase == CountdownPhase::FINISHED) {
+        const char key = cdPressedLetter(status);
+        if (key == CD_ALARM_CANCEL_KEY) {
+            cdDismissFinished();
+            return;
+        }
+        if (key == 'r') {
+            cdResetToSetup();
+            return;
+        }
+        if (status.space || status.enter) {
+            cdToggleRun();
+            return;
+        }
+        return;
+    }
+
     if (cdPhase == CountdownPhase::SETUP) {
         const int field_delta = getCountdownFieldDelta(status);
         if (field_delta != 0) {

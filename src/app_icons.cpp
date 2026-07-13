@@ -249,8 +249,9 @@ void drawIconBattery(const int x, const int y, const int level, const bool charg
     const int body_h = getIconBatteryBodyHeight();
     const int bolt_offset = charging ? BOLT_ZONE_W + BOLT_BATTERY_GAP : 0;
     const int battery_x = x + bolt_offset;
-    const int body_x = battery_x;
-    const int head_x = body_x + body_w;
+    // 正极朝左：head | body
+    const int head_x = battery_x;
+    const int body_x = battery_x + BATTERY_HEAD_W;
     const int total_w = getBatteryIndicatorWidth();
     const uint16_t accent = charging ? GREEN : WHITE;
 
@@ -270,7 +271,8 @@ void drawIconBattery(const int x, const int y, const int level, const bool charg
     const int filled = constrain((level + 19) / 20, 0, BATTERY_SEGMENTS);
     for (int i = 0; i < BATTERY_SEGMENTS; i++) {
         const int sx = seg_x0 + i * (BATTERY_SEG_W + BATTERY_SEG_GAP);
-        if (i < filled) {
+        // 从远离正极一侧开始亮（正极在左 → 从右往左填）
+        if (i >= BATTERY_SEGMENTS - filled) {
             M5Cardputer.Display.fillRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, accent);
         } else {
             M5Cardputer.Display.drawRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, DARKGREY);
@@ -343,15 +345,17 @@ void drawIconInfoStorage(const int x, const int y, const uint16_t color) {
 }
 
 void drawIconInfoBatterySized(const int x, const int y, const uint16_t color, const int size) {
-    const int body_x = x + infoIconS(3, size);
+    const int head_w = infoIconS(2, size);
+    const int body_x = x + infoIconS(3, size) + head_w;
     const int body_y = y + infoIconS(7, size);
     const int body_w = infoIconS(16, size);
     const int body_h = infoIconS(10, size);
-    const int head_x = body_x + body_w;
+    // 正极朝左
+    const int head_x = body_x - head_w;
     const int head_y = body_y + infoIconS(3, size);
 
     M5Cardputer.Display.drawRect(body_x, body_y, body_w, body_h, color);
-    M5Cardputer.Display.fillRect(head_x, head_y, infoIconS(2, size), infoIconS(4, size), color);
+    M5Cardputer.Display.fillRect(head_x, head_y, head_w, infoIconS(4, size), color);
     for (int i = 0; i < 3; i++) {
         M5Cardputer.Display.fillRect(body_x + infoIconS(2 + i * 5, size), body_y + infoIconS(2, size),
                                      infoIconS(3, size), body_h - infoIconS(4, size), color);

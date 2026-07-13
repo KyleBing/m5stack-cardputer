@@ -87,7 +87,7 @@ static uint8_t g_saved_brightness = 30;
 // Help 页（方向键翻页）
 static bool g_help_visible = false;
 static int g_help_page = 0;
-static constexpr int CURSOR_HELP_PAGE_COUNT = 3;
+static constexpr int CURSOR_HELP_PAGE_COUNT = 4;
 static constexpr int CURSOR_HELP_LINE_H = 11;
 
 static void beginCursorFetch(const CursorFetchMode mode);
@@ -822,6 +822,12 @@ static void drawCursorHelpPage() {
     y = drawCursorHelpText(y, "then every 5m");
     y = drawCursorHelpText(y, "silent: no UI flash");
     y = drawCursorHelpText(y, "blank: still refreshes");
+  } else if (g_help_page == 2) {
+    y = drawCursorHelpTitle(y, "Usage");
+    y = drawCursorHelpText(y, "used: metered spend");
+    y = drawCursorHelpText(y, "not subscription fee");
+    y = drawCursorHelpText(y, "$20 plan is separate");
+    y = drawCursorHelpText(y, "right value: left quota");
   } else {
     y = drawCursorHelpTitle(y, "WiFi");
     y = drawCursorHelpText(y, "connect only to fetch");

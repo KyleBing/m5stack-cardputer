@@ -1,5 +1,6 @@
 #include "app_common.h"
 #include "app_config.h"
+#include "app_connectivity.h"
 #include "app_header.h"
 #include "app_icons.h"
 #include <WiFi.h>
@@ -214,7 +215,7 @@ bool ensureConfigWifi(const uint32_t timeout_ms) {
     }
 
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
+    applyWifiRadioSleepPolicy();
     WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
 
     const uint32_t deadline = millis() + timeout_ms;
@@ -363,4 +364,44 @@ int getMenuNavDelta(const Keyboard_Class::KeysState& status) {
         }
     }
     return 0;
+}
+
+// 距上次有效出声超过该间隔则认为功放/I2S 已冷掉
+static constexpr uint32_t SPK_WARM_IDLE_MS = 30000;
+static uint32_t g_spk_last_ready_ms = 0;
+
+// I2S 与功放冷启动时前几十毫秒常丢样，先静音跑一段预热
+void warmUpSpeakerIfNeeded() {
+    const uint32_t now = millis();
+    if (M5Cardputer.Speaker.isRunning() && (now - g_spk_last_ready_ms) < SPK_WARM_IDLE_MS) {
+        return;
+    }
+    const uint8_t vol = M5Cardputer.Speaker.getVolume();
+    M5Cardputer.Speaker.setVolume(0);
+    M5Cardputer.Speaker.tone(1000, 80);
+    delay(100); // 等 DMA 起转、功放就绪
+    M5Cardputer.Speaker.stop();
+    M5Cardputer.Speaker.setVolume(vol == 0 ? 64 : vol);
+    g_spk_last_ready_ms = millis();
+}
+
+void playUiTone(const float freq_hz, const uint32_t duration_ms) {
+    warmUpSpeakerIfNeeded();
+    M5Cardputer.Speaker.tone(freq_hz, duration_ms);
+    g_spk_last_ready_ms = millis();
+}
+
+bool isTimeKeySoundEnabled() {
+    // 未加载配置时默认开启
+    if (!getAppConfig().loaded) {
+        return true;
+    }
+    return getAppConfig().time_key_sound;
+}
+
+void playTimeKeyTone(const float freq_hz, const uint32_t duration_ms) {
+    if (!isTimeKeySoundEnabled()) {
+        return;
+    }
+    playUiTone(freq_hz, duration_ms);
 }

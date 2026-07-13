@@ -86,3 +86,11 @@ void flushCardputerInput(bool wait_btn_a = true);
 
 // 翻页键：-1 上一页，0 无，1 下一页（方向键 / ; , . /）
 int getMenuNavDelta(const Keyboard_Class::KeysState& status);
+
+// I2S/功放冷启动预热（短提示音前调用）
+void warmUpSpeakerIfNeeded();
+// 播放短 UI 提示音（内部会按需预热）
+void playUiTone(float freq_hz, uint32_t duration_ms);
+// Time 按键声：受 settings/sound.time_key 控制（countdown 闹钟请用 playUiTone）
+void playTimeKeyTone(float freq_hz, uint32_t duration_ms);
+bool isTimeKeySoundEnabled();

@@ -6,11 +6,22 @@
   "devices": [
     {
       "name": "living-room-light",
+      "name_zh": "客厅灯",
       "id": "123456789",
       "mac": "AA:BB:CC:DD:EE:FF",
       "ip": "192.168.1.50",
       "token": "0123456789abcdef0123456789abcdef",
       "model": "yeelink.light.lamp2"
+    },
+    {
+      "name": "Sensor_HT",
+      "name_zh": "温湿度计",
+      "id": "blt.3.example",
+      "mac": "A4:C1:38:00:00:00",
+      "model": "miaomiaoce.sensor_ht.t2",
+      "ble": {
+        "key": "0123456789abcdef0123456789abcdef"
+      }
     }
   ],
   "cursor": {

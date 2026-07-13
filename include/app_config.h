@@ -1,14 +1,17 @@
 #pragma once
 
 #include <Arduino.h>
-// 米家设备条目（miIO 控制需 ip + token，其余为识别信息）
+
+// 米家设备条目：WiFi miIO 用 ip+token；BLE 传感器用 mac+ble_key
 struct MijiaDevice {
     char name[32];
-    char id[16];
+    char name_zh[48]; // 中文显示名（优先于 name）
+    char id[48];      // blt. 设备 id 较长
     char mac[18];
     char ip[16];
     char token[33];
     char model[48];
+    char ble_key[33]; // 32 hex bindkey；空表示非 BLE
 };
 
 static constexpr int MIJIA_DEVICE_MAX = 50;
@@ -20,6 +23,7 @@ struct AppConfig {
     char wifi_password[65];
     char cursor_token[CURSOR_TOKEN_MAX];
     uint8_t brightness;
+    bool time_key_sound; // Time 内按键声（countdown 到点闹钟不受影响）
     MijiaDevice devices[MIJIA_DEVICE_MAX];
     int device_count;
     bool loaded;
@@ -40,7 +44,16 @@ bool saveAppConfigWifi(const char* ssid, const char* password);
 // 更新屏幕亮度并写回
 bool saveAppConfigBrightness(uint8_t brightness);
 
+// 更新 Time 按键声开关并写回
+bool saveAppConfigTimeKeySound(bool enabled);
+
 // 读取原始 config.json 文本（用于 Web 展示）
 bool readAppConfigRaw(String& out);
 
 const AppConfig& getAppConfig();
+
+// 显示名：优先 name_zh，否则 name
+const char* mijiaDeviceDisplayName(const MijiaDevice& dev);
+
+// 是否走 BLE 被动读取（有 ble_key 且无可用局域网 miIO）
+bool mijiaDeviceUsesBle(const MijiaDevice& dev);

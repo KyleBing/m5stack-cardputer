@@ -1,4 +1,5 @@
 #include "miio_client.h"
+#include "app_connectivity.h"
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -274,7 +275,7 @@ static bool miioSendJson(const char* ip, const char* json, char* resp, const siz
 static bool miioCommand(const char* ip, const char* method, const char* params_json,
                         char* resp, const size_t resp_max) {
     MiioSessionLock lock;
-    WiFi.setSleep(false);
+    applyWifiRadioSleepPolicy();
 
     if (!g_udp.begin(0)) {
         strncpy(g_last_error, "udp init", sizeof(g_last_error));

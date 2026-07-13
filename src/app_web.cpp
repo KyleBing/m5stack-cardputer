@@ -1,6 +1,7 @@
 #include "app_web.h"
 #include "app_common.h"
 #include "app_config.h"
+#include "app_connectivity.h"
 #include "app_device_icons.h"
 #include "app_header.h"
 #include <FS.h>
@@ -47,11 +48,20 @@ static const char* DEFAULT_CONFIG = R"({
   "devices": [
     {
       "name": "living-room-light",
+      "name_zh": "客厅灯",
       "id": "123456789",
       "mac": "AA:BB:CC:DD:EE:FF",
       "ip": "192.168.1.50",
       "token": "0123456789abcdef0123456789abcdef",
       "model": "yeelink.light.lamp2"
+    },
+    {
+      "name": "Sensor_HT",
+      "name_zh": "温湿度计",
+      "id": "blt.3.example",
+      "mac": "A4:C1:38:00:00:00",
+      "model": "miaomiaoce.sensor_ht.t2",
+      "ble": { "key": "0123456789abcdef0123456789abcdef" }
     }
   ],
   "cursor": {
@@ -168,12 +178,14 @@ static void sendHtmlPage(const String& body) {
               ".dev-table .col-act .act-stack{display:flex;flex-direction:row;flex-wrap:nowrap;"
               "gap:3px;align-items:center}"
               ".dev-table .col-act button{width:auto;margin:0;flex-shrink:0}"
-              ".dev-table .col-name{width:14%}"
-              ".dev-table .col-ip{width:11%}"
-              ".dev-table .col-token{width:20%}"
-              ".dev-table .col-model{width:22%}"
+              ".dev-table .col-name{width:10%}"
+              ".dev-table .col-namezh{width:10%}"
+              ".dev-table .col-ip{width:9%}"
+              ".dev-table .col-token{width:14%}"
+              ".dev-table .col-ble{width:14%}"
+              ".dev-table .col-model{width:16%}"
               ".dev-table .col-id{width:10%}"
-              ".dev-table .col-mac{width:13%}"
+              ".dev-table .col-mac{width:10%}"
               ".model-cell{display:flex;gap:6px;align-items:flex-start}"
               ".model-cell textarea{flex:1;min-width:0}"
               ".dev-icon{width:32px;height:32px;object-fit:contain;flex-shrink:0;margin-top:2px;"
@@ -231,9 +243,11 @@ static void handleFormRoot() {
               "<thead><tr>"
               "<th class='col-idx'>#</th>"
               "<th class='col-name'>名称</th>"
+              "<th class='col-namezh'>中文名</th>"
               "<th class='col-act'>操作</th>"
               "<th class='col-ip'>IP</th>"
               "<th class='col-token'>Token</th>"
+              "<th class='col-ble'>BLE Key</th>"
               "<th class='col-model'>型号</th>"
               "<th class='col-id'>ID</th>"
               "<th class='col-mac'>MAC</th>"
@@ -306,11 +320,16 @@ static void handleFormRoot() {
         "cfg.cursor.token=document.getElementById('cursor-key').value;"
         "document.querySelectorAll('#dev-tbody tr').forEach(row=>{"
         "const d={};row.querySelectorAll('[data-f]').forEach(el=>{d[el.dataset.f]=el.value;});"
+        "const bk=d.ble_key||'';delete d.ble_key;"
+        "if(bk)d.ble={key:bk};else delete d.ble;"
+        "if(!d.name_zh)delete d.name_zh;"
         "cfg.devices.push(d);});}"
+        "function bleKeyOf(d){return (d.ble&&d.ble.key)||d.ble_key||'';}"
         "function render(){const tb=document.getElementById('dev-tbody');tb.innerHTML='';"
         "cfg.devices.forEach((d,i)=>{const tr=document.createElement('tr');tr.dataset.i=i;"
         "tr.innerHTML=`<td class='col-idx'>${i+1}</td>"
         "<td class='col-name'>${ta('name',d.name)}</td>"
+        "<td class='col-namezh'>${ta('name_zh',d.name_zh||d.name_cn||'')}</td>"
         "<td class='col-act'><div class='act-stack'>"
         "<button type='button' class='icon-btn' data-act='up' title='上移'>↑</button>"
         "<button type='button' class='icon-btn' data-act='down' title='下移'>↓</button>"
@@ -320,6 +339,7 @@ static void handleFormRoot() {
         "</div></td>"
         "<td class='col-ip'>${ta('ip',d.ip)}</td>"
         "<td class='col-token'>${ta('token',d.token)}</td>"
+        "<td class='col-ble'>${ta('ble_key',bleKeyOf(d))}</td>"
         "<td class='col-model'>${modelCell(d.model)}</td>"
         "<td class='col-id'>${ta('id',d.id)}</td>"
         "<td class='col-mac'>${ta('mac',d.mac)}</td>`;tb.appendChild(tr);});"
@@ -348,7 +368,8 @@ static void handleFormRoot() {
         "t.onclick=()=>switchTab(t.dataset.tab);});"
         "document.getElementById('btn-add').onclick=()=>{collect();"
         "if(cfg.devices.length>=DEV_MAX){alert('最多 '+DEV_MAX+' 台设备');return;}"
-        "cfg.devices.push({name:'',id:'',mac:'',ip:'',token:'',model:''});render();"
+        "cfg.devices.push({name:'',name_zh:'',id:'',mac:'',ip:'',token:'',model:'',ble:{key:''}});"
+        "render();"
         "switchTab('devices');};"
         "document.getElementById('dev-tbody').onclick=e=>{const b=e.target.closest('button');"
         "if(!b)return;const i=+b.closest('tr').dataset.i;"
@@ -417,8 +438,9 @@ static void handleSave() {
 }
 
 static void handleExample() {
-    String body = F("<h1>示例 config.json</h1><p>米家控制使用 <code>ip</code> + <code>token</code>，"
-                    "开关命令为 <code>set_power</code>。Cursor 用量见主页 "
+    String body = F("<h1>示例 config.json</h1><p>WiFi 米家用 <code>ip</code> + <code>token</code>；"
+                    "BLE 传感器用 <code>mac</code> + <code>ble.key</code>，可加 <code>name_zh</code>。"
+                    "Cursor 用量见主页 "
                     "<strong>Cursor</strong> 标签页。</p><pre>");
     body += DEFAULT_CONFIG;
     body += F("</pre><p class='nav'><a href='/'>← 返回主页</a></p>");
@@ -451,7 +473,7 @@ static void startWifiConnectAttempt() {
     const AppConfig& cfg = getAppConfig();
     if (!g_force_ap_mode && cfg.loaded && cfg.wifi_ssid[0] != '\0') {
         WiFi.mode(WIFI_STA);
-        WiFi.setSleep(false);
+        applyWifiRadioSleepPolicy();
         WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
         g_connect_deadline_ms = millis() + 12000;
         strncpy(g_web_status, "wifi...", sizeof(g_web_status));

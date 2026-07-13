@@ -195,11 +195,31 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         return;
     }
     // 其他操作中间态（亮度/风速/摇头等）
-    if (strcmp(s, "query...") == 0 || strcmp(s, "bright...") == 0 || strcmp(s, "ct...") == 0 ||
-        strcmp(s, "hue...") == 0 || strcmp(s, "speed...") == 0 || strcmp(s, "roll...") == 0 ||
-        strcmp(s, "mode...") == 0 || strcmp(s, "angle...") == 0 || strcmp(s, "fan lv...") == 0 ||
-        strcmp(s, "temp...") == 0 || strcmp(s, "time...") == 0) {
+    if (strcmp(s, "query...") == 0 || strcmp(s, "listening") == 0 || strcmp(s, "bright...") == 0 ||
+        strcmp(s, "ct...") == 0 || strcmp(s, "hue...") == 0 || strcmp(s, "speed...") == 0 ||
+        strcmp(s, "roll...") == 0 || strcmp(s, "mode...") == 0 || strcmp(s, "angle...") == 0 ||
+        strcmp(s, "fan lv...") == 0 || strcmp(s, "temp...") == 0 || strcmp(s, "time...") == 0) {
         strncpy(tag.text, "...", sizeof(tag.text));
+        return;
+    }
+
+    // BLE 温湿度 / 事件：优先于 ON/OFF
+    if (ui.temp_known) {
+        snprintf(tag.text, sizeof(tag.text), "%d", static_cast<int>(ui.temperature + 0.5f));
+        tag.active = true;
+        tag.bg = CYAN;
+        return;
+    }
+    if (ui.humidity_known) {
+        snprintf(tag.text, sizeof(tag.text), "%d%%", static_cast<int>(ui.humidity + 0.5f));
+        tag.active = true;
+        tag.bg = CYAN;
+        return;
+    }
+    if (ui.motion_known) {
+        strncpy(tag.text, ui.motion ? "MOV" : "IDL", sizeof(tag.text));
+        tag.active = ui.motion;
+        tag.bg = ui.motion ? APP_COLOR_OK : APP_COLOR_MUTED;
         return;
     }
 
@@ -216,6 +236,24 @@ void mijiaFormatGridStatusTag(const MijiaUiState& ui, MijiaGridStatusTag& tag) {
         return;
     }
 
+    if (strcmp(s, "press r") == 0) {
+        strncpy(tag.text, "R?", sizeof(tag.text));
+        return;
+    }
+    if (strcmp(s, "ble") == 0) {
+        strncpy(tag.text, "BLE", sizeof(tag.text));
+        return;
+    }
+    if (strcmp(s, "no adv") == 0 || strcmp(s, "parse fail") == 0 ||
+        strcmp(s, "decrypt fail") == 0) {
+        strncpy(tag.text, "N/A", sizeof(tag.text));
+        tag.bg = APP_COLOR_WARN;
+        return;
+    }
+    if (strcmp(s, "ble n/a") == 0 || strcmp(s, "read only") == 0) {
+        strncpy(tag.text, "RO", sizeof(tag.text));
+        return;
+    }
     if (strcmp(s, "timeout") == 0) {
         strncpy(tag.text, "TMO", sizeof(tag.text));
         tag.bg = APP_COLOR_WARN;
@@ -485,7 +523,7 @@ void drawMijiaControlPowerBorder(const bool power_on) {
     const int screen_w = M5Cardputer.Display.width();
     const int screen_h = M5Cardputer.Display.height();
     // 从 header 底边起画，去掉内容区与 header 之间的空隙
-    constexpr int y = APP_HEADER_H;
+    constexpr int y = APP_CONTENT_Y_NO_TAP_TO_HEADER;
     const int h = screen_h - y;
     constexpr int t = 2;
     constexpr int r = 4;
@@ -812,6 +850,70 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
             const int time_pct = constrain(mins * 100 / 60, 0, 100);
             snprintf(tbuf, sizeof(tbuf), "%dm", mins);
             cy = drawMijiaBarRow(x, cy, "time", tbuf, time_pct, w, CYAN, 1, 9);
+            return cy;
+        }
+
+        case MijiaDevKind::SENSOR_HT: {
+            int cy = y;
+            M5Cardputer.Display.setTextSize(text_size);
+            if (ui.temp_known) {
+                snprintf(buf, sizeof(buf), "%.1fC", ui.temperature);
+                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+                M5Cardputer.Display.setCursor(x, cy);
+                M5Cardputer.Display.print("temp ");
+                M5Cardputer.Display.setTextColor(CYAN, BLACK);
+                M5Cardputer.Display.print(buf);
+                cy += INFO_LINE_H;
+            }
+            if (ui.humidity_known) {
+                snprintf(buf, sizeof(buf), "%.0f%%", ui.humidity);
+                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+                M5Cardputer.Display.setCursor(x, cy);
+                M5Cardputer.Display.print("hum  ");
+                M5Cardputer.Display.setTextColor(CYAN, BLACK);
+                M5Cardputer.Display.print(buf);
+                cy += INFO_LINE_H;
+            }
+            if (ui.battery_known) {
+                snprintf(buf, sizeof(buf), "%d%%", ui.battery);
+                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+                M5Cardputer.Display.setCursor(x, cy);
+                M5Cardputer.Display.print("bat  ");
+                M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
+                M5Cardputer.Display.print(buf);
+                cy += INFO_LINE_H;
+            }
+            return cy;
+        }
+
+        case MijiaDevKind::BLE_EVENT: {
+            int cy = y;
+            M5Cardputer.Display.setTextSize(text_size);
+            if (ui.motion_known) {
+                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+                M5Cardputer.Display.setCursor(x, cy);
+                M5Cardputer.Display.print("motion ");
+                M5Cardputer.Display.setTextColor(ui.motion ? APP_COLOR_OK : APP_COLOR_HINT, BLACK);
+                M5Cardputer.Display.print(ui.motion ? "yes" : "idle");
+                cy += INFO_LINE_H;
+            }
+            if (ui.button_known) {
+                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+                M5Cardputer.Display.setCursor(x, cy);
+                M5Cardputer.Display.print("btn ");
+                M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
+                M5Cardputer.Display.print(ui.button ? "press" : "-");
+                cy += INFO_LINE_H;
+            }
+            if (ui.battery_known) {
+                snprintf(buf, sizeof(buf), "%d%%", ui.battery);
+                M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+                M5Cardputer.Display.setCursor(x, cy);
+                M5Cardputer.Display.print("bat ");
+                M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
+                M5Cardputer.Display.print(buf);
+                cy += INFO_LINE_H;
+            }
             return cy;
         }
 

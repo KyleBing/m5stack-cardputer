@@ -11,9 +11,14 @@ enum class MijiaDevKind {
     AIR_PURIFIER_F20,
     AIR_FRYER,
     PLUG,
+    SENSOR_HT,  // BLE 温湿度
+    BLE_EVENT,  // BLE 人体/无线开关等事件
 };
 
 MijiaDevKind mijiaClassifyModel(const char* model);
+
+// 是否为可被动扫描的 BLE 传感器/事件设备
+bool mijiaBleCanScan(const MijiaDevice& dev);
 
 // 当前设备 UI 状态
 struct MijiaUiState {
@@ -35,6 +40,17 @@ struct MijiaUiState {
     int fan_level;   // 净化器风速 0-5；炸锅目标温度 °C
     int aqi;         // 净化器 AQI；炸锅剩余时间 min
     int fryer_time;  // 炸锅目标时长 min（手动模式）
+    // BLE 传感器
+    bool temp_known;
+    bool humidity_known;
+    bool battery_known;
+    bool motion_known;
+    bool button_known;
+    float temperature;
+    float humidity;
+    int battery;
+    bool motion;
+    bool button;
     char status[48];
 };
 

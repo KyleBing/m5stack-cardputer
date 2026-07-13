@@ -138,6 +138,9 @@ static void drawStopwatchApp(const bool full_init) {
 }
 
 static void swReset() {
+    playTimeKeyTone(880, 35);
+    delay(75); // 双击间隔
+    playTimeKeyTone(880, 35);
     swRunning = false;
     swAccumMs = 0;
     swStartMs = 0;
@@ -163,14 +166,19 @@ void enterStopwatchApp() {
     swStartMs = 0;
     swScreenReady = false;
     swTimeState = BigTimeState{};
+    if (isTimeKeySoundEnabled()) {
+        warmUpSpeakerIfNeeded();
+    }
     drawStopwatchApp(true);
 }
 
 static void swToggleRun() {
     if (swRunning) {
+        playTimeKeyTone(1000, 50); // pause（喇叭 <800Hz 几乎听不见）
         swAccumMs += millis() - swStartMs;
         swRunning = false;
     } else {
+        playTimeKeyTone(1200, 50); // start / resume
         swStartMs = millis();
         swRunning = true;
     }

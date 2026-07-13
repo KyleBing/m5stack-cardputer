@@ -1,5 +1,6 @@
 #include "app_wifi.h"
 #include "app_config.h"
+#include "app_connectivity.h"
 #include "app_header.h"
 #include "app_header.h"
 #include "app_icons.h"
@@ -355,7 +356,7 @@ static void startWifiConfigConnect() {
     }
 
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
+    applyWifiRadioSleepPolicy();
     WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
 
     wifiSelectedIdx = -1;
@@ -392,7 +393,7 @@ static void startWifiConnect(const char* password) {
 
     const String ssid = WiFi.SSID(wifiSelectedIdx);
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
+    applyWifiRadioSleepPolicy();
     // 切换 SSID 时才断开，避免频繁 disconnect 导致连接超时
     if (WiFi.status() == WL_CONNECTED && WiFi.SSID() != ssid) {
         WiFi.disconnect();

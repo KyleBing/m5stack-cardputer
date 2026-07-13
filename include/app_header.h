@@ -3,6 +3,8 @@
 // 全局 header 高度与内容区起始坐标
 static constexpr int APP_HEADER_H = 28;
 static constexpr int APP_CONTENT_X = 4;
+// 紧贴 header 下沿的内容起始 Y（无 5px 间隙）
+static constexpr int APP_CONTENT_Y_NO_TAP_TO_HEADER = APP_HEADER_H;
 static constexpr int APP_CONTENT_Y = APP_HEADER_H + 5;
 
 // 子界面 header：应用名 + btngo 返回图标（右侧）

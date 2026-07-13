@@ -1,12 +1,14 @@
 #include "app_mijia.h"
 #include "app_common.h"
 #include "app_config.h"
+#include "app_connectivity.h"
 #include "app_header.h"
 #include "app_colors.h"
 #include "app_icons.h"
 #include "app_mijia_ui.h"
 #include "app_device_icons.h"
 #include "mijia_control.h"
+#include "mijia_ble.h"
 #include "miio_client.h"
 #include <WiFi.h>
 #include <cctype>
@@ -27,11 +29,13 @@ static int mijiaRefreshGen = 0; // 刷新生成器
 static volatile bool mijiaRefreshTaskRunning = false; // 刷新任务是否正在运行
 static volatile bool mijiaRefreshTimedOut = false; // 刷新任务是否超时
 static volatile bool mijiaNeedRedraw = false; // 是否需要重绘
+static bool mijiaBleScanPending = false;      // 主循环启动非阻塞 BLE 扫描
 static uint32_t mijiaRefreshDeadlineMs = 0; // 刷新任务的截止时间
 
 // 米家状态值常量定义
 static constexpr uint32_t MIJIA_REFRESH_TIMEOUT_MS = 2000;  // 刷新任务超时时间
 static constexpr uint32_t MIJIA_GRID_REFRESH_TIMEOUT_MS = 2000;  // 宫格刷新任务超时时间
+static constexpr uint32_t MIJIA_BLE_REFRESH_TIMEOUT_MS = 9000;   // BLE 短扫超时
 static constexpr uint32_t MIJIA_WIFI_TIMEOUT_MS = 12000;  // 联网超时时间
 
 enum class MijiaWifiPhase : uint8_t {
@@ -132,7 +136,7 @@ static void startMijiaWifiConnect() {
     }
 
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
+    applyWifiRadioSleepPolicy();
     WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
     mijiaWifiPhase = MijiaWifiPhase::CONNECTING;
     mijiaWifiDeadlineMs = millis() + MIJIA_WIFI_TIMEOUT_MS;
@@ -201,7 +205,13 @@ static bool mijiaPanelControlsVisualChanged(const MijiaUiState& old_ui, const Mi
            old_ui.sat != new_ui.sat || old_ui.speed != new_ui.speed || old_ui.roll != new_ui.roll ||
            old_ui.roll_angle != new_ui.roll_angle || old_ui.mode != new_ui.mode ||
            old_ui.fan_level != new_ui.fan_level || old_ui.aqi != new_ui.aqi ||
-           old_ui.fryer_time != new_ui.fryer_time;
+           old_ui.fryer_time != new_ui.fryer_time || old_ui.temp_known != new_ui.temp_known ||
+           old_ui.humidity_known != new_ui.humidity_known ||
+           old_ui.battery_known != new_ui.battery_known ||
+           old_ui.temperature != new_ui.temperature || old_ui.humidity != new_ui.humidity ||
+           old_ui.battery != new_ui.battery || old_ui.motion_known != new_ui.motion_known ||
+           old_ui.motion != new_ui.motion || old_ui.button_known != new_ui.button_known ||
+           old_ui.button != new_ui.button;
 }
 
 static bool mijiaPanelRightVisualChanged(const MijiaUiState& old_ui, const MijiaUiState& new_ui,
@@ -436,6 +446,26 @@ static void mijiaJobTaskFn(void* arg) {
         return;
     }
 
+    if (mijiaDeviceUsesBle(device)) {
+        // 禁止在后台任务初始化/扫描 BLE（会闪退）；交给主循环
+        if (overview_cache && job_gen == mijiaRefreshGen) {
+            strncpy(mijiaOverviewUi[job_idx].status, "ble",
+                    sizeof(mijiaOverviewUi[job_idx].status));
+            if (job_type == MijiaJobType::QUERY) {
+                mijiaOverviewRefreshQueuePos++;
+            }
+            queueMijiaGridCellRefresh(job_idx);
+        } else if (!overview_cache && job_gen == mijiaRefreshGen && job_idx == mijiaDeviceIdx) {
+            strncpy(mijiaUi.status, mijiaBleCanScan(device) ? "press r" : "ble n/a",
+                    sizeof(mijiaUi.status));
+            mijiaRefreshDeadlineMs = 0;
+            mijiaNeedRedraw = true;
+        }
+        finishMijiaRefreshTask(job_gen);
+        vTaskDelete(nullptr);
+        return;
+    }
+
     if (!isMijiaConfigWifiConnected()) {
         if (overview_cache && job_gen == mijiaRefreshGen) {
             strncpy(mijiaOverviewUi[job_idx].status, "wifi fail", sizeof(mijiaOverviewUi[job_idx].status));
@@ -502,9 +532,7 @@ static void mijiaJobTaskFn(void* arg) {
             }
             queueMijiaGridCellRefresh(job_idx);
             if (job_idx == mijiaDeviceIdx) {
-                mijiaUi.power_known = temp.power_known;
-                mijiaUi.power_on = temp.power_on;
-                strncpy(mijiaUi.status, temp.status, sizeof(mijiaUi.status));
+                mijiaUi = temp;
             }
         } else if (job_idx == mijiaDeviceIdx) {
             mijiaUi = temp;
@@ -547,8 +575,26 @@ static void scheduleMijiaRefresh() {
     }
 }
 
-// 请求刷新当前设备（不阻塞按键处理；需 WiFi 已就绪）
+// 请求刷新当前设备（不阻塞按键处理；WiFi 设备需联网，BLE 传感器走主循环扫描）
 static void requestMijiaRefresh() {
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev == nullptr) {
+        return;
+    }
+    if (mijiaDeviceUsesBle(*dev)) {
+        cancelMijiaPendingJobs();
+        mijiaRefreshTimedOut = false;
+        mijiaRefreshDeadlineMs = 0;
+        if (mijiaBleCanScan(*dev)) {
+            strncpy(mijiaUi.status, "listening", sizeof(mijiaUi.status));
+            mijiaBleScanPending = true;
+        } else {
+            strncpy(mijiaUi.status, "ble n/a", sizeof(mijiaUi.status));
+            mijiaBleScanPending = false;
+        }
+        mijiaNeedRedraw = true;
+        return;
+    }
     if (mijiaWifiPhase != MijiaWifiPhase::READY && !isMijiaConfigWifiConnected()) {
         return;
     }
@@ -564,7 +610,7 @@ static void requestMijiaRefresh() {
     scheduleMijiaRefresh();
 }
 
-// 状态查询超过 1s 就判定超时，晚到结果会被 gen 丢弃
+// 状态查询超时，晚到结果会被 gen 丢弃
 static void updateMijiaRefreshTimeout() {
     if (mijiaRefreshTimedOut || mijiaRefreshDeadlineMs == 0) {
         return;
@@ -583,8 +629,20 @@ static void updateMijiaRefreshTimeout() {
 // 立即切换设备并异步拉状态（取消上一台未完成的操作）
 static void switchMijiaDevice(const int delta, const int device_count) {
     cancelMijiaPendingJobs();
+    mijiaBleScanPending = false;
+    mijiaBleScanAbort();
     mijiaDeviceIdx = (mijiaDeviceIdx + delta + device_count) % device_count;
     mijiaResetUiState(mijiaUi);
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev != nullptr && mijiaDeviceUsesBle(*dev)) {
+        // BLE：切换时绝不启动后台任务 / BLE 栈，避免闪退
+        strncpy(mijiaUi.status, mijiaBleCanScan(*dev) ? "press r" : "ble n/a",
+                sizeof(mijiaUi.status));
+        applyMijiaControlRefresh(true);
+        mijiaRefreshTimedOut = false;
+        mijiaRefreshDeadlineMs = 0;
+        return;
+    }
     strncpy(mijiaUi.status, "query...", sizeof(mijiaUi.status));
     applyMijiaControlRefresh(true);
     mijiaRefreshTimedOut = false;
@@ -647,12 +705,15 @@ static void scheduleMijiaOverviewRefreshJob() {
     job->gen = mijiaRefreshGen;
     job->device_idx = idx;
     job->device = cfg.devices[idx];
-    job->deadline_ms = millis() + MIJIA_GRID_REFRESH_TIMEOUT_MS;
+    job->deadline_ms = millis() + (mijiaDeviceUsesBle(cfg.devices[idx]) ? MIJIA_BLE_REFRESH_TIMEOUT_MS
+                                                                        : MIJIA_GRID_REFRESH_TIMEOUT_MS);
     job->overview_cache = true;
     job->type = MijiaJobType::QUERY;
 
     mijiaRefreshTaskRunning = true;
-    if (xTaskCreate(mijiaJobTaskFn, "mijia_job", 8192, job, 1, nullptr) != pdPASS) {
+    // BLE 扫描栈较大
+    const uint32_t stack = 8192;
+    if (xTaskCreate(mijiaJobTaskFn, "mijia_job", stack, job, 1, nullptr) != pdPASS) {
         delete job;
         mijiaRefreshTaskRunning = false;
         scheduleMijiaOverviewRefreshJob();
@@ -663,7 +724,22 @@ static void requestMijiaOverviewPageRefresh() {
     if (!mijiaOverviewMode || !mijiaOverviewGridMode) {
         return;
     }
-    if (mijiaWifiPhase != MijiaWifiPhase::READY && !isMijiaConfigWifiConnected()) {
+    // 本页若有 BLE 设备，无需 WiFi；否则需联网
+    const AppConfig& cfg_chk = getAppConfig();
+    bool page_has_ble = false;
+    if (cfg_chk.loaded) {
+        const int visible = mijiaOverviewGridMode ? MIJIA_GRID_PAGE_SIZE : MIJIA_LIST_VISIBLE_COUNT;
+        for (int i = 0; i < visible; i++) {
+            const int idx = mijiaOverviewScrollIdx + i;
+            if (idx >= 0 && idx < cfg_chk.device_count &&
+                mijiaDeviceUsesBle(cfg_chk.devices[idx])) {
+                page_has_ble = true;
+                break;
+            }
+        }
+    }
+    if (!page_has_ble && mijiaWifiPhase != MijiaWifiPhase::READY &&
+        !isMijiaConfigWifiConnected()) {
         return;
     }
 
@@ -682,6 +758,12 @@ static void requestMijiaOverviewPageRefresh() {
         }
         // 已有状态的设备不重复查询
         if (mijiaOverviewUi[idx].power_known) {
+            continue;
+        }
+        // BLE 设备不进后台查询队列（会闪退）
+        if (mijiaDeviceUsesBle(cfg.devices[idx])) {
+            strncpy(mijiaOverviewUi[idx].status, "ble", sizeof(mijiaOverviewUi[idx].status));
+            queueMijiaGridCellRefresh(idx);
             continue;
         }
         mijiaOverviewRefreshQueue[mijiaOverviewRefreshQueueLen++] = idx;
@@ -805,7 +887,7 @@ static void exitMijiaOverview() {
 
 // 宫格紧贴 header 顶边
 static int getMijiaGridOriginY() {
-    return APP_HEADER_H;
+    return APP_CONTENT_Y_NO_TAP_TO_HEADER;
 }
 
 // 概览列表每项高度：均分内容区（扣除底栏提示）
@@ -1546,7 +1628,7 @@ static int mijiaHelpRowY(const int row, const int total_rows, const int text_siz
     (void)total_rows;
     const int line_h = mijiaHintLineStep(text_size);
     const int gap = text_size == 2 ? 2 : 1;
-    return APP_CONTENT_Y + row * (line_h + gap);
+    return APP_CONTENT_Y_NO_TAP_TO_HEADER + row * (line_h + gap);
 }
 
 // 估算按键徽章 + 文案占用宽度
@@ -1586,20 +1668,12 @@ static int mijiaCountWrappedRows(const KeyHintItem* items, const int item_count,
     return rows;
 }
 
-static int mijiaCountHelpRows(const MijiaDevice* dev, const int max_w, const int text_size) {
+static int mijiaCountSpecialHelpRows(const MijiaDevice* dev, const int max_w,
+                                     const int text_size) {
     const MijiaDevKind kind =
         dev != nullptr ? mijiaClassifyModel(dev->model) : MijiaDevKind::GENERIC;
-    static const KeyHintItem action_items[] = {
-        {'o', "on"},
-        {'i', "off"},
-        {'t', "tog/BtnA"},
-        {'l', "list"},
-        {'h', "help"},
-    };
 
-    int rows = mijiaCountWrappedRows(action_items, 5, text_size, max_w);
-    rows += 1; // refresh + switch
-
+    int rows = 0;
     switch (kind) {
         case MijiaDevKind::LIGHT: {
             static const KeyHintItem bright_items[] = {{'-', "bright-"}, {'=', "bright+"}};
@@ -1666,6 +1740,30 @@ static int mijiaCountHelpRows(const MijiaDevice* dev, const int max_w, const int
     return rows;
 }
 
+static int mijiaCountHelpRows(const MijiaDevice* dev, const int max_w, const int text_size) {
+    static const KeyHintItem common_items[] = {
+        {'o', "on"},
+        {'i', "off"},
+        {'t', "tog/BtnA"},
+        {'r', "refresh"},
+        {'h', "help"},
+    };
+    static const KeyHintItem nav_items[] = {{'l', "list"}};
+
+    int rows = 1; // common section header
+    rows += mijiaCountWrappedRows(common_items, 5, text_size, max_w);
+    rows += 1; // navigation section header
+    rows += mijiaCountWrappedRows(nav_items, 1, text_size, max_w);
+    rows += 1; // arrow switch row
+
+    const int special_rows = mijiaCountSpecialHelpRows(dev, max_w, text_size);
+    if (special_rows > 0) {
+        rows += 1; // special section header
+        rows += special_rows;
+    }
+    return rows;
+}
+
 // 能排开用 2x，否则 1x；风扇 / 炸锅按键多，固定 1x
 static int mijiaPickHelpTextSize(const MijiaDevice* dev) {
     const MijiaDevKind kind =
@@ -1676,7 +1774,7 @@ static int mijiaPickHelpTextSize(const MijiaDevice* dev) {
     }
 
     const int max_w = M5Cardputer.Display.width() - APP_CONTENT_X * 2;
-    const int content_h = M5Cardputer.Display.height() - APP_CONTENT_Y - 2;
+    const int content_h = M5Cardputer.Display.height() - APP_CONTENT_Y_NO_TAP_TO_HEADER - 2;
     for (int size = 2; size >= 1; size--) {
         const int rows = mijiaCountHelpRows(dev, max_w, size);
         const int line_h = mijiaHintLineStep(size);
@@ -1731,24 +1829,93 @@ static int drawKeyHintsWrapped(const int x, const int start_row, const int total
     return row + 1;
 }
 
-// refresh 与 switch 同一行
-static void drawMijiaRefreshHelpRow(const int x, const int row, const int total_rows,
-                                    const int text_size) {
+static int drawMijiaHelpSectionHeader(const int row, const int total_rows, const int text_size,
+                                      const char* title) {
     const int y = mijiaHelpRowY(row, total_rows, text_size);
-    static const KeyHintItem refresh_item = {'r', "refresh"};
-    int cx = x + mijiaDrawKeyHintItem(x, y, refresh_item, text_size, APP_COLOR_HINT);
+    const int line_h = mijiaHintLineStep(text_size);
+    M5Cardputer.Display.fillRect(0, y, M5Cardputer.Display.width(), line_h, APP_COLOR_MUTED);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_TEXT, APP_COLOR_MUTED);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y + max(0, (line_h - 8) / 2));
+    M5Cardputer.Display.print(title);
+    return row + 1;
+}
 
-    M5Cardputer.Display.setTextSize(text_size);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, y);
-    M5Cardputer.Display.print("  ");
-    cx += M5Cardputer.Display.textWidth("  ");
-
-    cx += drawArrowBadge(cx, y, text_size);
+// 方向键切换设备
+static int drawMijiaSwitchHelpRow(const int x, const int row, const int total_rows,
+                                  const int text_size) {
+    const int y = mijiaHelpRowY(row, total_rows, text_size);
+    int cx = x + drawArrowBadge(x, y, text_size);
     M5Cardputer.Display.setTextSize(text_size);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, y);
     M5Cardputer.Display.print("switch");
+    return row + 1;
+}
+
+static int drawMijiaHelpColumnHeader(const int x, const int y, const int w, const char* title) {
+    M5Cardputer.Display.fillRect(x, y, w, INFO_LINE_H, APP_COLOR_MUTED);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_TEXT, APP_COLOR_MUTED);
+    M5Cardputer.Display.setCursor(x + 2, y + 1);
+    M5Cardputer.Display.print(title);
+    return y + INFO_LINE_H + 2;
+}
+
+// 三列 help 内部换行，返回下一行 y
+static int drawKeyHintsWrappedInColumn(const int x, int y, const int w,
+                                       const KeyHintItem* items, const int item_count,
+                                       const uint16_t color) {
+    if (items == nullptr || item_count <= 0) {
+        return y;
+    }
+
+    constexpr int text_size = 1;
+    constexpr int line_h = INFO_LINE_H;
+    constexpr int gap = 1;
+    int cx = x;
+    M5Cardputer.Display.setTextSize(text_size);
+    const int space_w = M5Cardputer.Display.textWidth(" ");
+
+    for (int i = 0; i < item_count; i++) {
+        const int item_w = mijiaMeasureKeyHintItem(items[i], text_size);
+        if (cx > x && cx + item_w > x + w) {
+            y += line_h + gap;
+            cx = x;
+        }
+        cx += mijiaDrawKeyHintItem(cx, y, items[i], text_size, color);
+        if (i != item_count - 1) {
+            M5Cardputer.Display.setCursor(cx, y);
+            M5Cardputer.Display.print(" ");
+            cx += space_w;
+        }
+    }
+    return y + line_h + gap;
+}
+
+static int drawMijiaSwitchHelpInColumn(const int x, const int y) {
+    int cx = x + drawArrowBadge(x, y, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print("switch");
+    return y + INFO_LINE_H + 1;
+}
+
+static int drawMijiaLightHelpInColumn(const MijiaDevice* dev, const int x, int y, const int w) {
+    static const KeyHintItem bright_items[] = {{'-', "bright-"}, {'=', "bright+"}};
+    static const KeyHintItem percent_items[] = {{'1', "10%"}, {'9', "90%"}, {'0', "100%"}};
+    static const KeyHintItem ct_items[] = {{'[', "ct-"}, {']', "ct+"}};
+    static const KeyHintItem hue_items[] = {{'j', "hue-"}, {'k', "hue+"}};
+    y = drawKeyHintsWrappedInColumn(x, y, w, bright_items, 2, APP_COLOR_HINT);
+    y = drawKeyHintsWrappedInColumn(x, y, w, percent_items, 3, APP_COLOR_HINT);
+    if (dev != nullptr && mijiaLightSupportsCt(dev->model)) {
+        y = drawKeyHintsWrappedInColumn(x, y, w, ct_items, 2, APP_COLOR_HINT);
+    }
+    if (dev != nullptr && mijiaLightSupportsHue(dev->model)) {
+        y = drawKeyHintsWrappedInColumn(x, y, w, hue_items, 2, APP_COLOR_HINT);
+    }
+    return y;
 }
 
 // 灯：亮度 + 色温 + 色相调节说明
@@ -1773,30 +1940,47 @@ static int drawMijiaLightHelpRows(const MijiaDevice* dev, const int start_row, c
     return row;
 }
 
-// 按设备类型绘制操作帮助（靠上排列）
+// 按设备类型绘制操作帮助（三列均分）
 static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
+    (void)text_size;
     const MijiaDevKind kind =
         dev != nullptr ? mijiaClassifyModel(dev->model) : MijiaDevKind::GENERIC;
-    const int max_w = M5Cardputer.Display.width() - APP_CONTENT_X * 2;
-    const int total_rows = mijiaCountHelpRows(dev, max_w, text_size);
+    const int screen_w = M5Cardputer.Display.width();
+    constexpr int col_count = 3;
+    constexpr int col_gap = 2;
+    const int col_w = (screen_w - col_gap * (col_count - 1)) / col_count;
+    const int col_y = APP_CONTENT_Y_NO_TAP_TO_HEADER;
 
-    static const KeyHintItem action_items[] = {
+    static const KeyHintItem common_items[] = {
         {'o', "on"},
         {'i', "off"},
         {'t', "tog/BtnA"},
-        {'l', "list"},
+        {'r', "refresh"},
         {'h', "help"},
     };
+    static const KeyHintItem nav_items[] = {{'l', "list"}};
 
-    int row = 0;
-    row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, action_items, 5, text_size,
-                              APP_COLOR_HINT, max_w);
-    drawMijiaRefreshHelpRow(APP_CONTENT_X, row, total_rows, text_size);
-    row++;
+    const int common_x = 0;
+    const int nav_x = col_w + col_gap;
+    const int special_x = (col_w + col_gap) * 2;
+    const int content_h = M5Cardputer.Display.height() - col_y;
+    // 列分隔线沿用 header 底部分隔线颜色
+    M5Cardputer.Display.drawFastVLine(col_w + col_gap / 2, col_y, content_h, DARKGREY);
+    M5Cardputer.Display.drawFastVLine(special_x - col_gap / 2, col_y, content_h, DARKGREY);
 
+    int y = drawMijiaHelpColumnHeader(common_x, col_y, col_w, "common");
+    drawKeyHintsWrappedInColumn(common_x + 2, y, col_w - 4, common_items, 5, APP_COLOR_HINT);
+
+    y = drawMijiaHelpColumnHeader(nav_x, col_y, col_w, "navigation");
+    y = drawKeyHintsWrappedInColumn(nav_x + 2, y, col_w - 4, nav_items, 1, APP_COLOR_HINT);
+    drawMijiaSwitchHelpInColumn(nav_x + 2, y);
+
+    y = drawMijiaHelpColumnHeader(special_x, col_y, screen_w - special_x, "special");
+    const int special_content_x = special_x + 2;
+    const int special_content_w = screen_w - special_x - 4;
     switch (kind) {
         case MijiaDevKind::LIGHT:
-            row = drawMijiaLightHelpRows(dev, row, total_rows, text_size, max_w);
+            drawMijiaLightHelpInColumn(dev, special_content_x, y, special_content_w);
             break;
         case MijiaDevKind::FAN_P5: {
             static const KeyHintItem fan_items[] = {
@@ -1806,8 +1990,8 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
                 {'m', "mode"},
                 {'a', "angle"},
             };
-            row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, fan_items, 5, text_size,
-                                      APP_COLOR_HINT, max_w);
+            drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, fan_items, 5,
+                                        APP_COLOR_HINT);
             break;
         }
         case MijiaDevKind::FAN_GENERIC: {
@@ -1817,8 +2001,8 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
                 {'3', "lv3"},
                 {'4', "lv4"},
             };
-            row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, speed_items, 4, text_size,
-                                      APP_COLOR_HINT, max_w);
+            drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, speed_items, 4,
+                                        APP_COLOR_HINT);
             break;
         }
         case MijiaDevKind::AIR_PURIFIER_F20: {
@@ -1830,10 +2014,10 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
                 {'5', "mode5"},
             };
             static const KeyHintItem fan_items[] = {{'-', "fan-"}, {'=', "fan+"}};
-            row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, mode_items, 5, text_size,
-                                      APP_COLOR_HINT, max_w);
-            row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, fan_items, 2, text_size,
-                                      APP_COLOR_HINT, max_w);
+            y = drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, mode_items, 5,
+                                            APP_COLOR_HINT);
+            drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, fan_items, 2,
+                                        APP_COLOR_HINT);
             break;
         }
         case MijiaDevKind::AIR_FRYER: {
@@ -1843,8 +2027,17 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
                 {'[', "time-"},
                 {']', "time+"},
             };
-            row = drawKeyHintsWrapped(APP_CONTENT_X, row, total_rows, fryer_items, 4, text_size,
-                                      APP_COLOR_HINT, max_w);
+            drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, fryer_items, 4,
+                                        APP_COLOR_HINT);
+            break;
+        }
+        case MijiaDevKind::SENSOR_HT:
+        case MijiaDevKind::BLE_EVENT: {
+            static const KeyHintItem ble_items[] = {
+                {'r', "scan ble"},
+            };
+            drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, ble_items, 1,
+                                        APP_COLOR_HINT);
             break;
         }
         default:
@@ -1954,6 +2147,58 @@ void updateMijiaApp() {
     updateMijiaWifiConnect();
     updateMijiaRefreshTimeout();
     flushMijiaGridCellUpdates();
+
+    // BLE：非阻塞分帧扫描（不会卡死在 listening）
+    if (mijiaBleScanPending && !mijiaBleScanIsRunning() && !mijiaOverviewMode && !mijiaHelpVisible) {
+        mijiaBleScanPending = false;
+        const MijiaDevice* dev = getCurrentMijiaDevice();
+        if (dev != nullptr && mijiaBleCanScan(*dev)) {
+            strncpy(mijiaUi.status, "listening", sizeof(mijiaUi.status));
+            applyMijiaControlRefresh(false);
+            // Sensor_DK1 等青萍广播偏慢，扫 4 秒；分帧 poll 不卡死
+            if (!mijiaBleScanStart(*dev, 4)) {
+                strncpy(mijiaUi.status, "ble fail", sizeof(mijiaUi.status));
+                applyMijiaControlRefresh(false);
+            }
+        }
+    }
+
+    if (mijiaBleScanIsRunning()) {
+        MijiaBleReading reading{};
+        if (mijiaBleScanPoll(reading)) {
+            strncpy(mijiaUi.status, reading.message, sizeof(mijiaUi.status) - 1);
+            mijiaUi.status[sizeof(mijiaUi.status) - 1] = '\0';
+            if (reading.ok) {
+                if (reading.has_temp) {
+                    mijiaUi.temp_known = true;
+                    mijiaUi.temperature = reading.temperature;
+                }
+                if (reading.has_humidity) {
+                    mijiaUi.humidity_known = true;
+                    mijiaUi.humidity = reading.humidity;
+                }
+                if (reading.has_battery) {
+                    mijiaUi.battery_known = true;
+                    mijiaUi.battery = reading.battery;
+                }
+                if (reading.has_motion) {
+                    mijiaUi.motion_known = true;
+                    mijiaUi.motion = reading.motion;
+                }
+                if (reading.has_button) {
+                    mijiaUi.button_known = true;
+                    mijiaUi.button = reading.button;
+                }
+                mijiaUi.extra_known = mijiaUi.temp_known || mijiaUi.humidity_known ||
+                                      mijiaUi.battery_known || mijiaUi.motion_known ||
+                                      mijiaUi.button_known;
+                mijiaUi.power_known = mijiaUi.extra_known;
+                mijiaUi.power_on = mijiaUi.extra_known;
+            }
+            applyMijiaControlRefresh(false);
+        }
+    }
+
     if (mijiaNeedRedraw) {
         mijiaNeedRedraw = false;
         redrawMijiaScreen();
@@ -2075,28 +2320,27 @@ void handleMijiaApp(const String& key) {
     }
 
     const MijiaDevKind kind = mijiaClassifyModel(dev->model);
+    const bool ble_dev = mijiaDeviceUsesBle(*dev);
     bool handled = true;
 
-    if (key == "o") {
-        if (!ensureConfigWifi()) {
+    if (key == "o" || key == "i" || key == "t") {
+        if (ble_dev || kind == MijiaDevKind::SENSOR_HT || kind == MijiaDevKind::BLE_EVENT) {
+            strncpy(mijiaUi.status, "read only", sizeof(mijiaUi.status));
+            mijiaNeedRedraw = true;
+        } else if (!ensureConfigWifi()) {
             strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
-        } else {
+        } else if (key == "o") {
             setMijiaPower(true);
-        }
-    } else if (key == "i") {
-        if (!ensureConfigWifi()) {
-            strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
-        } else {
+        } else if (key == "i") {
             setMijiaPower(false);
-        }
-    } else if (key == "t") {
-        if (!ensureConfigWifi()) {
-            strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
         } else {
             setMijiaPower(!mijiaUi.power_on);
         }
     } else if (key == "r") {
-        if (mijiaWifiPhase == MijiaWifiPhase::FAILED || mijiaWifiPhase == MijiaWifiPhase::IDLE) {
+        if (ble_dev) {
+            applyMijiaControlRefresh(false);
+            requestMijiaRefresh();
+        } else if (mijiaWifiPhase == MijiaWifiPhase::FAILED || mijiaWifiPhase == MijiaWifiPhase::IDLE) {
             startMijiaWifiConnect();
         } else {
             applyMijiaControlRefresh(false);

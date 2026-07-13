@@ -11,6 +11,7 @@
 #include "app_ble.h"
 #include "app_connectivity.h"
 #include "app_rtc.h"
+#include "app_countdown.h"
 #include "app_icon_demo.h"
 #include "app_cursor.h"
 #include "app_morse.h"
@@ -221,6 +222,7 @@ void showMenu() {
     menuNoAppPrompt = false;
     leaveCursorApp();
     leaveLedApp();
+    leaveCountdownApp();
     stopConfigWebServer();
     releaseConfigWifi();
     currentState = AppState::MENU;
@@ -1317,6 +1319,29 @@ void drawMicApp() {
 
 // ===== SETTINGS =====
 
+enum class SettingsModule : uint8_t {
+    Screen = 0,
+    Sound = 1,
+    Count = 2,
+};
+
+static SettingsModule g_settings_module = SettingsModule::Screen;
+static constexpr int SETTINGS_LIST_W = 52;
+static constexpr int SETTINGS_HINT_H = 12;
+static constexpr int SETTINGS_LIST_TEXT_PAD_X = 10;
+static constexpr int SETTINGS_PANEL_PAD = 10;
+
+static const char* settingsModuleName(const SettingsModule mod) {
+    switch (mod) {
+        case SettingsModule::Screen:
+            return "screen";
+        case SettingsModule::Sound:
+            return "sound";
+        default:
+            return "?";
+    }
+}
+
 // 亮度加减并限制在 0-255，同时写入 config.json
 void adjustBrightness(const int delta) {
     const int next = constrain(static_cast<int>(M5Cardputer.Display.getBrightness()) + delta, 0, 255);
@@ -1325,120 +1350,210 @@ void adjustBrightness(const int delta) {
     saveAppConfigBrightness(value);
 }
 
-// 方向键步进：左右 ±1，上下 ±10（Cardputer 方向键为 ; , . /）
-int getSettingsArrowDelta(const Keyboard_Class::KeysState& status) {
+// 上下键：切换左侧模块（; . / HID）
+static int getSettingsModuleDelta(const Keyboard_Class::KeysState& status) {
     for (const uint8_t hid : status.hid_keys) {
-        switch (hid) {
-            case 0x50:
-            case 0x36:
-                return -1;
-            case 0x4F:
-            case 0x38:
-                return 1;
-            case 0x52:
-            case 0x33:
-                return 10;
-            case 0x51:
-            case 0x37:
-                return -10;
-            default:
-                break;
+        if (hid == 0x52 || hid == 0x33) {
+            return -1; // Up / ;
+        }
+        if (hid == 0x51 || hid == 0x37) {
+            return 1; // Down / .
         }
     }
     for (const char c : status.word) {
-        switch (c) {
-            case ',':
-                return -1;
-            case '/':
-                return 1;
-            case ';':
-                return 10;
-            case '.':
-                return -10;
-            default:
-                break;
+        if (c == ';') {
+            return -1;
+        }
+        if (c == '.') {
+            return 1;
         }
     }
     return 0;
 }
 
-// 方向键：左右 ±1，上下 ±10；返回 true 表示已处理
-bool handleSettingsArrowKeys(const Keyboard_Class::KeysState& status) {
-    const int delta = getSettingsArrowDelta(status);
-    if (delta == 0) {
-        return false;
+// -= 键：数值增减（返回 -1 / +1 / 0）
+static int getSettingsValueDelta(const Keyboard_Class::KeysState& status) {
+    for (const char c : status.word) {
+        if (c == '-' || c == '_') {
+            return -1;
+        }
+        if (c == '=' || c == '+') {
+            return 1;
+        }
     }
-    adjustBrightness(delta);
-    return true;
+    return 0;
 }
 
-void drawSettingsApp() {
-    beginAppScreen(getMenuItemNameFull(AppState::SETTINGS));
+static void drawSettingsModuleList(const int list_x, const int list_y, const int list_h) {
+    M5Cardputer.Display.fillRect(list_x, list_y, SETTINGS_LIST_W, list_h, BLACK);
+    M5Cardputer.Display.setTextSize(1);
+    constexpr int row_h = 12; // 选中项上下 2px padding
+    for (int i = 0; i < static_cast<int>(SettingsModule::Count); i++) {
+        const SettingsModule mod = static_cast<SettingsModule>(i);
+        const int y = list_y + i * row_h;
+        const bool selected = (mod == g_settings_module);
+        const char* name = settingsModuleName(mod);
+        if (selected) {
+            M5Cardputer.Display.fillRect(list_x, y, SETTINGS_LIST_W - 2, row_h, APP_COLOR_MENU_KEY);
+            M5Cardputer.Display.setTextColor(APP_COLOR_KEY_TEXT, APP_COLOR_MENU_KEY);
+        } else {
+            M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        }
+        M5Cardputer.Display.setCursor(list_x + SETTINGS_LIST_TEXT_PAD_X, y + 2);
+        M5Cardputer.Display.print(name);
+    }
+}
 
-    const int screenW = M5Cardputer.Display.width();
+static void drawSettingsBrightBar(const int x, const int y, const int w, const int h,
+                                  const int percent) {
+    const int pct = constrain(percent, 0, 100);
+    M5Cardputer.Display.drawRect(x, y, w, h, APP_COLOR_MUTED);
+    const int fill_w = (w - 2) * pct / 100;
+    if (fill_w > 0) {
+        M5Cardputer.Display.fillRect(x + 1, y + 1, fill_w, h - 2, GREEN);
+    }
+}
+
+static void drawSettingsScreenPanel(const int x, const int y, const int w) {
     const uint8_t brightness = M5Cardputer.Display.getBrightness();
-    const int content_w = screenW - APP_CONTENT_X * 2;
     const int pct = brightness * 100 / 255;
-
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", brightness);
-    int cy = APP_CONTENT_Y;
-    cy = drawMijiaBarRow(APP_CONTENT_X, cy, "bright", buf, pct, content_w, GREEN);
 
-    // invert 状态单独突出显示
+    // 右侧设置内容用 1x，保留面板 10px padding
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print("bright");
+    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
+    M5Cardputer.Display.drawRightString(buf, x + w, y);
+
+    constexpr int bar_h = 8;
+    const int bar_y = y + INFO_LINE_H;
+    drawSettingsBrightBar(x, bar_y, w, bar_h, pct);
+
     const bool inverted = M5Cardputer.Display.getInvert();
-    const int inv_y = cy + 8;
-    const char* inv_label = inverted ? "INVERT ON" : "INVERT OFF";
-    const uint16_t inv_bg = inverted ? APP_COLOR_MENU_KEY : DARKGREY;
-    const uint16_t inv_fg = inverted ? APP_COLOR_KEY_TEXT : LIGHTGREY;
+    const int inv_y = bar_y + bar_h + 4;
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.setCursor(x, inv_y);
+    M5Cardputer.Display.print("invert");
+    M5Cardputer.Display.setTextColor(inverted ? APP_COLOR_OK : APP_COLOR_HINT, BLACK);
+    const char* inv = inverted ? "ON" : "OFF";
+    M5Cardputer.Display.setCursor(x + w - M5Cardputer.Display.textWidth(inv), inv_y);
+    M5Cardputer.Display.print(inv);
+}
 
-    M5Cardputer.Display.setTextSize(2);
-    const int inv_tw = M5Cardputer.Display.textWidth(inv_label);
-    constexpr int inv_pad_x = 8;
-    constexpr int inv_pad_y = 3;
-    const int inv_w = inv_tw + inv_pad_x * 2;
-    const int inv_h = 16 + inv_pad_y * 2;
-    M5Cardputer.Display.fillRoundRect(APP_CONTENT_X, inv_y, inv_w, inv_h, 4, inv_bg);
-    M5Cardputer.Display.setTextColor(inv_fg, inv_bg);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X + inv_pad_x, inv_y + inv_pad_y);
-    M5Cardputer.Display.print(inv_label);
+static void drawSettingsSoundPanel(const int x, const int y, const int w) {
+    const bool on = isTimeKeySoundEnabled();
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print("time key");
+    M5Cardputer.Display.setTextColor(on ? APP_COLOR_OK : APP_COLOR_HINT, BLACK);
+    const char* val = on ? "ON" : "OFF";
+    M5Cardputer.Display.setCursor(x + w - M5Cardputer.Display.textWidth(val), y);
+    M5Cardputer.Display.print(val);
 
-    // 底栏 tip 1x
-    const int hint_y = M5Cardputer.Display.height() - 12;
-    const int hint_y2 = hint_y - INFO_LINE_H;
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(x, y + 14);
+    M5Cardputer.Display.print("SW/CD keys");
+    M5Cardputer.Display.setCursor(x, y + 24);
+    M5Cardputer.Display.print("CD alarm always");
+}
+
+static void drawSettingsHints() {
+    const int hint_y = M5Cardputer.Display.height() - SETTINGS_HINT_H;
+    const int screen_w = M5Cardputer.Display.width();
+    M5Cardputer.Display.fillRect(APP_CONTENT_X, hint_y, screen_w - APP_CONTENT_X * 2,
+                                 SETTINGS_HINT_H, BLACK);
 
     int cx = APP_CONTENT_X;
-    cx += drawTextBadge(cx, hint_y2, "0-9", 1);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, hint_y2);
-    M5Cardputer.Display.print(" preset  ");
-    cx += M5Cardputer.Display.textWidth(" preset  ");
-    cx += drawArrowBadge(cx, hint_y2, 1);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, hint_y2);
-    M5Cardputer.Display.print(" step1");
-
-    cx = APP_CONTENT_X;
     cx += drawArrowUpBadge(cx, hint_y, 1);
     cx += drawArrowDownBadge(cx, hint_y, 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, hint_y);
-    M5Cardputer.Display.print(" step10  ");
-    cx += M5Cardputer.Display.textWidth(" step10  ");
-    cx += drawKeyBadge(cx, hint_y, 'r', 1);
+    M5Cardputer.Display.print("mod ");
+    cx += M5Cardputer.Display.textWidth("mod ");
+
+    cx += drawTextBadge(cx, hint_y, "-=", 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, hint_y);
-    M5Cardputer.Display.print(" invert");
+    M5Cardputer.Display.print("val");
+
+    if (g_settings_module == SettingsModule::Screen) {
+        cx += M5Cardputer.Display.textWidth("val");
+        M5Cardputer.Display.print(" ");
+        cx += M5Cardputer.Display.textWidth(" ");
+        cx += drawKeyBadge(cx, hint_y, 'r', 1);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, hint_y);
+        M5Cardputer.Display.print("inv");
+    }
+}
+
+void drawSettingsApp() {
+    beginAppScreen(getMenuItemNameFull(AppState::SETTINGS));
+
+    const int screen_w = M5Cardputer.Display.width();
+    const int screen_h = M5Cardputer.Display.height();
+    const int content_y = APP_CONTENT_Y_NO_TAP_TO_HEADER;
+    const int content_h = screen_h - content_y - SETTINGS_HINT_H;
+    const int list_x = 0;
+    const int panel_x = SETTINGS_LIST_W + 1;
+    const int panel_w = screen_w - panel_x;
+    const int panel_content_x = panel_x + SETTINGS_PANEL_PAD;
+    const int panel_content_y = content_y + SETTINGS_PANEL_PAD;
+    const int panel_content_w = panel_w - SETTINGS_PANEL_PAD * 2;
+
+    drawSettingsModuleList(list_x, content_y, content_h);
+    // 分隔线从 header 下沿开始，贴紧 header
+    M5Cardputer.Display.drawFastVLine(SETTINGS_LIST_W, content_y, content_h, DARKGREY);
+
+    M5Cardputer.Display.fillRect(panel_x, content_y, panel_w, content_h, BLACK);
+    switch (g_settings_module) {
+        case SettingsModule::Screen:
+            drawSettingsScreenPanel(panel_content_x, panel_content_y, panel_content_w);
+            break;
+        case SettingsModule::Sound:
+            drawSettingsSoundPanel(panel_content_x, panel_content_y, panel_content_w);
+            break;
+        default:
+            break;
+    }
+    drawSettingsHints();
 }
 
 void handleSettingsApp(const Keyboard_Class::KeysState& status) {
-    if (handleSettingsArrowKeys(status)) {
+    const int mod_delta = getSettingsModuleDelta(status);
+    if (mod_delta != 0) {
+        int next = static_cast<int>(g_settings_module) + mod_delta;
+        const int count = static_cast<int>(SettingsModule::Count);
+        if (next < 0) {
+            next = count - 1;
+        } else if (next >= count) {
+            next = 0;
+        }
+        g_settings_module = static_cast<SettingsModule>(next);
         drawSettingsApp();
         return;
+    }
+
+    const int val_delta = getSettingsValueDelta(status);
+    if (val_delta != 0) {
+        if (g_settings_module == SettingsModule::Screen) {
+            adjustBrightness(val_delta * 16);
+            drawSettingsApp();
+            return;
+        }
+        if (g_settings_module == SettingsModule::Sound) {
+            saveAppConfigTimeKeySound(!isTimeKeySoundEnabled());
+            drawSettingsApp();
+            return;
+        }
     }
 
     String key;
@@ -1446,22 +1561,20 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
         key += c;
     }
 
-    if (key.length() == 1 && key[0] >= '0' && key[0] <= '9') {
-        const int level = key[0] - '0';
-        const uint8_t value = static_cast<uint8_t>(level * 255 / 9);
-        M5Cardputer.Display.setBrightness(value);
-        saveAppConfigBrightness(value);
-    } else if (key == "-" || key == "_") {
-        adjustBrightness(-16);
-    } else if (key == "+" || key == "=") {
-        adjustBrightness(16);
-    } else if (key == "r") {
-        const bool inverted = M5Cardputer.Display.getInvert();
-        M5Cardputer.Display.invertDisplay(!inverted);
-    } else {
-        return;
+    if (g_settings_module == SettingsModule::Screen) {
+        if (key.length() == 1 && key[0] >= '0' && key[0] <= '9') {
+            const int level = key[0] - '0';
+            const uint8_t value = static_cast<uint8_t>(level * 255 / 9);
+            M5Cardputer.Display.setBrightness(value);
+            saveAppConfigBrightness(value);
+            drawSettingsApp();
+            return;
+        }
+        if (key == "r") {
+            M5Cardputer.Display.invertDisplay(!M5Cardputer.Display.getInvert());
+            drawSettingsApp();
+        }
     }
-    drawSettingsApp();
 }
 
 // ===== POWER =====
@@ -1558,8 +1671,14 @@ void drawSpeakerApp(const String& key) {
     }
 }
 
+void enterSpeakerApp() {
+    warmUpSpeakerIfNeeded();
+    drawSpeakerApp("");
+}
+
 void handleSpeakerApp(const String& key) {
     if (key.length() == 1 && key[0] >= '1' && key[0] <= '9') {
+        warmUpSpeakerIfNeeded();
         const int n = key[0] - '1';
         const int freq = 440 + n * 110;
         M5Cardputer.Speaker.tone(freq, 300);
@@ -2195,7 +2314,7 @@ void enterApp(const AppState state) {
             drawMicApp();
             break;
         case AppState::SPEAKER:
-            drawSpeakerApp("");
+            enterSpeakerApp();
             break;
         case AppState::RTC:
             enterRtcApp();

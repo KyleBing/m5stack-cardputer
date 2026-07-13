@@ -20,6 +20,12 @@ MijiaDevKind mijiaClassifyModel(const char* model) {
     if (model == nullptr || model[0] == '\0') {
         return MijiaDevKind::GENERIC;
     }
+    if (strstr(model, "sensor_ht") != nullptr || strstr(model, ".ht.") != nullptr) {
+        return MijiaDevKind::SENSOR_HT;
+    }
+    if (strstr(model, ".motion.") != nullptr || strstr(model, ".remote.") != nullptr) {
+        return MijiaDevKind::BLE_EVENT;
+    }
     if (startsWith(model, "yeelink.light.")) {
         return MijiaDevKind::LIGHT;
     }
@@ -39,6 +45,14 @@ MijiaDevKind mijiaClassifyModel(const char* model) {
         return MijiaDevKind::PLUG;
     }
     return MijiaDevKind::GENERIC;
+}
+
+bool mijiaBleCanScan(const MijiaDevice& dev) {
+    if (!mijiaDeviceUsesBle(dev)) {
+        return false;
+    }
+    const MijiaDevKind kind = mijiaClassifyModel(dev.model);
+    return kind == MijiaDevKind::SENSOR_HT || kind == MijiaDevKind::BLE_EVENT;
 }
 
 // 按型号取色温范围（K）；无调节能力时 min == max
@@ -104,6 +118,16 @@ void mijiaResetUiState(MijiaUiState& state) {
     state.fan_level = 0;
     state.aqi = 0;
     state.fryer_time = 15;
+    state.temp_known = false;
+    state.humidity_known = false;
+    state.battery_known = false;
+    state.motion_known = false;
+    state.button_known = false;
+    state.temperature = 0;
+    state.humidity = 0;
+    state.battery = 0;
+    state.motion = false;
+    state.button = false;
     strncpy(state.status, "ready", sizeof(state.status));
 }
 
@@ -134,6 +158,20 @@ void mijiaRefreshDevice(const MijiaDevice* dev, MijiaUiState& state) {
     state.extra_known = false;
 
     const MijiaDevKind kind = mijiaClassifyModel(dev->model);
+
+    // BLE 传感器 / 事件：扫描由 app_mijia 非阻塞驱动，这里只标状态
+    if (mijiaDeviceUsesBle(*dev) &&
+        (kind == MijiaDevKind::SENSOR_HT || kind == MijiaDevKind::BLE_EVENT)) {
+        strncpy(state.status, "press r", sizeof(state.status));
+        return;
+    }
+
+    // BLE 可控设备（小夜灯等）本期不支持
+    if (mijiaDeviceUsesBle(*dev)) {
+        strncpy(state.status, "ble n/a", sizeof(state.status));
+        return;
+    }
+
     MiioResult result{};
 
     switch (kind) {
@@ -186,6 +224,10 @@ void mijiaRefreshDevice(const MijiaDevice* dev, MijiaUiState& state) {
                 state.extra_known = true;
             }
             break;
+        case MijiaDevKind::SENSOR_HT:
+        case MijiaDevKind::BLE_EVENT:
+            strncpy(state.status, "need ble key", sizeof(state.status));
+            return;
         default: {
             bool power = false;
             result = miioGetPower(dev->ip, dev->token, power);
@@ -206,9 +248,15 @@ void mijiaSetDevicePower(const MijiaDevice* dev, MijiaUiState& state, const bool
         return;
     }
 
+    const MijiaDevKind kind = mijiaClassifyModel(dev->model);
+    if (kind == MijiaDevKind::SENSOR_HT || kind == MijiaDevKind::BLE_EVENT ||
+        mijiaDeviceUsesBle(*dev)) {
+        strncpy(state.status, "read only", sizeof(state.status));
+        return;
+    }
+
     strncpy(state.status, on ? "turn on..." : "turn off...", sizeof(state.status));
 
-    const MijiaDevKind kind = mijiaClassifyModel(dev->model);
     MiioResult result{};
 
     switch (kind) {

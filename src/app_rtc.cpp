@@ -540,6 +540,10 @@ static void enterClockMode(const bool force_sync) {
 static void enterTimeMode(const TimeMode mode) {
     timeHelpVisible = false;
     timePureVisible = false;
+    // 切走 countdown 时停掉闹钟
+    if (timeMode == TimeMode::COUNTDOWN && mode != TimeMode::COUNTDOWN) {
+        leaveCountdownApp();
+    }
     if (mode == TimeMode::CLOCK) {
         enterClockMode(false);
         return;
