@@ -1357,14 +1357,27 @@ static void clampSettingsRow() {
     }
 }
 
-// 亮度加减并限制在 0-100（显示用），实际 setBrightness 转 0-255，同时写入 config.json
+// 亮度待写盘：先改显示响应，UI 刷新后再 flushBrightnessSave
+static uint8_t g_brightness_to_save = 0;
+static bool g_brightness_dirty = false;
+
+static void flushBrightnessSave() {
+    if (!g_brightness_dirty) {
+        return;
+    }
+    g_brightness_dirty = false;
+    saveAppConfigBrightness(g_brightness_to_save);
+}
+
+// 亮度加减并限制在 0-100（显示用）；只改背光，写盘延后到 flushBrightnessSave
 void adjustBrightness(const int delta) {
     const int pct =
         constrain(static_cast<int>(brightnessHwToPercent(M5Cardputer.Display.getBrightness())) + delta,
                   0, 100);
     const uint8_t value = static_cast<uint8_t>(pct);
     M5Cardputer.Display.setBrightness(brightnessPercentToHw(value));
-    saveAppConfigBrightness(value);
+    g_brightness_to_save = value;
+    g_brightness_dirty = true;
 }
 
 // 上下键（; . / HID）
@@ -1703,6 +1716,7 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
             applySettingsValueDelta(1);
         }
         drawSettingsApp();
+        flushBrightnessSave();
         return;
     }
 
@@ -1749,6 +1763,7 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
     if (val_delta != 0) {
         applySettingsValueDelta(val_delta);
         drawSettingsApp();
+        flushBrightnessSave(); // 先刷新 UI，再写盘
         return;
     }
 
@@ -1760,6 +1775,7 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
             applySettingsValueDelta(1);
         }
         drawSettingsApp();
+        flushBrightnessSave();
         return;
     }
 
@@ -1773,8 +1789,10 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
             const int level = key[0] - '0';
             const uint8_t pct = static_cast<uint8_t>(level * 100 / 9);
             M5Cardputer.Display.setBrightness(brightnessPercentToHw(pct));
-            saveAppConfigBrightness(pct);
+            g_brightness_to_save = pct;
+            g_brightness_dirty = true;
             drawSettingsApp();
+            flushBrightnessSave();
             return;
         }
         if (key == "r") {
@@ -2688,6 +2706,7 @@ void loop() {
     } else if (currentState == AppState::MORSE) {
         updateMorseApp();
     } else     if (currentState == AppState::IR) {
+        pollIrBtnA();
         updateIrApp();
     }
 

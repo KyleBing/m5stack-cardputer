@@ -2,6 +2,7 @@
 #include "app_colors.h"
 #include "app_common.h"
 #include "app_config.h"
+#include "app_connectivity.h"
 #include "app_header.h"
 #include "M5Cardputer.h"
 #include <ArduinoJson.h>
@@ -22,8 +23,9 @@ static constexpr uint32_t CURSOR_IDLE_TRIGGER_MS = 60000;
 static constexpr uint32_t CURSOR_REFRESH_INTERVAL_MS = 300000;
 static constexpr uint32_t CURSOR_WIFI_TIMEOUT_MS = 5000;
 static constexpr int CURSOR_BAR_MARGIN_X = 5;
-static constexpr int CURSOR_CHART_ETA_7_SEC = 11;
-static constexpr int CURSOR_CHART_ETA_30_SEC = 30;
+static constexpr int CURSOR_SUMMARY_PAD_X = 10; // 摘要页进度条左右 padding
+static constexpr int CURSOR_CHART_ETA_7_SEC = 14;  // 图表 7 天预计加载时间
+static constexpr int CURSOR_CHART_ETA_30_SEC = 30;  // 图表 30 天预计加载时间
 
 enum class CursorPhase {
     IDLE,
@@ -106,6 +108,7 @@ static volatile bool g_task_running = false;
 static volatile uint32_t g_fetch_gen = 0;
 static volatile bool g_need_redraw = false;
 static volatile bool g_queue_other_chart = false;
+static TaskHandle_t g_fetch_task = nullptr;
 
 static void beginCursorFetch(const CursorFetchMode mode);
 static void beginCursorChartFetch(const int days, const bool silent);
@@ -120,6 +123,7 @@ static void drawCursorHelpHints();
 static void scheduleCursorFetchTask();
 static void cursorFetchTaskFn(void* arg);
 static void waitCursorFetchTaskDone(uint32_t timeout_ms);
+static bool ensureCursorWifi(uint32_t timeout_ms, uint32_t gen);
 
 // 记录用户操作，重置空闲刷新计时
 static void noteCursorActivity() {
@@ -475,7 +479,7 @@ static int stepChartPagedFetch() {
 
   // 分页请求前确认 WiFi 仍在（避免上一阶段过早 disconnect）
   if (WiFi.status() != WL_CONNECTED) {
-    if (!ensureConfigWifi(CURSOR_WIFI_TIMEOUT_MS)) {
+    if (!ensureCursorWifi(CURSOR_WIFI_TIMEOUT_MS, g_fetch_gen)) {
       g_chart_http_active = false;
       strncpy(chartErrorBuf(g_chart_fetch_days), "wifi lost", 32);
       chartErrorBuf(g_chart_fetch_days)[31] = '\0';
@@ -577,6 +581,38 @@ static void waitCursorFetchTaskDone(const uint32_t timeout_ms) {
   while (g_task_running && static_cast<int32_t>(millis() - deadline) < 0) {
     delay(20);
   }
+}
+
+// 可取消的 WiFi 连接：leave 递增 gen 后尽快返回，避免卡死 5s 并污染下次连网
+static bool ensureCursorWifi(const uint32_t timeout_ms, const uint32_t gen) {
+  const AppConfig& cfg = getAppConfig();
+  if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
+    return false;
+  }
+  if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid) {
+    return true;
+  }
+
+  // 先彻底关射频再开，避免上次 ESC 中途断连后 begin 立刻失败
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(80);
+  if (gen != g_fetch_gen) {
+    return false;
+  }
+
+  WiFi.mode(WIFI_STA);
+  applyWifiRadioSleepPolicy();
+  WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
+
+  const uint32_t deadline = millis() + timeout_ms;
+  while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(millis() - deadline) < 0) {
+    if (gen != g_fetch_gen) {
+      return false;
+    }
+    delay(50);
+  }
+  return WiFi.status() == WL_CONNECTED;
 }
 
 // 拉取认证与周期用量（较快，先展示摘要）
@@ -998,37 +1034,42 @@ static void drawCursorHelpPage() {
   updateAppHeaderStatus();
 }
 
-// 摘要：标签色=条色，百分比白色；used/reset 底栏 x1
+// 摘要：标签色=条色；百分比右对齐同一起点；used/reset 数值用界面蓝色
 static void drawCursorSummaryPage(const int y) {
   const int screen_h = M5Cardputer.Display.height();
   const int screen_w = M5Cardputer.Display.width();
-  const int content_w = screen_w - APP_CONTENT_X * 2;
+  const int pad_x = CURSOR_SUMMARY_PAD_X;
+  const int content_w = screen_w - pad_x * 2;
   const int hint_h = 12;
   const int area_bottom = screen_h - hint_h;
   constexpr int text_sz = 2;
   constexpr int bar_h = 14;
-  constexpr int label_gap = 4;
   constexpr int label_bar_gap = 1; // 标签与进度条间距（较原先各 -1）
   constexpr int block_gap = 4;
   constexpr int footer_h = 14; // used/reset 一排
   char buf[24];
 
+  M5Cardputer.Display.setTextSize(text_sz);
+  // 以最长标签宽度对齐百分比；中间空两个字符
+  const int label_col_w = M5Cardputer.Display.textWidth("AUTO");
+  const int value_gap = M5Cardputer.Display.textWidth("  ");
+  const int value_x = pad_x + label_col_w + value_gap;
+
   auto drawUsageBlock = [&](int& cy, const char* label, const float pct, const uint16_t color) {
     M5Cardputer.Display.setTextSize(text_sz);
     // 标签：与进度条同色
     M5Cardputer.Display.setTextColor(color, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, cy);
+    M5Cardputer.Display.setCursor(pad_x, cy);
     M5Cardputer.Display.print(label);
 
     snprintf(buf, sizeof(buf), "%.2f%%", pct);
-    // 百分比：白色，标签右侧
-    const int label_w = M5Cardputer.Display.textWidth(label);
+    // 百分比：白色，与 AUTO/API 同一列起点
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X + label_w + label_gap, cy);
+    M5Cardputer.Display.setCursor(value_x, cy);
     M5Cardputer.Display.print(buf);
 
     cy += INFO_LINE_H_2X + label_bar_gap;
-    drawPctBar(APP_CONTENT_X, cy, content_w > 0 ? content_w : 0, bar_h, pct, color);
+    drawPctBar(pad_x, cy, content_w > 0 ? content_w : 0, bar_h, pct, color);
     cy += bar_h + block_gap;
   };
 
@@ -1037,30 +1078,40 @@ static void drawCursorSummaryPage(const int y) {
   drawUsageBlock(cy, "AUTO", 100.0f - g_usage.auto_pct, APP_COLOR_OK);
   drawUsageBlock(cy, "API", 100.0f - g_usage.api_pct, ORANGE);
 
-  // 底栏：used / reset 同一排，x1
+  // 底栏：used / reset；标签 hint，数值界面蓝
   const int footer_y = area_bottom - footer_h + 2;
   M5Cardputer.Display.setTextSize(1);
-  M5Cardputer.Display.setTextColor(WHITE, BLACK);
-  M5Cardputer.Display.setCursor(APP_CONTENT_X, footer_y);
 
   if (g_usage.limit_cents > 0) {
     char used_s[16];
     char left_s[16];
     formatMoney(g_usage.used_cents, used_s, sizeof(used_s));
     formatMoney(g_usage.remaining_cents, left_s, sizeof(left_s));
-    snprintf(buf, sizeof(buf), "used %s/%s", used_s, left_s);
+    snprintf(buf, sizeof(buf), "%s/%s", used_s, left_s);
+
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(pad_x, footer_y);
+    M5Cardputer.Display.print("used ");
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
     M5Cardputer.Display.print(buf);
   } else {
-    snprintf(buf, sizeof(buf), "api left %.2f%%", 100.0f - g_usage.api_pct);
+    snprintf(buf, sizeof(buf), "%.2f%%", 100.0f - g_usage.api_pct);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(pad_x, footer_y);
+    M5Cardputer.Display.print("api left ");
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
     M5Cardputer.Display.print(buf);
   }
 
   if (g_usage.reset_date[0] != '\0') {
-    char reset_buf[20];
-    snprintf(reset_buf, sizeof(reset_buf), "reset %s", g_usage.reset_date);
-    const int rw = M5Cardputer.Display.textWidth(reset_buf);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X + content_w - rw, footer_y);
-    M5Cardputer.Display.print(reset_buf);
+    const char* reset_label = "reset ";
+    const int rw =
+        M5Cardputer.Display.textWidth(reset_label) + M5Cardputer.Display.textWidth(g_usage.reset_date);
+    M5Cardputer.Display.setCursor(pad_x + content_w - rw, footer_y);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.print(reset_label);
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.print(g_usage.reset_date);
   }
 }
 
@@ -1285,12 +1336,18 @@ void leaveCursorApp() {
   g_fetch_pending = false;
   g_silent_fetch = false;
   g_queue_other_chart = false;
+  g_chart_fetch_start_ms = 0;
+  g_last_countdown_sec = -1;
+  g_status_msg[0] = '\0';
   invalidateCursorFetch();
-  // 先断网加速卡在 HTTPS 上的 task 退出，再短等
-  WiFi.disconnect(false);
-  waitCursorFetchTaskDone(3000);
+  // 先断网加速卡在 HTTPS / WiFi begin 上的 task 退出
+  WiFi.disconnect(true);
+  // 等够 WiFi 超时 + 余量，避免僵尸 task 干扰下次进 App
+  waitCursorFetchTaskDone(CURSOR_WIFI_TIMEOUT_MS + 2000);
   wakeCursorDisplay(false);
   releaseCursorWifi();
+  // 射频冷却，降低紧接着再 enter 时 begin 立刻失败概率
+  delay(80);
 }
 
 bool isCursorDisplayBlanked() {
@@ -1315,15 +1372,23 @@ static void scheduleCursorFetchTask() {
     return;
   }
   g_task_running = true;
-  if (xTaskCreate(cursorFetchTaskFn, "cursor_fetch", CURSOR_FETCH_STACK, nullptr, 1, nullptr) !=
-      pdPASS) {
+  if (xTaskCreate(cursorFetchTaskFn, "cursor_fetch", CURSOR_FETCH_STACK, nullptr, 1,
+                  &g_fetch_task) != pdPASS) {
     g_task_running = false;
+    g_fetch_task = nullptr;
     g_fetch_pending = false;
     g_silent_fetch = false;
     g_phase = CursorPhase::ERROR;
     strncpy(g_error_msg, "task fail", sizeof(g_error_msg));
     g_need_redraw = true;
   }
+}
+
+// 后台 task 退出前清理运行标志
+static void endCursorFetchTask() {
+  g_fetch_task = nullptr;
+  g_task_running = false;
+  vTaskDelete(nullptr);
 }
 
 // 后台 task：WiFi / HTTPS / 图表分页；主循环只扫键与重绘
@@ -1344,6 +1409,10 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     if (g_phase != CursorPhase::ERROR) {
       g_phase = CursorPhase::READY;
     }
+    // 再次确认，避免 leave 后误关新 task 的 WiFi
+    if (aborted()) {
+      return;
+    }
     finishCursorWifi();
     g_need_redraw = true;
   };
@@ -1360,6 +1429,9 @@ static void cursorFetchTaskFn(void* /*arg*/) {
       g_error_msg[sizeof(g_error_msg) - 1] = '\0';
       g_need_redraw = true;
     }
+    if (aborted()) {
+      return;
+    }
     finishCursorWifi();
   };
 
@@ -1368,21 +1440,21 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     g_phase = CursorPhase::WIFI;
     g_need_redraw = true;
   }
-  if (!ensureConfigWifi(CURSOR_WIFI_TIMEOUT_MS)) {
-    finish_fail("wifi fail");
-    g_task_running = false;
-    vTaskDelete(nullptr);
+  if (!ensureCursorWifi(CURSOR_WIFI_TIMEOUT_MS, gen)) {
+    // 取消退出不报 wifi fail；真正连不上才 fail
+    if (!aborted()) {
+      finish_fail("wifi fail");
+    }
+    endCursorFetchTask();
     return;
   }
   if (aborted()) {
-    g_task_running = false;
-    vTaskDelete(nullptr);
+    endCursorFetchTask();
     return;
   }
   quickSyncTime();
   if (aborted()) {
-    g_task_running = false;
-    vTaskDelete(nullptr);
+    endCursorFetchTask();
     return;
   }
 
@@ -1404,20 +1476,17 @@ static void cursorFetchTaskFn(void* /*arg*/) {
           finishCursorWifi();
         }
       }
-      g_task_running = false;
-      vTaskDelete(nullptr);
+      endCursorFetchTask();
       return;
     }
     if (aborted()) {
-      g_task_running = false;
-      vTaskDelete(nullptr);
+      endCursorFetchTask();
       return;
     }
     if (mode == CursorFetchMode::PERIOD || mode == CursorFetchMode::FULL) {
       g_error_msg[0] = '\0';
       finish_ok();
-      g_task_running = false;
-      vTaskDelete(nullptr);
+      endCursorFetchTask();
       return;
     }
   }
@@ -1444,8 +1513,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
         // 启动失败（如 time sync）时也尝试排队另一段图表
         g_queue_other_chart = true;
       }
-      g_task_running = false;
-      vTaskDelete(nullptr);
+      endCursorFetchTask();
       return;
     }
 
@@ -1461,8 +1529,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     if (aborted()) {
       g_chart_http_active = false;
       g_chart_http_target = nullptr;
-      g_task_running = false;
-      vTaskDelete(nullptr);
+      endCursorFetchTask();
       return;
     }
 
@@ -1495,8 +1562,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     }
   }
 
-  g_task_running = false;
-  vTaskDelete(nullptr);
+  endCursorFetchTask();
 }
 
 void updateCursorApp() {

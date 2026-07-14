@@ -102,6 +102,11 @@ static void drawHeaderDivider(const int screen_w) {
 }
 
 void drawAppScreenHeader(const char* title, const bool draw_divider) {
+    drawAppScreenHeaderAccent(title, nullptr, WHITE, draw_divider);
+}
+
+void drawAppScreenHeaderAccent(const char* title, const char* accent, const uint16_t accent_color,
+                               const bool draw_divider) {
     s_app_header_draw_divider = draw_divider;
     const int screen_w = M5Cardputer.Display.width();
     M5Cardputer.Display.fillRect(0, 0, screen_w, APP_HEADER_H, BLACK);
@@ -110,6 +115,10 @@ void drawAppScreenHeader(const char* title, const bool draw_divider) {
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
     M5Cardputer.Display.setCursor(4, (APP_HEADER_H - 16) / 2);
     M5Cardputer.Display.print(title);
+    if (accent != nullptr && accent[0] != '\0') {
+        M5Cardputer.Display.setTextColor(accent_color, BLACK);
+        M5Cardputer.Display.print(accent);
+    }
 
     const int status_right = screen_w - 2 - APP_BACK_BTN_W - 4;
     drawHeaderStatusIcons(status_right, false);
@@ -202,6 +211,14 @@ void updateMenuScreenBattery(const int page_count) {
 void beginAppScreen(const char* title, const bool draw_divider) {
     M5Cardputer.Display.clear();
     drawAppScreenHeader(title, draw_divider);
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+}
+
+void beginAppScreenAccent(const char* title, const char* accent, const uint16_t accent_color,
+                          const bool draw_divider) {
+    M5Cardputer.Display.clear();
+    drawAppScreenHeaderAccent(title, accent, accent_color, draw_divider);
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
 }

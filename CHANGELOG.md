@@ -6,6 +6,17 @@
 
 ---
 
+## 2026-07-15
+
+### 改进
+
+- **Settings**：亮度调节先改背光并刷新 UI，再写 `config.json`，按 `-=` 更跟手
+- **Infrared**：Header 显示 `Infrared` + 青色 `TV`/`AC`（`t` 切换）；**Tab** 循环品牌；TV 键位改为 `P` 电源、`-=` 音量、`[]` 频道、`m`/`i` 静音/输入；Send 支持空格 / Enter / **BtnA**；Help 合并为单页双列（keys / notes）
+- **Cursor**：摘要页进度条左右 padding；用量数值用标签蓝；拉取 WiFi 可按 `gen` 取消，离开后不再卡死连网
+- **Mijia**：设备图标 PNG 资源更新（含 active / 25w）
+
+---
+
 ## 2026-07-14
 
 ### 新增

@@ -69,8 +69,6 @@ static uint8_t g_ac_temp = 26;
 static stdAc::fanspeed_t g_ac_fan = stdAc::fanspeed_t::kAuto;
 
 static bool g_help_visible = false;
-static int g_help_page = 0;
-static constexpr int IR_HELP_PAGE_COUNT = 2;
 
 static const char* g_tx_status = "";
 static uint32_t g_tx_status_until_ms = 0;
@@ -392,23 +390,19 @@ static void sendCurrent() {
     }
 }
 
-static int getHorizontalDelta(const Keyboard_Class::KeysState& status) {
-    int delta = 0;
+// Tab：切换品牌
+static bool isIrTabKey(const Keyboard_Class::KeysState& status) {
     for (const uint8_t hid : status.hid_keys) {
-        if (hid == 0x50 || hid == 0x36) {
-            delta = -1;
-        } else if (hid == 0x4F || hid == 0x38) {
-            delta = 1;
+        if (hid == 0x2B) {
+            return true;
         }
     }
     for (const char c : status.word) {
-        if (c == ',') {
-            delta = -1;
-        } else if (c == '/') {
-            delta = 1;
+        if (c == '\t') {
+            return true;
         }
     }
-    return delta;
+    return false;
 }
 
 static int getVerticalDelta(const Keyboard_Class::KeysState& status) {
@@ -491,38 +485,48 @@ static void adjustAcField(const int delta) {
     }
 }
 
-static int drawHelpKey(const int y, const char key, const char* text) {
-    int cx = APP_CONTENT_X + drawKeyBadge(APP_CONTENT_X, y, key, 1);
+static int drawHelpColHeader(const int x, const int y, const int w, const char* title) {
+    M5Cardputer.Display.fillRect(x, y, w, 12, BLACK);
     M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, y + 1);
-    M5Cardputer.Display.print(text);
-    return y + 12;
-}
-
-static int drawHelpArrows(const int y, const char* text) {
-    int cx = APP_CONTENT_X + drawArrowBadge(APP_CONTENT_X, y, 1);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, y + 1);
-    M5Cardputer.Display.print(text);
-    return y + 12;
-}
-
-static int drawHelpTitle(const int y, const char* title) {
-    M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.setCursor(x + 2, y + 1);
     M5Cardputer.Display.print(title);
-    return y + INFO_LINE_H_2X;
+    return y + 14;
 }
 
-static int drawHelpText(const int y, const char* text) {
+static int drawHelpKeyAt(const int x, const int y, const char key, const char* text) {
+    int cx = x + drawKeyBadge(x, y, key, 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.setCursor(cx, y + 1);
     M5Cardputer.Display.print(text);
-    return y + 12;
+    return y + 11;
+}
+
+static int drawHelpBadgeAt(const int x, const int y, const char* badge, const char* text) {
+    int cx = x + drawTextBadge(x, y, badge, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y + 1);
+    M5Cardputer.Display.print(text);
+    return y + 11;
+}
+
+static int drawHelpArrowsAt(const int x, const int y, const char* text) {
+    int cx = x + drawArrowUpDownBadge(x, y, 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y + 1);
+    M5Cardputer.Display.print(text);
+    return y + 11;
+}
+
+static int drawHelpTextAt(const int x, const int y, const char* text) {
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(text);
+    return y + 11;
 }
 
 static void flashAcBtn(const IrAcBtn btn) {
@@ -539,37 +543,35 @@ static void flashTvBtn(const IrTvBtn btn) {
 
 static void drawIrHelpPage() {
     beginAppScreen("Help");
-    int y = APP_CONTENT_Y;
-    if (g_help_page == 0) {
-        y = drawHelpTitle(y, "Keys");
-        y = drawHelpKey(y, 't', "TV / AC tab");
-        y = drawHelpArrows(y, "brand / field");
-        y = drawHelpKey(y, '1', "TV keys 1-7");
-        y = drawHelpKey(y, 'p', "AC p/m/f -/= ");
-        y = drawHelpKey(y, ' ', "ent/spc send");
-        y = drawHelpKey(y, 'h', "help / close");
-    } else {
-        y = drawHelpTitle(y, "Notes");
-        y = drawHelpText(y, "TX only GPIO44");
-        y = drawHelpText(y, "TV/AC: remote pad");
-        y = drawHelpText(y, "Xiaomi: Coolix");
-        y = drawHelpText(y, "OEM? try Midea");
-        y = drawHelpText(y, "aim IR window");
-    }
+    const int screen_w = M5Cardputer.Display.width();
+    constexpr int col_gap = 2;
+    const int col_w = (screen_w - col_gap) / 2;
+    const int keys_x = 0;
+    const int notes_x = col_w + col_gap;
+    const int col_y = APP_CONTENT_Y_NO_TAP_TO_HEADER;
+    const int content_h = M5Cardputer.Display.height() - col_y;
+    M5Cardputer.Display.drawFastVLine(col_w + col_gap / 2, col_y, content_h, DARKGREY);
 
-    const int hint_y = M5Cardputer.Display.height() - 12;
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, hint_y, 236, 12, BLACK);
-    int cx = APP_CONTENT_X;
-    cx += drawArrowBadge(cx, hint_y, 1);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, hint_y);
-    M5Cardputer.Display.print("page ");
-    cx += M5Cardputer.Display.textWidth("page ");
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d/%d", g_help_page + 1, IR_HELP_PAGE_COUNT);
-    M5Cardputer.Display.setCursor(cx, hint_y);
-    M5Cardputer.Display.print(buf);
+    int y = drawHelpColHeader(keys_x, col_y, col_w, "keys");
+    const int kx = keys_x + 2;
+    y = drawHelpBadgeAt(kx, y, "Tab", "brand");
+    y = drawHelpArrowsAt(kx, y, "field");
+    y = drawHelpKeyAt(kx, y, 't', "TV / AC");
+    y = drawHelpKeyAt(kx, y, 'p', "power");
+    y = drawHelpKeyAt(kx, y, '-', "vol / temp");
+    y = drawHelpKeyAt(kx, y, '[', "TV ch");
+    y = drawHelpBadgeAt(kx, y, "BtnA", "send");
+
+    y = drawHelpColHeader(notes_x, col_y, screen_w - notes_x, "notes");
+    const int nx = notes_x + 2;
+    y = drawHelpTextAt(nx, y, "TX GPIO44");
+    y = drawHelpTextAt(nx, y, "aim IR window");
+    y = drawHelpTextAt(nx, y, "Xiaomi: Coolix");
+    y = drawHelpTextAt(nx, y, "OEM? try Midea");
+    y = drawHelpTextAt(nx, y, "TV m/i mute/in");
+    y = drawHelpTextAt(nx, y, "AC m/f mode/fan");
+    y = drawHelpTextAt(nx, y, "SPC/ENT send");
+
     drawHelpHintRight("close");
     updateAppHeaderStatus();
 }
@@ -601,42 +603,6 @@ static bool isAcBtnPressed(const IrAcBtn btn) {
 
 static bool isTvBtnPressed(const IrTvBtn btn) {
     return g_press_tv == btn && static_cast<int32_t>(millis() - g_press_until_ms) < 0;
-}
-
-// 顶部 TV / AC tab；返回内容区起始 y
-static int drawIrTabs() {
-    const int x0 = APP_CONTENT_X;
-    const int y = APP_CONTENT_Y;
-    constexpr int tab_w = 36;
-    constexpr int tab_h = 12;
-    constexpr int gap = 4;
-
-    const bool tv_on = g_category == IrCategory::TV;
-    M5Cardputer.Display.fillRoundRect(x0, y, tab_w, tab_h, 3, tv_on ? APP_COLOR_MENU_KEY : BLACK);
-    M5Cardputer.Display.drawRoundRect(x0, y, tab_w, tab_h, 3,
-                                      tv_on ? APP_COLOR_MENU_KEY : APP_COLOR_MUTED);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(tv_on ? APP_COLOR_KEY_TEXT : APP_COLOR_HINT,
-                                     tv_on ? APP_COLOR_MENU_KEY : BLACK);
-    M5Cardputer.Display.setCursor(x0 + 10, y + 2);
-    M5Cardputer.Display.print("TV");
-
-    const int ax = x0 + tab_w + gap;
-    const bool ac_on = !tv_on;
-    M5Cardputer.Display.fillRoundRect(ax, y, tab_w, tab_h, 3, ac_on ? APP_COLOR_MENU_KEY : BLACK);
-    M5Cardputer.Display.drawRoundRect(ax, y, tab_w, tab_h, 3,
-                                      ac_on ? APP_COLOR_MENU_KEY : APP_COLOR_MUTED);
-    M5Cardputer.Display.setTextColor(ac_on ? APP_COLOR_KEY_TEXT : APP_COLOR_HINT,
-                                     ac_on ? APP_COLOR_MENU_KEY : BLACK);
-    M5Cardputer.Display.setCursor(ax + 10, y + 2);
-    M5Cardputer.Display.print("AC");
-
-    // tab 旁提示 t
-    M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
-    M5Cardputer.Display.setCursor(ax + tab_w + 6, y + 2);
-    M5Cardputer.Display.print("t");
-
-    return y + tab_h + 2;
 }
 
 static void drawAcRemotePad(const int content_y) {
@@ -741,21 +707,21 @@ static void drawTvRemotePad(const int content_y) {
     const int row2 = y + btn_h + gap;
     const int row3 = y + 2 * (btn_h + gap);
 
-    drawIrPadBtn(x0, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Power), '1', "pwr",
+    drawIrPadBtn(x0, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Power), 'p', "pwr",
                  g_tv_action == static_cast<int>(IrTvAction::Power));
-    drawIrPadBtn(x0 + btn_w + gap, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolUp), '2', "vol+",
+    drawIrPadBtn(x0 + btn_w + gap, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolUp), '=', "vol+",
                  g_tv_action == static_cast<int>(IrTvAction::VolUp));
-    drawIrPadBtn(x0 + 2 * (btn_w + gap), row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolDown), '3',
+    drawIrPadBtn(x0 + 2 * (btn_w + gap), row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolDown), '-',
                  "vol-", g_tv_action == static_cast<int>(IrTvAction::VolDown));
 
-    drawIrPadBtn(x0, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Mute), '4', "mute",
+    drawIrPadBtn(x0, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Mute), 'm', "mute",
                  g_tv_action == static_cast<int>(IrTvAction::Mute));
-    drawIrPadBtn(x0 + btn_w + gap, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChUp), '5', "ch+",
+    drawIrPadBtn(x0 + btn_w + gap, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChUp), ']', "ch+",
                  g_tv_action == static_cast<int>(IrTvAction::ChUp));
-    drawIrPadBtn(x0 + 2 * (btn_w + gap), row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChDown), '6',
+    drawIrPadBtn(x0 + 2 * (btn_w + gap), row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChDown), '[',
                  "ch-", g_tv_action == static_cast<int>(IrTvAction::ChDown));
 
-    drawIrPadBtn(x0, row3, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Input), '7', "in",
+    drawIrPadBtn(x0, row3, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Input), 'i', "in",
                  g_tv_action == static_cast<int>(IrTvAction::Input));
     drawIrPadBtn(x0 + btn_w + gap, row3, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Send), ' ', "send",
                  false);
@@ -763,13 +729,15 @@ static void drawTvRemotePad(const int content_y) {
 
 static void drawIrMain() {
     if (!g_screen_ready) {
-        beginAppScreen("Infrared");
+        // Header：Infrared + TV/AC（次要色）
+        beginAppScreenAccent("Infrared ", g_category == IrCategory::TV ? "TV" : "AC",
+                             APP_COLOR_LABEL);
         g_screen_ready = true;
     } else {
         clearAppContentArea();
     }
 
-    const int content_y = drawIrTabs();
+    const int content_y = APP_CONTENT_Y;
     if (g_category == IrCategory::TV) {
         drawTvRemotePad(content_y);
     } else {
@@ -779,7 +747,7 @@ static void drawIrMain() {
     const int hint_y = M5Cardputer.Display.height() - 12;
     M5Cardputer.Display.fillRect(APP_CONTENT_X, hint_y, 236, 12, BLACK);
     int cx = APP_CONTENT_X;
-    cx += drawArrowBadge(cx, hint_y, 1);
+    cx += drawTextBadge(cx, hint_y, "Tab", 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, hint_y);
@@ -789,7 +757,7 @@ static void drawIrMain() {
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, hint_y);
-    M5Cardputer.Display.print("tab");
+    M5Cardputer.Display.print("mode");
     drawHelpHintRight("help");
 }
 
@@ -804,7 +772,6 @@ static void redrawIr() {
 void enterIrApp() {
     g_screen_ready = false;
     g_help_visible = false;
-    g_help_page = 0;
     g_tx_status = "";
     g_press_ac = IrAcBtn::None;
     g_press_tv = IrTvBtn::None;
@@ -843,9 +810,6 @@ void handleIrApp(const Keyboard_Class::KeysState& status) {
     for (const char c : status.word) {
         if (c == 'h' || c == 'H') {
             g_help_visible = !g_help_visible;
-            if (g_help_visible) {
-                g_help_page = 0;
-            }
             g_screen_ready = false;
             redrawIr();
             return;
@@ -853,39 +817,48 @@ void handleIrApp(const Keyboard_Class::KeysState& status) {
     }
 
     if (g_help_visible) {
-        const int hdelta = getHorizontalDelta(status);
-        if (hdelta != 0) {
-            g_help_page = (g_help_page + hdelta + IR_HELP_PAGE_COUNT) % IR_HELP_PAGE_COUNT;
-            drawIrHelpPage();
+        return;
+    }
+
+    // Tab：循环切换当前类别下的品牌
+    if (isIrTabKey(status)) {
+        if (g_category == IrCategory::TV) {
+            const int n = static_cast<int>(IrTvBrand::Count);
+            g_tv_brand = (g_tv_brand + 1) % n;
+        } else {
+            const int n = static_cast<int>(IrAcBrand::Count);
+            g_ac_brand = (g_ac_brand + 1) % n;
         }
+        drawIrMain();
         return;
     }
 
     for (const char c : status.word) {
         if (c == 't' || c == 'T') {
             g_category = (g_category == IrCategory::TV) ? IrCategory::AC : IrCategory::TV;
+            g_screen_ready = false; // 刷新 header 中的 TV/AC
             drawIrMain();
             return;
         }
     }
 
-    // TV 快捷数字键：选中并立即发送
+    // TV：快捷键选中并立即发送
     if (g_category == IrCategory::TV) {
         for (const char c : status.word) {
             int action = -1;
-            if (c == '1') {
+            if (c == 'p' || c == 'P') {
                 action = static_cast<int>(IrTvAction::Power);
-            } else if (c == '2') {
+            } else if (c == '=' || c == '+') {
                 action = static_cast<int>(IrTvAction::VolUp);
-            } else if (c == '3') {
+            } else if (c == '-' || c == '_') {
                 action = static_cast<int>(IrTvAction::VolDown);
-            } else if (c == '4') {
+            } else if (c == 'm' || c == 'M') {
                 action = static_cast<int>(IrTvAction::Mute);
-            } else if (c == '5') {
+            } else if (c == ']') {
                 action = static_cast<int>(IrTvAction::ChUp);
-            } else if (c == '6') {
+            } else if (c == '[') {
                 action = static_cast<int>(IrTvAction::ChDown);
-            } else if (c == '7') {
+            } else if (c == 'i' || c == 'I') {
                 action = static_cast<int>(IrTvAction::Input);
             }
             if (action >= 0) {
@@ -951,19 +924,6 @@ void handleIrApp(const Keyboard_Class::KeysState& status) {
         }
     }
 
-    const int hdelta = getHorizontalDelta(status);
-    if (hdelta != 0) {
-        if (g_category == IrCategory::TV) {
-            const int n = static_cast<int>(IrTvBrand::Count);
-            g_tv_brand = (g_tv_brand + hdelta + n) % n;
-        } else {
-            const int n = static_cast<int>(IrAcBrand::Count);
-            g_ac_brand = (g_ac_brand + hdelta + n) % n;
-        }
-        drawIrMain();
-        return;
-    }
-
     const int vdelta = getVerticalDelta(status);
     if (vdelta != 0) {
         if (g_category == IrCategory::TV) {
@@ -980,6 +940,22 @@ void handleIrApp(const Keyboard_Class::KeysState& status) {
     if (status.enter || status.space) {
         sendCurrent();
         drawIrMain();
+    }
+}
+
+// BtnA：发送当前红外指令
+void pollIrBtnA() {
+    if (g_help_visible) {
         return;
     }
+    if (!M5Cardputer.BtnA.wasPressed()) {
+        return;
+    }
+    if (g_category == IrCategory::TV) {
+        flashTvBtn(IrTvBtn::Send);
+    } else {
+        flashAcBtn(IrAcBtn::Send);
+    }
+    sendCurrent();
+    drawIrMain();
 }
