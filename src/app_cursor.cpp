@@ -632,14 +632,23 @@ static bool fetchCursorAuthPeriod() {
   return true;
 }
 
-// 绘制横向进度条
+// 绘制横向进度条（仅边框，空白不填底色）
 static void drawPctBar(const int x, const int y, const int w, const int h, const float pct,
                        const uint16_t color) {
-  M5Cardputer.Display.drawRect(x, y, w, h, DARKGREY);
-  const int fill_w = static_cast<int>(w * (pct / 100.0f));
-  if (fill_w > 0) {
-    M5Cardputer.Display.fillRect(x, y, fill_w > w ? w : fill_w, h, color);
+  if (w <= 0 || h <= 0) {
+    return;
   }
+  float clamped = pct;
+  if (clamped < 0.0f) {
+    clamped = 0.0f;
+  } else if (clamped > 100.0f) {
+    clamped = 100.0f;
+  }
+  const int fill_w = static_cast<int>(w * (clamped / 100.0f));
+  if (fill_w > 0) {
+    M5Cardputer.Display.fillRect(x, y, fill_w, h, color);
+  }
+  M5Cardputer.Display.drawRect(x, y, w, h, DARKGREY);
 }
 
 static constexpr int CURSOR_BAR_LABEL_PAD = 3;
@@ -989,74 +998,69 @@ static void drawCursorHelpPage() {
   updateAppHeaderStatus();
 }
 
+// 摘要：标签色=条色，百分比白色；used/reset 底栏 x1
 static void drawCursorSummaryPage(const int y) {
   const int screen_h = M5Cardputer.Display.height();
   const int screen_w = M5Cardputer.Display.width();
   const int content_w = screen_w - APP_CONTENT_X * 2;
   const int hint_h = 12;
   const int area_bottom = screen_h - hint_h;
-  const int area_h = area_bottom - y;
   constexpr int text_sz = 2;
-  constexpr int bar_h = 16;
+  constexpr int bar_h = 14;
+  constexpr int label_gap = 4;
+  constexpr int label_bar_gap = 1; // 标签与进度条间距（较原先各 -1）
+  constexpr int block_gap = 4;
+  constexpr int footer_h = 14; // used/reset 一排
   char buf[24];
 
-  M5Cardputer.Display.setTextSize(text_sz);
-  const int label_gap = M5Cardputer.Display.textWidth(" ");
-  const int auto_w = M5Cardputer.Display.textWidth("Auto");
-  const int api_w = M5Cardputer.Display.textWidth("API");
-  const int label_w = (auto_w > api_w ? auto_w : api_w) + label_gap;
-
-  const bool has_reset = g_usage.reset_date[0] != '\0';
-  const int row_count = g_usage.limit_cents > 0 ? (has_reset ? 4 : 3) : 2;
-  const int row_h = area_h / row_count;
-
-  auto drawBarRow = [&](const int row, const char* label, const float pct, const uint16_t color) {
-    const int bar_y = y + row * row_h + (row_h - bar_h) / 2;
+  auto drawUsageBlock = [&](int& cy, const char* label, const float pct, const uint16_t color) {
     M5Cardputer.Display.setTextSize(text_sz);
-    M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, bar_y);
+    // 标签：与进度条同色
+    M5Cardputer.Display.setTextColor(color, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, cy);
     M5Cardputer.Display.print(label);
+
     snprintf(buf, sizeof(buf), "%.2f%%", pct);
-    // 进度条按本行百分比实际宽度占满剩余空间
-    const int pct_w = M5Cardputer.Display.textWidth(buf);
-    const int bar_w = content_w - label_w - pct_w - label_gap;
-    drawPctBar(APP_CONTENT_X + label_w, bar_y, bar_w > 0 ? bar_w : 0, bar_h, pct, color);
-    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X + content_w - pct_w, bar_y);
+    // 百分比：白色，标签右侧
+    const int label_w = M5Cardputer.Display.textWidth(label);
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X + label_w + label_gap, cy);
     M5Cardputer.Display.print(buf);
+
+    cy += INFO_LINE_H_2X + label_bar_gap;
+    drawPctBar(APP_CONTENT_X, cy, content_w > 0 ? content_w : 0, bar_h, pct, color);
+    cy += bar_h + block_gap;
   };
 
-  drawBarRow(0, "Auto", 100.0f - g_usage.auto_pct, APP_COLOR_OK);
-  drawBarRow(1, "API", 100.0f - g_usage.api_pct, ORANGE);
+  // 从上往下紧凑排布，多出的垂直空间留给底栏
+  int cy = y;
+  drawUsageBlock(cy, "AUTO", 100.0f - g_usage.auto_pct, APP_COLOR_OK);
+  drawUsageBlock(cy, "API", 100.0f - g_usage.api_pct, ORANGE);
+
+  // 底栏：used / reset 同一排，x1
+  const int footer_y = area_bottom - footer_h + 2;
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(WHITE, BLACK);
+  M5Cardputer.Display.setCursor(APP_CONTENT_X, footer_y);
 
   if (g_usage.limit_cents > 0) {
     char used_s[16];
     char left_s[16];
     formatMoney(g_usage.used_cents, used_s, sizeof(used_s));
     formatMoney(g_usage.remaining_cents, left_s, sizeof(left_s));
-
-    const int text_y = y + row_h * 2 + (row_h - INFO_LINE_H_2X) / 2;
-    M5Cardputer.Display.setTextSize(text_sz);
-    M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, text_y);
-    M5Cardputer.Display.print("used: ");
-    M5Cardputer.Display.setTextColor(INFO_VALUE_COLOR, BLACK);
-    M5Cardputer.Display.print(used_s);
-    M5Cardputer.Display.print("/");
-    M5Cardputer.Display.print(left_s);
-
-    if (has_reset) {
-      const int reset_y = y + row_h * 3 + (row_h - INFO_LINE_H_2X) / 2;
-      M5Cardputer.Display.setTextColor(INFO_LABEL_COLOR, BLACK);
-      M5Cardputer.Display.setCursor(APP_CONTENT_X, reset_y);
-      M5Cardputer.Display.print("reset: ");
-      M5Cardputer.Display.setTextColor(ORANGE, BLACK);
-      M5Cardputer.Display.print(g_usage.reset_date);
-    }
+    snprintf(buf, sizeof(buf), "used %s/%s", used_s, left_s);
+    M5Cardputer.Display.print(buf);
   } else {
-    const int text_y = y + row_h * 2 + (row_h - INFO_LINE_H_2X) / 2;
-    snprintf(buf, sizeof(buf), "%.2f%%", 100.0f - g_usage.api_pct);
-    drawInfoLineAt(APP_CONTENT_X, text_y, "api left", buf, text_sz);
+    snprintf(buf, sizeof(buf), "api left %.2f%%", 100.0f - g_usage.api_pct);
+    M5Cardputer.Display.print(buf);
+  }
+
+  if (g_usage.reset_date[0] != '\0') {
+    char reset_buf[20];
+    snprintf(reset_buf, sizeof(reset_buf), "reset %s", g_usage.reset_date);
+    const int rw = M5Cardputer.Display.textWidth(reset_buf);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X + content_w - rw, footer_y);
+    M5Cardputer.Display.print(reset_buf);
   }
 }
 
