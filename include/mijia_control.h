@@ -89,6 +89,9 @@ void mijiaSetHue(const MijiaDevice* dev, MijiaUiState& state, int hue);
 // 风扇 P5：调节风速
 void mijiaAdjustFanP5Speed(const MijiaDevice* dev, MijiaUiState& state, int delta);
 
+// 风扇 P5：直接设风量百分比 0-100（不自动开风扇）
+void mijiaSetFanP5SpeedPercent(const MijiaDevice* dev, MijiaUiState& state, int percent);
+
 // 风扇 P5：摇头开关
 void mijiaToggleFanP5Roll(const MijiaDevice* dev, MijiaUiState& state);
 

@@ -304,6 +304,24 @@ void mijiaSetDevicePower(const MijiaDevice* dev, MijiaUiState& state, const bool
     applyResult(state, result);
 }
 
+// 灯：调节即生效；关着时先开再设，避免预置不带入下次开机
+static bool mijiaEnsureLightOn(const MijiaDevice* dev, MijiaUiState& state) {
+    if (dev == nullptr) {
+        return false;
+    }
+    if (state.power_known && state.power_on) {
+        return true;
+    }
+    strncpy(state.status, "turn on...", sizeof(state.status));
+    const MiioResult result = miioSetPower(dev->ip, dev->token, true);
+    if (result.ok) {
+        state.power_known = true;
+        state.power_on = true;
+    }
+    applyResult(state, result);
+    return result.ok;
+}
+
 void mijiaAdjustBright(const MijiaDevice* dev, MijiaUiState& state, const int delta) {
     if (dev == nullptr) {
         return;
@@ -320,13 +338,16 @@ void mijiaSetBrightPercent(const MijiaDevice* dev, MijiaUiState& state, const in
     }
 
     const int target = clampInt(percent, 1, 100);
+    if (!mijiaEnsureLightOn(dev, state)) {
+        return;
+    }
     strncpy(state.status, "bright...", sizeof(state.status));
     const MiioResult result = miioSetBright(dev->ip, dev->token, target);
     if (result.ok) {
         state.extra_known = true;
         state.bright = target;
-        state.power_on = true;
         state.power_known = true;
+        state.power_on = true;
     }
     applyResult(state, result);
 }
@@ -347,14 +368,17 @@ void mijiaSetColorTemp(const MijiaDevice* dev, MijiaUiState& state, const int ke
     }
 
     const int target = clampInt(kelvin, state.ct_min, state.ct_max);
+    if (!mijiaEnsureLightOn(dev, state)) {
+        return;
+    }
     strncpy(state.status, "ct...", sizeof(state.status));
     const MiioResult result = miioSetColorTemp(dev->ip, dev->token, target);
     if (result.ok) {
         state.ct_known = true;
         state.color_temp = target;
         state.extra_known = true;
-        state.power_on = true;
         state.power_known = true;
+        state.power_on = true;
     }
     applyResult(state, result);
 }
@@ -374,6 +398,9 @@ void mijiaSetHue(const MijiaDevice* dev, MijiaUiState& state, const int hue) {
     }
     const int target = ((hue % 360) + 360) % 360;
     const int sat = state.sat > 0 ? state.sat : 100;
+    if (!mijiaEnsureLightOn(dev, state)) {
+        return;
+    }
     strncpy(state.status, "hue...", sizeof(state.status));
     const MiioResult result = miioSetHue(dev->ip, dev->token, target, sat);
     if (result.ok) {
@@ -381,8 +408,8 @@ void mijiaSetHue(const MijiaDevice* dev, MijiaUiState& state, const int hue) {
         state.hue = target;
         state.sat = sat;
         state.extra_known = true;
-        state.power_on = true;
         state.power_known = true;
+        state.power_on = true;
     }
     applyResult(state, result);
 }
@@ -394,14 +421,21 @@ void mijiaAdjustFanP5Speed(const MijiaDevice* dev, MijiaUiState& state, const in
 
     int target = state.extra_known ? state.speed : 30;
     target = clampInt(target + delta, 0, 100);
+    mijiaSetFanP5SpeedPercent(dev, state, target);
+}
 
+void mijiaSetFanP5SpeedPercent(const MijiaDevice* dev, MijiaUiState& state, const int percent) {
+    if (dev == nullptr) {
+        return;
+    }
+
+    const int target = clampInt(percent, 0, 100);
     strncpy(state.status, "speed...", sizeof(state.status));
     const MiioResult result = miioFanP5SetSpeed(dev->ip, dev->token, target);
     if (result.ok) {
         state.extra_known = true;
         state.speed = target;
-        state.power_known = true;
-        state.power_on = target > 0;
+        // 仅改风量，不推断电源（开仍用 o/i）
     }
     applyResult(state, result);
 }
@@ -481,8 +515,7 @@ void mijiaSetFanSpeedLevel(const MijiaDevice* dev, MijiaUiState& state, const in
     if (result.ok) {
         state.speed = lv;
         state.extra_known = true;
-        state.power_known = true;
-        state.power_on = true;
+        // 仅改风速，不推断电源
     }
     applyResult(state, result);
 }
@@ -498,8 +531,7 @@ void mijiaSetPurifierMode(const MijiaDevice* dev, MijiaUiState& state, const int
     if (result.ok) {
         state.mode = m;
         state.extra_known = true;
-        state.power_known = true;
-        state.power_on = true;
+        // 仅改模式，不推断电源
     }
     applyResult(state, result);
 }

@@ -2434,7 +2434,9 @@ static int mijiaCountSpecialHelpRows(const MijiaDevice* dev, const int max_w,
                 {'m', "mode"},
                 {'a', "angle"},
             };
+            static const KeyHintItem percent_items[] = {{'1', "10%"}, {'9', "90%"}, {'0', "100%"}};
             rows += mijiaCountWrappedRows(fan_items, 5, text_size, max_w);
+            rows += mijiaCountWrappedRows(percent_items, 3, text_size, max_w);
             break;
         }
         case MijiaDevKind::FAN_GENERIC: {
@@ -2726,7 +2728,10 @@ static void drawMijiaHelpContent(const MijiaDevice* dev, const int text_size) {
                 {'m', "mode"},
                 {'a', "angle"},
             };
-            drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, fan_items, 5,
+            static const KeyHintItem percent_items[] = {{'1', "10%"}, {'9', "90%"}, {'0', "100%"}};
+            y = drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, fan_items, 5,
+                                            APP_COLOR_HINT);
+            drawKeyHintsWrappedInColumn(special_content_x, y, special_content_w, percent_items, 3,
                                         APP_COLOR_HINT);
             break;
         }
@@ -3316,6 +3321,10 @@ void handleMijiaApp(const String& key) {
             mijiaAdjustFanP5Speed(dev, mijiaUi, -10);
         } else if (key == "=" || key == "+") {
             mijiaAdjustFanP5Speed(dev, mijiaUi, 10);
+        } else if (key.length() == 1 && key[0] >= '0' && key[0] <= '9') {
+            // 与灯亮度相同：1→10% … 9→90%，0→100%
+            const int percent = key[0] == '0' ? 100 : (key[0] - '0') * 10;
+            mijiaSetFanP5SpeedPercent(dev, mijiaUi, percent);
         } else if (key == "w") {
             mijiaToggleFanP5Roll(dev, mijiaUi);
         } else if (key == "m") {

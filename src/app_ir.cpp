@@ -405,25 +405,6 @@ static bool isIrTabKey(const Keyboard_Class::KeysState& status) {
     return false;
 }
 
-static int getVerticalDelta(const Keyboard_Class::KeysState& status) {
-    int delta = 0;
-    for (const uint8_t hid : status.hid_keys) {
-        if (hid == 0x52 || hid == 0x33) {
-            delta = -1;
-        } else if (hid == 0x51 || hid == 0x37) {
-            delta = 1;
-        }
-    }
-    for (const char c : status.word) {
-        if (c == ';') {
-            delta = -1;
-        } else if (c == '.') {
-            delta = 1;
-        }
-    }
-    return delta;
-}
-
 static void cycleAcMode(const int delta) {
     static const stdAc::opmode_t modes[] = {
         stdAc::opmode_t::kCool, stdAc::opmode_t::kHeat, stdAc::opmode_t::kDry,
@@ -512,15 +493,6 @@ static int drawHelpBadgeAt(const int x, const int y, const char* badge, const ch
     return y + 11;
 }
 
-static int drawHelpArrowsAt(const int x, const int y, const char* text) {
-    int cx = x + drawArrowUpDownBadge(x, y, 1);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, y + 1);
-    M5Cardputer.Display.print(text);
-    return y + 11;
-}
-
 static int drawHelpTextAt(const int x, const int y, const char* text) {
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
@@ -555,7 +527,6 @@ static void drawIrHelpPage() {
     int y = drawHelpColHeader(keys_x, col_y, col_w, "keys");
     const int kx = keys_x + 2;
     y = drawHelpBadgeAt(kx, y, "Tab", "brand");
-    y = drawHelpArrowsAt(kx, y, "field");
     y = drawHelpKeyAt(kx, y, 't', "TV / AC");
     y = drawHelpKeyAt(kx, y, 'p', "power");
     y = drawHelpKeyAt(kx, y, '-', "vol / temp");
@@ -647,16 +618,15 @@ static void drawAcRemotePad(const int content_y) {
     constexpr int gap = 3;
     const int row1 = y;
     const int row2 = y + btn_h + gap;
-    drawIrPadBtn(x0, row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Power), 'p', "pwr",
-                 g_ac_field == static_cast<int>(IrAcField::Power));
+    // 无上下导航选中，仅按键闪烁反馈
+    drawIrPadBtn(x0, row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Power), 'p', "pwr", false);
     drawIrPadBtn(x0 + btn_w + gap, row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Mode), 'm', "mode",
-                 g_ac_field == static_cast<int>(IrAcField::Mode));
+                 false);
     drawIrPadBtn(x0 + 2 * (btn_w + gap), row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Fan), 'f',
-                 "fan", g_ac_field == static_cast<int>(IrAcField::Fan));
-    drawIrPadBtn(x0, row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::TempDown), '-', "temp",
-                 g_ac_field == static_cast<int>(IrAcField::Temp));
+                 "fan", false);
+    drawIrPadBtn(x0, row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::TempDown), '-', "temp", false);
     drawIrPadBtn(x0 + btn_w + gap, row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::TempUp), '=', "temp",
-                 g_ac_field == static_cast<int>(IrAcField::Temp));
+                 false);
     drawIrPadBtn(x0 + 2 * (btn_w + gap), row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Send), ' ',
                  "send", false);
 }
@@ -707,22 +677,20 @@ static void drawTvRemotePad(const int content_y) {
     const int row2 = y + btn_h + gap;
     const int row3 = y + 2 * (btn_h + gap);
 
-    drawIrPadBtn(x0, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Power), 'p', "pwr",
-                 g_tv_action == static_cast<int>(IrTvAction::Power));
-    drawIrPadBtn(x0 + btn_w + gap, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolUp), '=', "vol+",
-                 g_tv_action == static_cast<int>(IrTvAction::VolUp));
-    drawIrPadBtn(x0 + 2 * (btn_w + gap), row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolDown), '-',
-                 "vol-", g_tv_action == static_cast<int>(IrTvAction::VolDown));
+    // 无上下导航选中；音量/频道按 -/+ 左到右排列
+    drawIrPadBtn(x0, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Power), 'p', "pwr", false);
+    drawIrPadBtn(x0 + btn_w + gap, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolDown), '-',
+                 "vol-", false);
+    drawIrPadBtn(x0 + 2 * (btn_w + gap), row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolUp), '=',
+                 "vol+", false);
 
-    drawIrPadBtn(x0, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Mute), 'm', "mute",
-                 g_tv_action == static_cast<int>(IrTvAction::Mute));
-    drawIrPadBtn(x0 + btn_w + gap, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChUp), ']', "ch+",
-                 g_tv_action == static_cast<int>(IrTvAction::ChUp));
-    drawIrPadBtn(x0 + 2 * (btn_w + gap), row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChDown), '[',
-                 "ch-", g_tv_action == static_cast<int>(IrTvAction::ChDown));
+    drawIrPadBtn(x0, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Mute), 'm', "mute", false);
+    drawIrPadBtn(x0 + btn_w + gap, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChDown), '[', "ch-",
+                 false);
+    drawIrPadBtn(x0 + 2 * (btn_w + gap), row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChUp), ']',
+                 "ch+", false);
 
-    drawIrPadBtn(x0, row3, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Input), 'i', "in",
-                 g_tv_action == static_cast<int>(IrTvAction::Input));
+    drawIrPadBtn(x0, row3, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Input), 'i', "in", false);
     drawIrPadBtn(x0 + btn_w + gap, row3, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Send), ' ', "send",
                  false);
 }
@@ -924,23 +892,7 @@ void handleIrApp(const Keyboard_Class::KeysState& status) {
         }
     }
 
-    const int vdelta = getVerticalDelta(status);
-    if (vdelta != 0) {
-        if (g_category == IrCategory::TV) {
-            const int n = static_cast<int>(IrTvAction::Count);
-            g_tv_action = (g_tv_action + vdelta + n) % n;
-        } else {
-            const int n = static_cast<int>(IrAcField::Count);
-            g_ac_field = (g_ac_field + vdelta + n) % n;
-        }
-        drawIrMain();
-        return;
-    }
-
-    if (status.enter || status.space) {
-        sendCurrent();
-        drawIrMain();
-    }
+    // 电视/空调均无上下键导航，对应物理键直接操作
 }
 
 // BtnA：发送当前红外指令
