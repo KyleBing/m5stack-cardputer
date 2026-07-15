@@ -60,8 +60,9 @@ static int clockContentHeight() {
 }
 
 static int rtcTimeY() {
+    // 顶部留给 NTP/RTC 来源标签
     const int block_h = RTC_TIME_LINE_H + RTC_TIME_BOTTOM_MARGIN + RTC_DATE_LINE_H;
-    const int avail_h = clockContentHeight();
+    const int avail_h = clockContentHeight() - TIME_TAG_H;
     return APP_CONTENT_Y + TIME_TAG_H + (avail_h - block_h) / 2;
 }
 
@@ -272,15 +273,14 @@ static void redrawCurrentTimeMode() {
 }
 
 static void drawRtcBusyScreen(const char* msg) {
-    beginAppScreen("Time");
+    beginAppScreenAccent("Time ", "CLK", APP_COLOR_LABEL);
     rtcScreenReady = true;
     rtcLastTime[0] = '\0';
     rtcLastDate[0] = '\0';
     rtcLastSrc[0] = '\0';
-    drawTimeModeTag("CLK");
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y + TIME_TAG_H + 4);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y + 4);
     M5Cardputer.Display.println(msg);
     drawTimeBottomHints(nullptr, 0);
 }
@@ -482,14 +482,13 @@ static void drawRtcApp(const bool full_init) {
         if (!full_init && rtcScreenReady) {
             return;
         }
-        beginAppScreen("Time");
+        beginAppScreenAccent("Time ", "CLK", APP_COLOR_LABEL);
         rtcScreenReady = true;
         uptimeScreenReady = false;
         rtcLastTime[0] = '\0';
         rtcLastDate[0] = '\0';
         rtcLastSrc[0] = '\0';
-        drawTimeModeTag("CLK");
-        int y = APP_CONTENT_Y + TIME_TAG_H;
+        int y = APP_CONTENT_Y;
         drawInfoLineAt(APP_CONTENT_X, y, "time", "not set", RTC_FAIL_TEXT_SIZE);
         y += INFO_LINE_H_2X;
         const AppConfig& cfg = getAppConfig();
@@ -512,7 +511,7 @@ static void drawRtcApp(const bool full_init) {
              timeinfo.tm_mon + 1, timeinfo.tm_mday);
 
     if (full_init || !rtcScreenReady) {
-        beginAppScreen("Time");
+        beginAppScreenAccent("Time ", "CLK", APP_COLOR_LABEL);
         rtcScreenReady = true;
         uptimeScreenReady = false;
         rtcLastTime[0] = '\0';
@@ -522,7 +521,7 @@ static void drawRtcApp(const bool full_init) {
     }
     updateRtcTimeText(time_buf);
     updateRtcDateText(date_buf);
-    updateRtcSourceTag(source);
+    updateRtcSourceTag(source); // 内容区顶部：NTP / RTC
 }
 
 static void drawUptimeApp(const bool full_init) {
@@ -537,11 +536,10 @@ static void drawUptimeApp(const bool full_init) {
     splitTimeMs(millis(), hours, minutes, seconds, frac);
 
     if (full_init || !uptimeScreenReady) {
-        beginAppScreen("Time");
+        beginAppScreenAccent("Time ", "UP", APP_COLOR_LABEL);
         uptimeScreenReady = true;
         rtcScreenReady = false;
         uptimeTimeState = BigTimeState{};
-        drawTimeModeTag("UP");
         const KeyHintItem items[] = {{'p', "pure"}};
         drawTimeBottomHints(items, 1);
     }

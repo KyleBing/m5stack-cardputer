@@ -400,7 +400,6 @@ static void drawCountdownChrome() {
         }
         return;
     }
-    drawTimeModeTag("CD");
     drawCountdownStateBanner();
     drawCountdownActionHints();
 }
@@ -430,7 +429,7 @@ static void drawCountdownApp(const bool full_init) {
             drawCountdownChrome();
             return;
         }
-        beginAppScreen("Time");
+        beginAppScreenAccent("Time ", "CD", APP_COLOR_LABEL);
         cdScreenReady = true;
         cdInvalidateTimeCache();
         drawCountdownTime(area_y, area_h, true);

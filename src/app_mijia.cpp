@@ -368,13 +368,15 @@ static void redrawMijiaScreen() {
     }
     if (mijiaGroupMode) {
         invalidateMijiaControlSurface();
-        beginAppScreen("Groups");
+        // Header：Mijia + Group（次要色，对齐 Grid/List）
+        beginAppScreenAccent("Mijia ", "Group", APP_COLOR_LABEL);
         drawMijiaGroupView();
         return;
     }
     if (mijiaOverviewMode) {
         invalidateMijiaControlSurface();
-        beginAppScreen("Mijia");
+        // Header：Mijia + Grid/List（次要色，对齐红外 TV/AC）
+        beginAppScreenAccent("Mijia ", mijiaOverviewGridMode ? "Grid" : "List", APP_COLOR_LABEL);
         int y = APP_CONTENT_Y;
         drawMijiaOverview(y);
         return;
@@ -2882,12 +2884,12 @@ static void drawMijiaHelpPage() {
 
 void drawMijiaApp() {
     if (mijiaGroupMode) {
-        beginAppScreen("Groups");
+        beginAppScreenAccent("Mijia ", "Group", APP_COLOR_LABEL);
         drawMijiaGroupView();
         return;
     }
     if (mijiaOverviewMode) {
-        beginAppScreen("Mijia");
+        beginAppScreenAccent("Mijia ", mijiaOverviewGridMode ? "Grid" : "List", APP_COLOR_LABEL);
         M5Cardputer.Display.setTextSize(1);
         int y = APP_CONTENT_Y;
         drawMijiaOverview(y);

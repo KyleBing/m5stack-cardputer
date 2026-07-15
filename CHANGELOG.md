@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-07-16
+
+### 新增
+
+- **Mic**：独立模块（`app_mic`）；示波器折线波形 + 分段 VU + 手动增益（`-`/`=`）；`r` / **BtnA** 开始/停止录音；有 SD 时写入 `/audioRecord/*.wav`（16 kHz 单声道）；进 App 后台 WiFi/NTP 校时（状态行 `WiFi` 标识）；无卡提示 `no SD`；`h` Help
+
+### 改进
+
+- **Mic**：离屏双缓冲减少网格闪烁；状态行展示 LIVE/REC、时长、电平、增益
+- **Time / Mijia / Sleep**：Header 改为主标题 + 次要色模式后缀（如 `Time CD`、`Mijia Grid`、`Sleep Light`）
+- **Mijia**：榨汁机设备图标 PNG 资源更新
+
+---
+
 ## 2026-07-15
 
 ### 改进

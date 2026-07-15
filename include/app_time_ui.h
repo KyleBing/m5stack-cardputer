@@ -6,7 +6,7 @@
 static constexpr int TIME_TAG_H = 12;
 static constexpr int TIME_HINT_ROW_H = 12;
 
-// 时间子界面：顶部功能 tag
+// 时间子界面：内容区顶部小标签（如 Clock 的 NTP/RTC 来源）
 void drawTimeModeTag(const char* tag);
 
 // 底栏：左侧功能操作提示，右侧 h help/back

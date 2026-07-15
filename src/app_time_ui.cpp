@@ -56,8 +56,9 @@ void drawTimeHelpHintRight(const char* help_label) {
 }
 
 void getTimeDisplayArea(int& area_y, int& area_h) {
+    // 模式已迁到 Header accent，内容区从 header 下起算
     const int screen_h = M5Cardputer.Display.height();
-    area_y = APP_CONTENT_Y + TIME_TAG_H;
+    area_y = APP_CONTENT_Y;
     area_h = screen_h - area_y - TIME_HINT_ROW_H;
 }
 

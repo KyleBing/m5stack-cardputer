@@ -90,7 +90,6 @@ static void drawStopwatchChrome() {
         drawStopwatchStateBanner();
         return;
     }
-    drawTimeModeTag("SW");
     drawStopwatchStateBanner();
     drawStopwatchActionHints();
 }
@@ -126,7 +125,7 @@ static void drawStopwatchApp(const bool full_init) {
             drawStopwatchTimeArea(area_y, area_h, true);
             return;
         }
-        beginAppScreen("Time");
+        beginAppScreenAccent("Time ", "SW", APP_COLOR_LABEL);
         swScreenReady = true;
         swTimeState = BigTimeState{};
         drawStopwatchChrome();

@@ -17,6 +17,7 @@
 #include "app_morse.h"
 #include "app_ir.h"
 #include "app_font_demo.h"
+#include "app_mic.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
@@ -102,7 +103,6 @@ static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
 const int GAP_VERTICAL = 3;
 
 AppState currentState = AppState::MENU;
-static bool micHeaderReady = false;
 static bool bmiScreenReady = false;
 static int bmiPrevDotX[2] = {-1, -1};
 static int bmiPrevDotY[2] = {-1, -1};
@@ -1199,98 +1199,6 @@ void updateInfoApp() {
     y += INFO_LINE_H;
     updateInfoPowerLine(y, power.lines[4].label, power.lines[4].value, infoLastVbus,
                         sizeof(infoLastVbus));
-}
-
-// ===== MIC =====
-
-// Mic 实时波形 + 电平条
-void drawMicApp() {
-    constexpr int meterW = 12;
-    const int waveTop = APP_CONTENT_Y;
-    const int screenW = M5Cardputer.Display.width();
-    const int waveW = screenW - meterW - 2;
-    const int waveH = M5Cardputer.Display.height() - waveTop - 2;
-    const int centerY = waveTop + waveH / 2;
-    const int meterX = waveW + 2;
-
-    static int16_t samples[240];
-    static uint32_t peakHold = 4000;
-
-    if (!M5Cardputer.Mic.isEnabled()) {
-        beginAppScreen("Mic");
-        micHeaderReady = false;
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-        M5Cardputer.Display.println("not found");
-        return;
-    }
-
-    if (!micHeaderReady) {
-        beginAppScreen("Mic");
-        micHeaderReady = true;
-    }
-
-    const size_t sampleCount = waveW < 240 ? static_cast<size_t>(waveW) : 240;
-    if (!M5Cardputer.Mic.record(samples, sampleCount)) {
-        return;
-    }
-
-    // 本帧峰值 + 平滑峰值（快升慢降，用于自适应增益）
-    int32_t framePeak = 0;
-    for (size_t i = 0; i < sampleCount; i++) {
-        const int32_t absVal = abs(samples[i]);
-        if (absVal > framePeak) {
-            framePeak = absVal;
-        }
-    }
-    if (framePeak > static_cast<int32_t>(peakHold)) {
-        peakHold = static_cast<uint32_t>(framePeak);
-    } else {
-        peakHold = peakHold * 7 / 8 + static_cast<uint32_t>(framePeak) / 8;
-    }
-    if (peakHold < 500) {
-        peakHold = 500;
-    }
-
-    constexpr int minGain = 6;
-    constexpr int maxGain = 18;
-    const int micGain = constrain(
-        (waveH / 2 - 4) * 32768 / static_cast<int>(peakHold), minGain, maxGain);
-
-    M5Cardputer.Display.fillRect(0, waveTop, screenW, waveH, BLACK);
-    M5Cardputer.Display.drawFastHLine(0, centerY, waveW, WHITE);
-
-    // 中心对称填充波形，比单线更易辨认
-    for (int x = 0; x < static_cast<int>(sampleCount); x++) {
-        int y = centerY - static_cast<int>(samples[x] * micGain * (waveH / 2 - 2) / 32768);
-        y = constrain(y, waveTop, waveTop + waveH - 1);
-        const int yTop = min(centerY, y);
-        const int yBot = max(centerY, y);
-        M5Cardputer.Display.drawFastVLine(x, yTop, yBot - yTop + 1, CYAN);
-    }
-
-    // 右侧电平条：RMS 近似用峰值，黄色横线标瞬时峰值
-    const int peakBarH = constrain(
-        static_cast<int>(static_cast<int64_t>(framePeak) * waveH / 32768), 0, waveH);
-    const int barX = meterX + 2;
-    const int barInnerW = meterW - 4;
-    const int barBottom = waveTop + waveH;
-
-    M5Cardputer.Display.drawRect(meterX, waveTop, meterW, waveH, DARKGREY);
-    if (peakBarH > 0) {
-        M5Cardputer.Display.fillRect(barX, barBottom - peakBarH, barInnerW, peakBarH, GREEN);
-    }
-    const int peakLineY = barBottom - peakBarH;
-    if (peakBarH > 0) {
-        M5Cardputer.Display.drawFastHLine(meterX, peakLineY, meterW, YELLOW);
-    }
-
-    // 左上角显示峰值百分比
-    const int peakPct = constrain(framePeak * 100 / 32768, 0, 100);
-    M5Cardputer.Display.fillRect(0, waveTop, 52, 10, BLACK);
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(YELLOW, BLACK);
-    M5Cardputer.Display.setCursor(2, waveTop + 1);
-    M5Cardputer.Display.printf("Lv%3d%%", peakPct);
 }
 
 // ===== SETTINGS =====
@@ -2422,10 +2330,14 @@ static void drawSleepCountdownOnly(const int seconds_left) {
 
 // 浅休眠提示：默认路径，倒计时内按 s 可切到深度休眠
 static void drawLightSleepPrompt(const int seconds_left) {
-    beginAppScreen("Sleep");
+    // Header：Sleep + Light（次要色）
+    beginAppScreenAccent("Sleep ", "Light", APP_COLOR_LABEL);
 
     int y = APP_CONTENT_Y;
-    drawInfoLineAt(APP_CONTENT_X, y, "LIGHT", "SLEEP", 2);
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.print("Will enter in");
     y += INFO_LINE_H_2X + 4;
 
     sleepCountY = y;
@@ -2434,23 +2346,33 @@ static void drawLightSleepPrompt(const int seconds_left) {
     drawSleepCountdownOnly(seconds_left);
     y += 30;
 
+    // 两行 2x 提示：BtnA wake / S Deep
+    int cx = APP_CONTENT_X;
+    cx += drawTextBadge(cx, y, "BtnA", 2);
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("wake: BtnA (GO)");
-    y += INFO_LINE_H_2X + 2;
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("press s again for deep sleep");
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print("wake");
+    y += INFO_LINE_H_2X + 4;
+
+    cx = APP_CONTENT_X;
+    cx += drawKeyBadge(cx, y, 's', 2);
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print("Deep");
 }
 
 // 深度休眠提示
 static void drawDeepSleepPrompt(const int seconds_left) {
-    beginAppScreen("Sleep");
+    // Header：Sleep + Deep（次要色）
+    beginAppScreenAccent("Sleep ", "Deep", APP_COLOR_LABEL);
 
     int y = APP_CONTENT_Y;
-    drawInfoLineAt(APP_CONTENT_X, y, "DEEP", "SLEEP", 2);
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.print("Will enter in");
     y += INFO_LINE_H_2X + 4;
 
     sleepCountY = y;
@@ -2459,15 +2381,18 @@ static void drawDeepSleepPrompt(const int seconds_left) {
     drawSleepCountdownOnly(seconds_left);
     y += 30;
 
+    int cx = APP_CONTENT_X;
+    cx += drawTextBadge(cx, y, "BtnA", 2);
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("wake: BtnA (GO)");
-    y += INFO_LINE_H_2X + 2;
-    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print("wake");
+    y += INFO_LINE_H_2X + 4;
+
+    M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
     M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-    M5Cardputer.Display.println("reboot on wake");
+    M5Cardputer.Display.print("reboot on wake");
 }
 
 // 进入浅休眠提示流程（5 秒后进 light sleep）
@@ -2515,6 +2440,9 @@ static void updateSleepPrompt() {
 
 void enterApp(const AppState state) {
     menuNoAppPrompt = false;
+    if (currentState == AppState::MIC && state != AppState::MIC) {
+        leaveMicApp();
+    }
     currentState = state;
 
     // Sleep 先显示 5 秒提示，再关屏
@@ -2537,8 +2465,7 @@ void enterApp(const AppState state) {
             drawBmiApp();
             break;
         case AppState::MIC:
-            micHeaderReady = false;
-            drawMicApp();
+            enterMicApp();
             break;
         case AppState::SPEAKER:
             enterSpeakerApp();
@@ -2647,6 +2574,9 @@ void loop() {
     // btngo：无 app 提示页 / 子界面返回主菜单
     if (wasBtnGoPressed()) {
         if (menuNoAppPrompt || currentState != AppState::MENU) {
+            if (currentState == AppState::MIC) {
+                leaveMicApp();
+            }
             showMenu();
             return;
         }
@@ -2674,10 +2604,11 @@ void loop() {
             drawBmiApp();
         }
     } else if (currentState == AppState::MIC) {
+        pollMicBtnA();
         static uint32_t lastMicUpdateMs = 0;
         if (now - lastMicUpdateMs >= 40) {
             lastMicUpdateMs = now;
-            drawMicApp();
+            updateMicApp();
         }
     } else if (currentState == AppState::SETTINGS) {
         static uint32_t lastInfoUpdateMs = 0;
@@ -2756,6 +2687,11 @@ void loop() {
             case AppState::VERSION:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleVersionApp(M5Cardputer.Keyboard.keysState());
+                }
+                break;
+            case AppState::MIC:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleMicApp(getPressedKey());
                 }
                 break;
             case AppState::SPEAKER:
