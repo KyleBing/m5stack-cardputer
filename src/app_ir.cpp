@@ -580,19 +580,24 @@ static void drawAcRemotePad(const int content_y) {
     const int x0 = APP_CONTENT_X;
     int y = content_y;
 
-    M5Cardputer.Display.setTextSize(1);
+    // 第一排：品牌 / 电源状态（二倍字体）
+    M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
     M5Cardputer.Display.setCursor(x0, y);
-    M5Cardputer.Display.print(acBrandName(g_ac_brand));
+    const char* ac_brand = acBrandName(g_ac_brand);
+    M5Cardputer.Display.print(ac_brand);
+    int cx = x0 + M5Cardputer.Display.textWidth(ac_brand) + 8;
+    const char* ac_pwr = g_ac_power ? "ON" : "OFF";
     M5Cardputer.Display.setTextColor(g_ac_power ? APP_COLOR_OK : APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(x0 + 72, y);
-    M5Cardputer.Display.print(g_ac_power ? "ON" : "OFF");
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print(ac_pwr);
     if (g_tx_status[0] != '\0' && static_cast<int32_t>(millis() - g_tx_status_until_ms) < 0) {
+        cx += M5Cardputer.Display.textWidth(ac_pwr) + 8;
         M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(x0 + 160, y);
+        M5Cardputer.Display.setCursor(cx, y);
         M5Cardputer.Display.print(g_tx_status);
     }
-    y += 11;
+    y += INFO_LINE_H_2X + 3; // 与下方内容间隔
 
     // 紧凑温度区（为 tab 腾高度）
     char tbuf[8];
@@ -656,19 +661,24 @@ static void drawTvRemotePad(const int content_y) {
     const int x0 = APP_CONTENT_X;
     int y = content_y;
 
-    M5Cardputer.Display.setTextSize(1);
+    // 第一排：品牌 / 当前动作（二倍字体）
+    M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
     M5Cardputer.Display.setCursor(x0, y);
-    M5Cardputer.Display.print(tvBrandName(g_tv_brand));
+    const char* tv_brand = tvBrandName(g_tv_brand);
+    M5Cardputer.Display.print(tv_brand);
+    int cx = x0 + M5Cardputer.Display.textWidth(tv_brand) + 8;
+    const char* tv_action = tvActionName(g_tv_action);
     M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
-    M5Cardputer.Display.setCursor(x0 + 72, y);
-    M5Cardputer.Display.print(tvActionName(g_tv_action));
+    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.print(tv_action);
     if (g_tx_status[0] != '\0' && static_cast<int32_t>(millis() - g_tx_status_until_ms) < 0) {
+        cx += M5Cardputer.Display.textWidth(tv_action) + 8;
         M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(x0 + 160, y);
+        M5Cardputer.Display.setCursor(cx, y);
         M5Cardputer.Display.print(g_tx_status);
     }
-    y += 12;
+    y += INFO_LINE_H_2X + 5; // 与下方按键间隔
 
     constexpr int btn_w = 72;
     constexpr int btn_h = 16;

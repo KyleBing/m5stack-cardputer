@@ -156,6 +156,22 @@ void drawMenuScreenHeader(const char* app_name, const int page, const int page_c
     drawHeaderDivider(screen_w);
 }
 
+// 仅重绘分页圆点，避免翻页时擦黑扫过电池
+void updateMenuPageDots(const int page, const int page_count) {
+    if (page_count <= 1) {
+        return;
+    }
+    const int screen_w = M5Cardputer.Display.width();
+    constexpr int dot_r = 2;
+    constexpr int dot_gap = 6;
+    const int dots_w = page_count * dot_r * 2 + (page_count - 1) * dot_gap;
+    const int dot_x = screen_w - dots_w - 4;
+    // 只清圆点区域（分割线以上）
+    M5Cardputer.Display.fillRect(dot_x - 1, 0, dots_w + 2, APP_HEADER_H - 1, BLACK);
+    drawIconPageDots(dot_x, APP_HEADER_H / 2, page, page_count);
+    drawHeaderDivider(screen_w);
+}
+
 void updateMenuHeaderStatus(const int page_count) {
     static int prev_clear_left = -1;
     const int screen_w = M5Cardputer.Display.width();

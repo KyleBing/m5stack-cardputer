@@ -18,6 +18,9 @@ void drawAppScreenHeaderAccent(const char* title, const char* accent, uint16_t a
 // 主菜单 header：Logo + 应用名 + 电量/连接状态 + 分页圆点
 void drawMenuScreenHeader(const char* app_name, int page, int page_count);
 
+// 仅刷新主菜单分页圆点（翻页时用，不碰电量区）
+void updateMenuPageDots(int page, int page_count);
+
 // 刷新主菜单 header 状态区（电量 / WiFi / BLE）
 void updateMenuHeaderStatus(int page_count);
 

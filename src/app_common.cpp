@@ -110,6 +110,7 @@ void drawKeyHintsRow(const int x, const int y, const KeyHintItem* items, const i
         return;
     }
 
+    const int text_y = y + 1; // 普通文字下移 1px，徽章不动
     int cx = x;
     M5Cardputer.Display.setTextSize(text_size);
     M5Cardputer.Display.setTextColor(color, BLACK);
@@ -117,22 +118,23 @@ void drawKeyHintsRow(const int x, const int y, const KeyHintItem* items, const i
     for (int i = 0; i < item_count; i++) {
         const KeyHintItem& item = items[i];
         cx += drawKeyBadge(cx, y, item.key, text_size);
-        M5Cardputer.Display.setCursor(cx, y);
+        M5Cardputer.Display.setCursor(cx, text_y);
         M5Cardputer.Display.setTextColor(color, BLACK);
         M5Cardputer.Display.print(item.text);
         cx += M5Cardputer.Display.textWidth(item.text);
         if (i != item_count - 1) {
-            M5Cardputer.Display.setCursor(cx, y);
+            M5Cardputer.Display.setCursor(cx, text_y);
             M5Cardputer.Display.print(" ");
             cx += M5Cardputer.Display.textWidth(" ");
         }
     }
 }
 
-// 底栏右下角 h help/close
-void drawHelpHintRight(const char* help_label) {
+// 底栏右下角 h help/close（徽章不动，说明文字下移 1px；y_offset 整行下移）
+void drawHelpHintRight(const char* help_label, const int y_offset) {
     const char* label = (help_label != nullptr && help_label[0] != '\0') ? help_label : "help";
-    const int y = M5Cardputer.Display.height() - 12;
+    const int y = M5Cardputer.Display.height() - 12 + y_offset;
+    const int text_y = y + 1;
     const int screen_w = M5Cardputer.Display.width();
     const KeyHintItem help_item = {'h', label};
 
@@ -148,7 +150,7 @@ void drawHelpHintRight(const char* help_label) {
     int cx = hx + drawKeyBadge(hx, y, help_item.key, 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, y);
+    M5Cardputer.Display.setCursor(cx, text_y);
     M5Cardputer.Display.print(help_item.text);
 }
 

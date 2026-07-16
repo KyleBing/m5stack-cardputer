@@ -18,6 +18,7 @@
 #include "app_ir.h"
 #include "app_font_demo.h"
 #include "app_mic.h"
+#include "app_battery.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
@@ -46,7 +47,6 @@ enum class AppState {
     BMI,
     MIC,
     SETTINGS,
-    SPEAKER,
     RTC,
     IN_I2C,
     EX_I2C,
@@ -62,6 +62,7 @@ enum class AppState {
     IR,
     FONT_DEMO,
     LED,
+    BATTERY,
 };
 
 struct MenuItem {
@@ -81,6 +82,7 @@ static const MenuItem MENU_ITEMS[] = {
     {'t', "Time", "Time", AppState::RTC},
     {'s', "Slp", "Sleep", AppState::SLEEP},
     {'o', "Set", "Settings", AppState::SETTINGS},
+    {'p', "Bat", "Battery", AppState::BATTERY},
     {'c', "Cur", "Cursor", AppState::CURSOR},
     {'v', "Ver", "Version", AppState::VERSION},
     {'j', "Mor", "Morse", AppState::MORSE},
@@ -89,7 +91,7 @@ static const MenuItem MENU_ITEMS[] = {
     // 系统功能测试
     {'k', "Key", "Keyboard", AppState::KEYBOARD},
     {'g', "BMI", "BMI", AppState::BMI},
-    {'l', "Spk", "Speaker", AppState::SPEAKER},
+    {'l', "LED", "RGB LED", AppState::LED},
     {'r', "Mic", "Mic", AppState::MIC},
     {'b', "BLE", "BLE", AppState::BLE},
     {'d', "Disp", "Display", AppState::DISP},
@@ -97,7 +99,6 @@ static const MenuItem MENU_ITEMS[] = {
     {'f', "Fnt", "Font", AppState::FONT_DEMO},
     {'n', "InI2", "InI2", AppState::IN_I2C},
     {'e', "ExI2", "ExI2", AppState::EX_I2C},
-    {'p', "LED", "RGB LED", AppState::LED},
 };
 
 static const int MENU_ITEM_COUNT = sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]);
@@ -245,7 +246,11 @@ bool handleMenuPageNav(const Keyboard_Class::KeysState& status) {
 
     const int pageCount = getMenuPageCount();
     menuPage = (menuPage + delta + pageCount) % pageCount;
-    showMenu();
+    // 局部刷新：不清整屏，避免 header 擦黑扫过电池时闪出竖线
+    menuNoAppPrompt = false;
+    clearAppContentArea();
+    drawMenuPage();
+    updateMenuPageDots(menuPage, pageCount);
     return true;
 }
 
@@ -776,18 +781,9 @@ void drawBmiApp() {
 static constexpr int INFO_BODY_SIZE = 1;
 static constexpr int INFO_TITLE_GAP = 2;
 static constexpr int INFO_MAX_LINES = 8;
-static constexpr int INFO_MAX_PAGES = 6;
-static constexpr int INFO_POWER_PAGE = 3; // Chip Mem Fw Power Net Run
+static constexpr int INFO_MAX_PAGES = 5; // Chip Mem Fw Net Run
 
 static int infoPage = 0;
-static bool infoPowerPageVisible = false;
-static int infoPowerBodyY = -1;
-static int infoDrawX = APP_CONTENT_X; // 电源局部刷新用
-static char infoLastBat[8] = "";
-static char infoLastVolt[12] = "";
-static char infoLastCurr[12] = "";
-static char infoLastChg[8] = "";
-static char infoLastVbus[12] = "";
 
 struct InfoLine {
     const char* label;
@@ -799,14 +795,6 @@ struct InfoSection {
     InfoLine lines[INFO_MAX_LINES];
     int line_count;
 };
-
-static void resetInfoPowerCache() {
-    infoLastBat[0] = '\0';
-    infoLastVolt[0] = '\0';
-    infoLastCurr[0] = '\0';
-    infoLastChg[0] = '\0';
-    infoLastVbus[0] = '\0';
-}
 
 // 复位原因文案
 static const char* infoResetReasonText() {
@@ -933,11 +921,6 @@ static int buildInfoSections(InfoSection* sections, const int max_sections) {
     static char buf_sdk[24];
     static char buf_sketch[16];
     static char buf_free_sk[16];
-    static char buf_bat[8];
-    static char buf_volt[12];
-    static char buf_curr[12];
-    static char buf_chg[8];
-    static char buf_vbus[12];
     static char buf_mac[20];
     static char buf_ssid[20];
     static char buf_ip[20];
@@ -970,22 +953,6 @@ static int buildInfoSections(InfoSection* sections, const int max_sections) {
     snprintf(buf_sdk, sizeof(buf_sdk), "%s", ESP.getSdkVersion());
     snprintf(buf_sketch, sizeof(buf_sketch), "%d KB", ESP.getSketchSize() / 1024);
     snprintf(buf_free_sk, sizeof(buf_free_sk), "%d KB", ESP.getFreeSketchSpace() / 1024);
-
-    snprintf(buf_bat, sizeof(buf_bat), "%d%%", M5Cardputer.Power.getBatteryLevel());
-    snprintf(buf_volt, sizeof(buf_volt), "%dmV", M5Cardputer.Power.getBatteryVoltage());
-    const int32_t curr_ma = M5Cardputer.Power.getBatteryCurrent();
-    const int16_t vbus_mv = M5Cardputer.Power.getVBUSVoltage();
-    if (vbus_mv >= 0) {
-        snprintf(buf_curr, sizeof(buf_curr), "%dmA", static_cast<int>(curr_ma));
-        snprintf(buf_vbus, sizeof(buf_vbus), "%dmV", vbus_mv);
-    } else {
-        strncpy(buf_curr, "N/A", sizeof(buf_curr));
-        buf_curr[sizeof(buf_curr) - 1] = '\0';
-        strncpy(buf_vbus, "N/A", sizeof(buf_vbus));
-        buf_vbus[sizeof(buf_vbus) - 1] = '\0';
-    }
-    strncpy(buf_chg, getChargingStatusText(), sizeof(buf_chg));
-    buf_chg[sizeof(buf_chg) - 1] = '\0';
 
     formatInfoMac(buf_mac, sizeof(buf_mac));
     if (WiFi.status() == WL_CONNECTED) {
@@ -1049,18 +1016,6 @@ static int buildInfoSections(InfoSection* sections, const int max_sections) {
         infoAddLine(sec, "free", buf_free_sk);
     }
 
-    // Power
-    if (count < max_sections) {
-        InfoSection& sec = sections[count++];
-        sec = {};
-        sec.title = "Power";
-        infoAddLine(sec, "bat", buf_bat);
-        infoAddLine(sec, "volt", buf_volt);
-        infoAddLine(sec, "curr", buf_curr);
-        infoAddLine(sec, "chg", buf_chg);
-        infoAddLine(sec, "vbus", buf_vbus);
-    }
-
     // Net
     if (count < max_sections) {
         InfoSection& sec = sections[count++];
@@ -1116,28 +1071,7 @@ static int drawInfoContentAt(const int x, const int y, const int title_size) {
         infoPage = 0;
     }
 
-    infoPowerPageVisible = false;
-    infoPowerBodyY = -1;
-    infoDrawX = x;
-
     const int body_y = drawInfoSectionAt(sections[infoPage], x, y, title_size);
-    if (infoPage == INFO_POWER_PAGE) {
-        infoPowerPageVisible = true;
-        infoPowerBodyY = body_y;
-        const InfoSection& power = sections[INFO_POWER_PAGE];
-        if (power.line_count >= 5) {
-            strncpy(infoLastBat, power.lines[0].value, sizeof(infoLastBat) - 1);
-            infoLastBat[sizeof(infoLastBat) - 1] = '\0';
-            strncpy(infoLastVolt, power.lines[1].value, sizeof(infoLastVolt) - 1);
-            infoLastVolt[sizeof(infoLastVolt) - 1] = '\0';
-            strncpy(infoLastCurr, power.lines[2].value, sizeof(infoLastCurr) - 1);
-            infoLastCurr[sizeof(infoLastCurr) - 1] = '\0';
-            strncpy(infoLastChg, power.lines[3].value, sizeof(infoLastChg) - 1);
-            infoLastChg[sizeof(infoLastChg) - 1] = '\0';
-            strncpy(infoLastVbus, power.lines[4].value, sizeof(infoLastVbus) - 1);
-            infoLastVbus[sizeof(infoLastVbus) - 1] = '\0';
-        }
-    }
     return body_y;
 }
 
@@ -1154,52 +1088,6 @@ static bool advanceInfoPage(const int delta) {
     }
     infoPage = (infoPage + delta + page_count) % page_count;
     return true;
-}
-
-// 电源行局部刷新（小字）
-static void updateInfoPowerLine(const int y, const char* label, const char* value, char* cache,
-                                const size_t cache_size) {
-    if (strncmp(cache, value, cache_size) == 0 && cache[0] != '\0') {
-        return;
-    }
-
-    const int w = M5Cardputer.Display.width() - infoDrawX - 4;
-    M5Cardputer.Display.fillRect(infoDrawX, y, w, INFO_LINE_H, BLACK);
-    drawInfoLineAt(infoDrawX, y, label, value, INFO_BODY_SIZE);
-    strncpy(cache, value, cache_size - 1);
-    cache[cache_size - 1] = '\0';
-}
-
-void updateInfoApp() {
-    if (!infoPowerPageVisible || infoPowerBodyY < 0) {
-        return;
-    }
-
-    InfoSection sections[INFO_MAX_PAGES];
-    if (buildInfoSections(sections, INFO_MAX_PAGES) <= INFO_POWER_PAGE) {
-        return;
-    }
-
-    const InfoSection& power = sections[INFO_POWER_PAGE];
-    if (power.line_count < 5) {
-        return;
-    }
-
-    int y = infoPowerBodyY;
-    updateInfoPowerLine(y, power.lines[0].label, power.lines[0].value, infoLastBat,
-                        sizeof(infoLastBat));
-    y += INFO_LINE_H;
-    updateInfoPowerLine(y, power.lines[1].label, power.lines[1].value, infoLastVolt,
-                        sizeof(infoLastVolt));
-    y += INFO_LINE_H;
-    updateInfoPowerLine(y, power.lines[2].label, power.lines[2].value, infoLastCurr,
-                        sizeof(infoLastCurr));
-    y += INFO_LINE_H;
-    updateInfoPowerLine(y, power.lines[3].label, power.lines[3].value, infoLastChg,
-                        sizeof(infoLastChg));
-    y += INFO_LINE_H;
-    updateInfoPowerLine(y, power.lines[4].label, power.lines[4].value, infoLastVbus,
-                        sizeof(infoLastVbus));
 }
 
 // ===== SETTINGS =====
@@ -1474,7 +1362,6 @@ static void drawSettingsTimePanel(const int x, const int y, const int w) {
 }
 
 static void drawSettingsInfoPanel(const int x, const int y) {
-    resetInfoPowerCache();
     drawInfoContentAt(x, y, 1);
 }
 
@@ -1568,8 +1455,6 @@ void enterSettingsApp() {
     g_settings_focus = SettingsFocus::List;
     g_settings_row = 0;
     infoPage = 0;
-    infoPowerPageVisible = false;
-    resetInfoPowerCache();
     drawSettingsApp();
 }
 
@@ -1714,117 +1599,6 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
         saveAppConfigMijiaOnOffSound(!isMijiaOnOffSoundEnabled());
         drawSettingsApp();
     }
-}
-
-// ===== POWER =====
-
-static bool powerScreenReady = false;
-static char powerLastBat[8] = "";
-static char powerLastVolt[12] = "";
-static char powerLastCurr[12] = "";
-static char powerLastChg[8] = "";
-static char powerLastVbus[12] = "";
-static constexpr int POWER_TEXT_SIZE = 2;
-
-// 仅重绘变化的电源信息行
-static void updatePowerLine(const int y, const char* label, const char* value, char* cache,
-                            const size_t cache_size) {
-    if (strncmp(cache, value, cache_size) == 0 && cache[0] != '\0') {
-        return;
-    }
-
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, 220, INFO_LINE_H_2X, BLACK);
-    drawInfoLineAt(APP_CONTENT_X, y, label, value, POWER_TEXT_SIZE);
-    strncpy(cache, value, cache_size - 1);
-    cache[cache_size - 1] = '\0';
-}
-
-// 电源信息：首帧全屏，之后只刷新内容区
-void drawPowerApp(const bool full_init) {
-    char bat[8];
-    char volt[12];
-    char curr[12];
-    char chg[8];
-    char vbus[12];
-
-    snprintf(bat, sizeof(bat), "%d%%", M5Cardputer.Power.getBatteryLevel());
-    snprintf(volt, sizeof(volt), "%dmV", M5Cardputer.Power.getBatteryVoltage());
-
-    const int32_t curr_ma = M5Cardputer.Power.getBatteryCurrent();
-    const int16_t vbus_mv = M5Cardputer.Power.getVBUSVoltage();
-    const bool pwr_detail_supported = vbus_mv >= 0;
-
-    if (pwr_detail_supported) {
-        snprintf(curr, sizeof(curr), "%dmA", static_cast<int>(curr_ma));
-        snprintf(vbus, sizeof(vbus), "%dmV", vbus_mv);
-    } else {
-        strncpy(curr, "N/A", sizeof(curr));
-        strncpy(vbus, "N/A", sizeof(vbus));
-    }
-
-    strncpy(chg, getChargingStatusText(), sizeof(chg));
-    chg[sizeof(chg) - 1] = '\0';
-
-    if (full_init || !powerScreenReady) {
-        beginAppScreen("Pwr");
-        powerScreenReady = true;
-        powerLastBat[0] = '\0';
-        powerLastVolt[0] = '\0';
-        powerLastCurr[0] = '\0';
-        powerLastChg[0] = '\0';
-        powerLastVbus[0] = '\0';
-    }
-
-    int y = APP_CONTENT_Y;
-    updatePowerLine(y, "bat", bat, powerLastBat, sizeof(powerLastBat));
-    y += INFO_LINE_H_2X;
-    updatePowerLine(y, "volt", volt, powerLastVolt, sizeof(powerLastVolt));
-    y += INFO_LINE_H_2X;
-    updatePowerLine(y, "curr", curr, powerLastCurr, sizeof(powerLastCurr));
-    y += INFO_LINE_H_2X;
-    updatePowerLine(y, "chg", chg, powerLastChg, sizeof(powerLastChg));
-    y += INFO_LINE_H_2X;
-    updatePowerLine(y, "vbus", vbus, powerLastVbus, sizeof(powerLastVbus));
-}
-
-void enterPowerApp() {
-    powerScreenReady = false;
-    powerLastBat[0] = '\0';
-    powerLastVolt[0] = '\0';
-    powerLastCurr[0] = '\0';
-    powerLastChg[0] = '\0';
-    powerLastVbus[0] = '\0';
-    drawPowerApp(true);
-}
-
-// ===== SPEAKER =====
-
-void drawSpeakerApp(const String& key) {
-    beginAppScreen("Spk");
-    M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
-    if (key.length() == 1 && key[0] >= '1' && key[0] <= '9') {
-        M5Cardputer.Display.printf("tone: %d Hz\n", 440 + (key[0] - '1') * 110);
-    } else {
-        M5Cardputer.Display.println("1-9 tone");
-        M5Cardputer.Display.println("0 stop");
-    }
-}
-
-void enterSpeakerApp() {
-    warmUpSpeakerIfNeeded();
-    drawSpeakerApp("");
-}
-
-void handleSpeakerApp(const String& key) {
-    if (key.length() == 1 && key[0] >= '1' && key[0] <= '9') {
-        warmUpSpeakerIfNeeded();
-        const int n = key[0] - '1';
-        const int freq = 440 + n * 110;
-        M5Cardputer.Speaker.tone(freq, 300);
-    } else if (key == "0") {
-        M5Cardputer.Speaker.stop();
-    }
-    drawSpeakerApp(key);
 }
 
 // ===== RGB LED（Stamp-S3A 板载 WS2812，GPIO21；与背光共电）=====
@@ -2286,6 +2060,7 @@ static void prepareBtnAWake() {
 
 // 浅休眠：关屏后 CPU 暂停，BtnA 唤醒并回到主菜单（不重启）
 static void enterLightSleep() {
+    batteryLogPrepareSleep();
     sleepSavedBrightness = M5Cardputer.Display.getBrightness();
     M5Cardputer.Display.sleep();
     M5Cardputer.Display.waitDisplay();
@@ -2300,11 +2075,13 @@ static void enterLightSleep() {
     M5Cardputer.Display.wakeup();
     M5Cardputer.Display.setBrightness(sleepSavedBrightness);
     flushCardputerInput(false);
+    batteryLogAfterWake();
     showMenu();
 }
 
 // 深度休眠：关屏关无线后 CPU 断电，仅 BtnA 可唤醒（唤醒后重启）
 static void enterDeepSleep() {
+    batteryLogPrepareSleep();
     M5Cardputer.Display.sleep();
     M5Cardputer.Display.waitDisplay();
     M5Cardputer.Display.setBrightness(0);
@@ -2468,9 +2245,6 @@ void enterApp(const AppState state) {
         case AppState::MIC:
             enterMicApp();
             break;
-        case AppState::SPEAKER:
-            enterSpeakerApp();
-            break;
         case AppState::RTC:
             enterRtcApp();
             break;
@@ -2517,6 +2291,9 @@ void enterApp(const AppState state) {
         case AppState::LED:
             enterLedApp();
             break;
+        case AppState::BATTERY:
+            enterBatteryApp();
+            break;
         default:
             break;
     }
@@ -2540,6 +2317,7 @@ void setup() {
     }
     // config 加载后再设时区（deep sleep 唤醒后时钟可能已是 UTC）
     applyLocalTimezone();
+    initBatteryLog();
     WiFi.mode(WIFI_OFF);
     M5Cardputer.Display.setRotation(1);
     uint8_t brightness = 30;
@@ -2585,6 +2363,9 @@ void loop() {
 
     const uint32_t now = millis();
 
+    // 开机期间按整点记录电池（sleep 中不跑 loop）
+    batteryLogTick();
+
     // 主菜单 / 子界面 header 状态定时刷新
     static uint32_t lastHeaderStatusMs = 0;
     if (now - lastHeaderStatusMs >= 2000) {
@@ -2611,11 +2392,11 @@ void loop() {
             lastMicUpdateMs = now;
             updateMicApp();
         }
-    } else if (currentState == AppState::SETTINGS) {
-        static uint32_t lastInfoUpdateMs = 0;
-        if (now - lastInfoUpdateMs >= 1000) {
-            lastInfoUpdateMs = now;
-            updateInfoApp();
+    } else if (currentState == AppState::BATTERY) {
+        static uint32_t lastBatUpdateMs = 0;
+        if (now - lastBatUpdateMs >= 1000) {
+            lastBatUpdateMs = now;
+            updateBatteryApp();
         }
     } else if (currentState == AppState::WIFI) {
         updateWifiApp();
@@ -2695,11 +2476,6 @@ void loop() {
                     handleMicApp(getPressedKey());
                 }
                 break;
-            case AppState::SPEAKER:
-                if (M5Cardputer.Keyboard.isPressed()) {
-                    handleSpeakerApp(getPressedKey());
-                }
-                break;
             case AppState::WIFI:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleWifiApp(M5Cardputer.Keyboard.keysState());
@@ -2764,6 +2540,11 @@ void loop() {
             case AppState::LED:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleLedApp(getPressedKey());
+                }
+                break;
+            case AppState::BATTERY:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleBatteryApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             default:

@@ -20,16 +20,18 @@
 static constexpr const char* CURSOR_HOST = "https://cursor.com";
 static constexpr int CURSOR_DAYS_MAX = 31;
 static constexpr int CURSOR_HOURS = 24;
-static constexpr int CURSOR_CHART_PAGE_SIZE = 500; // 7d/30d/24h 每页条数
+static constexpr int CURSOR_CHART_PAGE_SIZE = 200; // 每页条数；配合流式解析避免 OOM
 static constexpr uint32_t CURSOR_IDLE_TRIGGER_MS = 60000;
 static constexpr uint32_t CURSOR_REFRESH_INTERVAL_MS = 300000;
 static constexpr uint32_t CURSOR_SLOW_LOOP_IDLE_MS = 300000; // 无操作 5 分钟后主循环 1s 一拍
 static constexpr uint32_t CURSOR_WIFI_TIMEOUT_MS = 5000;
 static constexpr int CURSOR_BAR_MARGIN_X = 5;
 static constexpr int CURSOR_SUMMARY_PAD_X = 10; // 摘要页进度条左右 padding
-static constexpr int CURSOR_CHART_ETA_24_SEC = 5;   // 当天 24h 预计加载时间
-static constexpr int CURSOR_CHART_ETA_7_SEC = 14;   // 图表 7 天预计加载时间
-static constexpr int CURSOR_CHART_ETA_30_SEC = 30;  // 图表 30 天预计加载时间
+static constexpr int CURSOR_CHART_ETA_24_SEC = 3;   // 当天 24h 预计加载时间
+static constexpr int CURSOR_CHART_ETA_7_SEC = 10;   // 图表 7 天预计加载时间
+static constexpr int CURSOR_CHART_ETA_30_SEC = 25;  // 图表 30 天预计加载时间
+// 柱体外框：比 DARKGREY 更暗，避免边框抢眼
+static constexpr uint16_t CURSOR_BAR_BORDER = 0x3186;
 
 enum class CursorPhase {
     IDLE,
@@ -458,13 +460,13 @@ static void accumulateEventDay(const int64_t ts_ms, const float cents, const int
   }
 
   const time_t event_sec = static_cast<time_t>(ts_ms / 1000);
-  for (int i = 0; i < range_days; i++) {
-    const time_t start = dayStartEpoch(range_days - 1 - i);
-    const time_t end = start + 86400;
-    if (event_sec >= start && event_sec < end) {
-      daily_out[i] += cents;
-      return;
-    }
+  const time_t range_start = dayStartEpoch(range_days - 1);
+  if (range_start <= 0 || event_sec < range_start) {
+    return;
+  }
+  const int day_index = static_cast<int>((event_sec - range_start) / 86400);
+  if (day_index >= 0 && day_index < range_days) {
+    daily_out[day_index] += cents;
   }
 }
 
@@ -526,7 +528,15 @@ static bool beginChartPagedFetch(const int range_days, float* daily_out) {
   return true;
 }
 
+// 写入图表错误（截断到 31 字符）
+static void setChartError(const int days, const char* msg) {
+  char* buf = chartErrorBuf(days);
+  strncpy(buf, msg, 31);
+  buf[31] = '\0';
+}
+
 // 每 tick 拉取一页；返回 1=完成 0=继续 -1=失败
+// 流式解析：pageSize=200 时整包 getString 易空响应 → json EmptyInput
 static int stepChartPagedFetch() {
   if (!g_chart_http_active || g_chart_http_target == nullptr) {
     return -1;
@@ -540,13 +550,12 @@ static int stepChartPagedFetch() {
   if (WiFi.status() != WL_CONNECTED) {
     if (!ensureCursorWifi(CURSOR_WIFI_TIMEOUT_MS, g_fetch_gen)) {
       g_chart_http_active = false;
-      strncpy(chartErrorBuf(g_chart_fetch_days), "wifi lost", 32);
-      chartErrorBuf(g_chart_fetch_days)[31] = '\0';
+      setChartError(g_chart_fetch_days, "wifi lost");
       return -1;
     }
   }
 
-  char body[160];
+  char body[180];
   snprintf(body, sizeof(body),
            "{\"teamId\":0,\"startDate\":\"%lld\",\"endDate\":\"%lld\",\"userId\":%d,"
            "\"page\":%d,\"pageSize\":%d}",
@@ -554,36 +563,69 @@ static int stepChartPagedFetch() {
            static_cast<long long>(g_chart_http_end_ms), g_user_id, g_chart_http_page,
            CURSOR_CHART_PAGE_SIZE);
 
-  String response;
-  int code = 0;
-  if (!cursorHttpRequest("POST", "/api/dashboard/get-filtered-usage-events", body, response,
-                         code)) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(20000);
+
+  HTTPClient http;
+  const String url = String(CURSOR_HOST) + "/api/dashboard/get-filtered-usage-events";
+  if (!http.begin(client, url)) {
+    g_chart_http_active = false;
+    if (g_chart_http_page == 1) {
+      setChartError(g_chart_fetch_days, "http begin");
+    }
+    return g_chart_http_page == 1 ? -1 : 1;
+  }
+
+  http.setTimeout(20000);
+  http.addHeader("Cookie", g_cookie);
+  http.addHeader("Accept", "application/json");
+  http.addHeader("User-Agent", "Cardputer/1.0");
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Origin", "https://cursor.com");
+
+  const int code = http.POST(body);
+  Serial.printf("[cursor] chart p%d days=%d code=%d heap=%u\n", g_chart_http_page,
+                g_chart_fetch_days, code, ESP.getFreeHeap());
+
+  if (code != 200) {
+    http.end();
     g_chart_http_active = false;
     if (g_chart_http_page == 1) {
       if (WiFi.status() != WL_CONNECTED) {
-        strncpy(chartErrorBuf(g_chart_fetch_days), "wifi lost", 32);
+        setChartError(g_chart_fetch_days, "wifi lost");
       } else if (code > 0) {
-        snprintf(chartErrorBuf(g_chart_fetch_days), 32, "http %d", code);
+        char msg[32];
+        snprintf(msg, sizeof(msg), "http %d", code);
+        setChartError(g_chart_fetch_days, msg);
       } else {
-        strncpy(chartErrorBuf(g_chart_fetch_days), "chart fail", 32);
+        char msg[32];
+        snprintf(msg, sizeof(msg), "net %d", code);
+        setChartError(g_chart_fetch_days, msg);
       }
-      chartErrorBuf(g_chart_fetch_days)[31] = '\0';
       return -1;
     }
     return 1; // 后续页失败则用已有数据
   }
 
-  JsonDocument doc;
   JsonDocument filter;
   filter["totalUsageEventsCount"] = true;
   filter["usageEventsDisplay"][0]["timestamp"] = true;
   filter["usageEventsDisplay"][0]["tokenUsage"]["totalCents"] = true;
   filter["usageEventsDisplay"][0]["chargedCents"] = true;
-  if (deserializeJson(doc, response, DeserializationOption::Filter(filter))) {
+
+  JsonDocument doc;
+  const DeserializationError jerr =
+      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+
+  if (jerr) {
+    Serial.printf("[cursor] chart json=%s heap=%u\n", jerr.c_str(), ESP.getFreeHeap());
     g_chart_http_active = false;
     if (g_chart_http_page == 1) {
-      strncpy(chartErrorBuf(g_chart_fetch_days), "chart fail", 32);
-      chartErrorBuf(g_chart_fetch_days)[31] = '\0';
+      char msg[32];
+      snprintf(msg, sizeof(msg), "json %s", jerr.c_str());
+      setChartError(g_chart_fetch_days, msg);
       return -1;
     }
     return 1;
@@ -755,10 +797,10 @@ static void drawPctBar(const int x, const int y, const int w, const int h, const
 static constexpr int CURSOR_BAR_LABEL_PAD = 3;
 static constexpr int CURSOR_BAR_LABEL_H = CURSOR_BAR_LABEL_PAD + 8 + CURSOR_BAR_LABEL_PAD;
 
-// 空间不足时稀疏显示日期（如 1 5 10 15 20 25 30）；24h 每 3 小时一个 label
+// 空间不足时稀疏显示日期（如 1 5 10 15 20 25 30）；24h 每 3 小时一个 label，末列标 24
 static bool shouldShowBarDayLabel(const int i, const int days, const int bar_w) {
   if (days == 24) {
-    return (i % 3) == 0;
+    return (i % 3) == 0 || i == days - 1;
   }
   if (days <= 7 || bar_w >= 10) {
     return true;
@@ -812,7 +854,7 @@ static void drawDailyBars(const int x, const int y, const int w, const int bar_h
         M5Cardputer.Display.fillRect(bar_x, by, bar_w, fill_h, color);
       }
     }
-    M5Cardputer.Display.drawRect(bar_x, y, bar_w, bar_h, DARKGREY);
+    M5Cardputer.Display.drawRect(bar_x, y, bar_w, bar_h, CURSOR_BAR_BORDER);
   }
 
   if (!draw_labels) {
@@ -827,21 +869,30 @@ static void drawDailyBars(const int x, const int y, const int w, const int bar_h
     int bar_w = 0;
     cursorBarLayout(x, w, days, gap, i, bar_x, bar_w);
 
-    if (!shouldShowBarDayLabel(i, days, bar_w)) {
-      continue;
-    }
-
     char lbl[4];
+    bool show = shouldShowBarDayLabel(i, days, bar_w);
     if (days == 24) {
-      snprintf(lbl, sizeof(lbl), "%d", i);
+      // 末列标 24（一天结束）
+      snprintf(lbl, sizeof(lbl), "%d", (i == days - 1) ? 24 : i);
     } else {
       const time_t day_ts = dayStartEpoch(days - 1 - i);
       int mday = i + 1;
+      int month = 0;
       struct tm local_tm;
       if (day_ts > 0 && localtime_r(&day_ts, &local_tm) != nullptr) {
         mday = local_tm.tm_mday;
+        month = local_tm.tm_mon + 1;
       }
-      snprintf(lbl, sizeof(lbl), "%d", mday);
+      // 30 天图：每月 1 号改标月份，便于跨月辨认
+      if (days == 30 && mday == 1 && month > 0) {
+        show = true;
+        snprintf(lbl, sizeof(lbl), "%d", month);
+      } else {
+        snprintf(lbl, sizeof(lbl), "%d", mday);
+      }
+    }
+    if (!show) {
+      continue;
     }
     const int tw = M5Cardputer.Display.textWidth(lbl);
     const int tx = bar_x + (bar_w - tw) / 2;
@@ -850,16 +901,28 @@ static void drawDailyBars(const int x, const int y, const int w, const int bar_h
   }
 }
 
+// 按天数取预计秒数
+static int chartEtaSecForDays(const int days) {
+  if (days == 30) {
+    return CURSOR_CHART_ETA_30_SEC;
+  }
+  if (days == 24) {
+    return CURSOR_CHART_ETA_24_SEC;
+  }
+  return CURSOR_CHART_ETA_7_SEC;
+}
+
+// 发起拉取前先写入本页 ETA，避免仍显示上一页的秒数
+static void prepareChartFetchEta(const int days) {
+  g_chart_fetch_eta_sec = chartEtaSecForDays(days);
+  g_chart_fetch_start_ms = 0;
+  g_last_countdown_sec = -1;
+}
+
 // 记录图表拉取倒计时起点
 static void startChartFetchTimer(const int days) {
   g_chart_fetch_start_ms = millis();
-  if (days == 30) {
-    g_chart_fetch_eta_sec = CURSOR_CHART_ETA_30_SEC;
-  } else if (days == 24) {
-    g_chart_fetch_eta_sec = CURSOR_CHART_ETA_24_SEC;
-  } else {
-    g_chart_fetch_eta_sec = CURSOR_CHART_ETA_7_SEC;
-  }
+  g_chart_fetch_eta_sec = chartEtaSecForDays(days);
   g_last_countdown_sec = -1;
 }
 
@@ -928,8 +991,8 @@ static void drawChartLoadingOverlay(const int x, const int y, const int w, const
 
 // 仅刷新当前可见图表页的 loading 倒计时
 static void refreshChartLoadingFrame() {
-  if (g_display_blanked || g_silent_fetch) {
-    return;
+  if (g_display_blanked || g_silent_fetch || g_help_visible) {
+    return; // Help 打开时不盖 loading，避免冲掉帮助页
   }
   // 仅当正在看「正在拉取」的那一页时更新 ETA
   int page_days = 0;
@@ -1118,19 +1181,17 @@ static void drawCursorSummaryPage(const int y) {
   constexpr int footer_h = 14; // used/reset 一排
   char buf[24];
 
+  // 标签与百分比均用 2 倍字；按最长标签对齐百分比列
   M5Cardputer.Display.setTextSize(text_sz);
-  // First Party 较长：标签用 1 号字对齐百分比列
-  M5Cardputer.Display.setTextSize(1);
-  const int label_col_w = M5Cardputer.Display.textWidth("First Party");
-  M5Cardputer.Display.setTextSize(text_sz);
+  const int label_col_w = M5Cardputer.Display.textWidth("Auto");
   const int value_gap = M5Cardputer.Display.textWidth("  ");
   const int value_x = pad_x + label_col_w + value_gap;
 
   auto drawUsageBlock = [&](int& cy, const char* label, const float pct, const uint16_t color) {
-    // 标签：与进度条同色（1 号字以容纳 First Party）
-    M5Cardputer.Display.setTextSize(1);
+    // 标签：与进度条同色，2 倍字
+    M5Cardputer.Display.setTextSize(text_sz);
     M5Cardputer.Display.setTextColor(color, BLACK);
-    M5Cardputer.Display.setCursor(pad_x, cy + 4);
+    M5Cardputer.Display.setCursor(pad_x, cy);
     M5Cardputer.Display.print(label);
 
     snprintf(buf, sizeof(buf), "%.2f%%", pct);
@@ -1147,7 +1208,7 @@ static void drawCursorSummaryPage(const int y) {
 
   // 从上往下紧凑排布，多出的垂直空间留给底栏
   int cy = y;
-  drawUsageBlock(cy, "First Party", 100.0f - g_usage.auto_pct, APP_COLOR_OK);
+  drawUsageBlock(cy, "Auto", 100.0f - g_usage.auto_pct, APP_COLOR_OK);
   drawUsageBlock(cy, "API", 100.0f - g_usage.api_pct, ORANGE);
 
   // 底栏：used / reset；标签 hint，数值界面蓝
@@ -1364,6 +1425,8 @@ static void beginCursorChartFetch(const int days, const bool silent) {
     g_fetch_pending = true;
     g_queue_other_chart = false;
     strncpy(g_status_msg, "chart...", sizeof(g_status_msg));
+    // 在 task 真正 startChartFetchTimer 之前就写好本页 ETA，避免闪上一页秒数
+    prepareChartFetchEta(days);
     drawCursorApp();
     return;
   }
@@ -1620,7 +1683,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
           g_phase = CursorPhase::READY;
         }
         g_need_redraw = true;
-        // 启动失败（如 time sync）时也尝试排队另一段图表
+        // 启动失败只排队「另一段」；同页失败不自动重试，避免 14s 循环
         g_queue_other_chart = true;
       }
       endCursorFetchTask();
@@ -1658,7 +1721,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
         g_last_chart_7_fetch_ms = millis();
       }
     }
-    // step_rc < 0：错误已写入 chartErrorBuf
+    // step_rc < 0：错误已写入 chartErrorBuf，停留错误态等用户按 r
 
     g_chart_http_target = nullptr;
     g_status_msg[0] = '\0';
@@ -1672,6 +1735,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
         g_phase = CursorPhase::READY;
       }
       g_need_redraw = true;
+      // 成功或失败都可排队另一段；同页失败由 update 里 want!=finished 过滤
       g_queue_other_chart = true;
     }
   }
@@ -1690,15 +1754,20 @@ void updateCursorApp() {
     drawCursorApp();
   }
 
-  // 上一段图表结束后：若当前页是另一段未就绪图表，排队拉取
+  // 上一段图表结束后：仅当当前页是「另一段」未就绪时再拉；同页失败不自动重试
   if (g_queue_other_chart && !g_task_running && !g_fetch_pending) {
     g_queue_other_chart = false;
+    const int finished_days = g_chart_fetch_days;
+    int want_days = 0;
     if (g_page == CursorPage::CHART_24 && !g_chart_24_ready) {
-      beginCursorChartFetch(24, false);
+      want_days = 24;
     } else if (g_page == CursorPage::CHART_7 && !g_chart_7_ready) {
-      beginCursorChartFetch(7, false);
+      want_days = 7;
     } else if (g_page == CursorPage::CHART_30 && !g_chart_30_ready) {
-      beginCursorChartFetch(30, false);
+      want_days = 30;
+    }
+    if (want_days != 0 && want_days != finished_days) {
+      beginCursorChartFetch(want_days, false);
     }
   }
 
@@ -1761,6 +1830,25 @@ void handleCursorApp(const Keyboard_Class::KeysState& status) {
     return;
   }
   if (key == "r") {
+    // 图表页：只重拉当前段（含失败后手动重试）；摘要页：整页刷新
+    if (g_page == CursorPage::CHART_24) {
+      g_chart_24_ready = false;
+      g_chart_24_error[0] = '\0';
+      beginCursorChartFetch(24, false);
+      return;
+    }
+    if (g_page == CursorPage::CHART_7) {
+      g_chart_7_ready = false;
+      g_chart_7_error[0] = '\0';
+      beginCursorChartFetch(7, false);
+      return;
+    }
+    if (g_page == CursorPage::CHART_30) {
+      g_chart_30_ready = false;
+      g_chart_30_error[0] = '\0';
+      beginCursorChartFetch(30, false);
+      return;
+    }
     beginCursorFetch(CursorFetchMode::FULL);
   }
 }

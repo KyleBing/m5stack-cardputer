@@ -114,8 +114,8 @@ static void drawMorseApp(const bool full_init) {
 
     char freq_buf[16];
     snprintf(freq_buf, sizeof(freq_buf), "%d Hz", g_tone_hz);
-    drawInfoLineAt(APP_CONTENT_X, y, "freq", freq_buf, 1);
-    y += INFO_LINE_H + 2;
+    drawInfoLineAt(APP_CONTENT_X, y, "freq", freq_buf, 2);
+    y += INFO_LINE_H_2X + 2;
 
     if (g_last_key != '\0') {
         char key_buf[4];
