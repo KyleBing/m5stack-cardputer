@@ -669,16 +669,21 @@ static void sendHostReport(const Keyboard_Class::KeysState& status) {
     enqueueBleReport(report);
 }
 
+static int hintBarY() {
+    return M5Cardputer.Display.height() - 12;
+}
+
+// peer MAC 画在底栏 tip 正上方一行（不占内容区）
 static int peerLineY() {
-    return APP_CONTENT_Y + INFO_LINE_H_2X + 1;
+    return hintBarY() - INFO_LINE_H;
 }
 
 static int echoAreaY() {
-    return peerLineY() + INFO_LINE_H + 2;
+    return APP_CONTENT_Y + INFO_LINE_H_2X + 4;
 }
 
 static void drawPeerLine() {
-    // USB 模式无 peer MAC；BLE 才显示
+    // 作为外设连上主机时，连接事件通常只有 BD 地址；主机名一般拿不到
     const char* text = (g_transport == HidTransport::BLE) ? g_peer_addr : "";
     if (strcmp(g_drawn_peer, text) == 0) {
         return;
@@ -721,7 +726,11 @@ static void drawEchoOnly() {
 }
 
 static void drawHintBar() {
-    const int hint_y = M5Cardputer.Display.height() - 12;
+    // 先刷 tip 上方 peer 行，再画底栏
+    g_drawn_peer[0] = '\0';
+    drawPeerLine();
+
+    const int hint_y = hintBarY();
     int cx = APP_CONTENT_X;
     cx += drawTextBadge(cx, hint_y, "BtnA", 1);
     M5Cardputer.Display.setTextSize(1);
@@ -911,12 +920,10 @@ static void drawHidKbApp(const bool full_init) {
     }
 
     drawInfoLineAt(APP_CONTENT_X, APP_CONTENT_Y, "link", connectionStatusText(), 2);
-    g_drawn_peer[0] = '\0';
-    drawPeerLine();
     g_drawn_echo[0] = '\0';
     g_drawn_label[0] = '\0';
     drawEchoOnly();
-    drawHintBar();
+    drawHintBar();  // 内含 tip 上方 peer MAC
 }
 
 void enterHidKbApp() {
