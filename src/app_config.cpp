@@ -82,11 +82,7 @@ bool loadAppConfig() {
 
     JsonObject cursor = doc["cursor"];
     if (!cursor.isNull()) {
-        const char* token = cursor["token"];
-        if (token == nullptr || token[0] == '\0') {
-            token = cursor["api_key"]; // 兼容旧字段名
-        }
-        copyField(g_config.cursor_token, sizeof(g_config.cursor_token), token);
+        copyField(g_config.cursor_token, sizeof(g_config.cursor_token), cursor["token"]);
     }
 
     // 亮度：配置为 0~100；>100 视为旧版 0~255 并换算

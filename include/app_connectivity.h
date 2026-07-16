@@ -27,6 +27,9 @@ void startBleStack();
 // 关闭 BLE（停止广播，不 deinit）
 void stopBleStack();
 
+// 完全释放 BLE 栈（deinit），供 HID 键盘等需独占协议栈的场景
+void resetBleStackFully();
+
 // 兼容旧调用
 void ensureBleStack();
 

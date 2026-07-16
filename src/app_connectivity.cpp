@@ -86,6 +86,21 @@ void stopBleStack() {
     g_ble_advertising = false;
 }
 
+// 完全释放 BLE，之后其它模块可重新 init
+void resetBleStackFully() {
+    if (!g_ble_initialized) {
+        return;
+    }
+    BLEDevice::stopAdvertising();
+    BLEDevice::deinit(false);
+    g_ble_initialized = false;
+    g_ble_ready = false;
+    g_ble_advertising = false;
+    g_ble_server = nullptr;
+    g_ble_scan_busy = false;
+    applyWifiRadioSleepPolicy();
+}
+
 void ensureBleStack() {
     startBleStack();
 }

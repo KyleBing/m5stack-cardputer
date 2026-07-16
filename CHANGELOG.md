@@ -10,11 +10,14 @@
 
 ### 新增
 
+- **HID Keyboard**（`h`）：USB / BLE 双模 HID 键盘（`app_hid_kb`）；默认 BLE（`Cardputer KB`）不占烧录口；`Fn+u/b` 切 USB/BLE，`Fn+p` 重新配对；侧边 **BtnA** 退出
+- **HID Keyboard** Fn 层：橙色功能键（Esc / Del / 方向 / F1–F12）；`Fn+Ctrl/Opt/Alt` → 右侧修饰键；`Opt` → Win/Cmd；`Fn+Aa` → Caps Lock；`Fn+h` 帮助（徽章 + 箭头翻页）
 - **Battery**（`p`）：独立电量页（`app_battery`）；实时电量 / 电压（可读时显示电流与 VBUS）；近 24h 柱状图；LittleFS 整点采样（最多 7 天）；深睡/浅睡缺口线性补全
 - **Settings Info**：原 Power 页迁出，改由 Battery App 承担
 
 ### 改进
 
+- **USB**：`ARDUINO_USB_MODE=0` 且 `CDC_ON_BOOT=0`；HID USB 模式进出时 OTG ↔ Serial/JTAG 切换，退出后可继续 `pio upload`
 - **菜单**：删除 Speaker；RGB LED 入口改为 `l`；主页翻页改为局部刷新（内容区 + 分页圆点），避免整屏擦黑扫过电池时闪竖线
 - **Mijia** 编组：成员全是灯时可组亮度（`-=` / `0`–`9`）；底栏开关/亮度进度局部刷新，不整页闪
 - **Cursor**：图表分页改为流式解析（`pageSize=200`），降低 OOM / 空响应对失败；柱体外框更暗；日聚合按索引累加
@@ -22,6 +25,7 @@
 - **Morse**：频率行改为二倍字体
 - **底栏 tip**：徽章后说明文字下移 1px，与徽章视觉对齐；`drawHelpHintRight` 支持 `y_offset`
 - **Mijia**：空气净化器 / 榨汁机 active 图标 PNG 微调
+- **Web 配网**：编组文案改为「米家设备编组」；Cursor 配置只保留 `token`，去掉旧 `api_key` 兼容读写
 
 ---
 
