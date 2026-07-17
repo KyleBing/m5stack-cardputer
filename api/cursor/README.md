@@ -29,6 +29,7 @@ Host：`https://cursor.com`
 | POST | `/api/dashboard/get-current-period-usage` | 周期用量（优先） | Summary：Auto/API/ond/reset |
 | GET | `/api/usage-summary` | 周期用量（回退） | 同上 |
 | POST | `/api/dashboard/get-filtered-usage-events` | 事件列表 | last 页 / 24h·7d·30d 图 |
+| SNTP | `ntp.aliyun.com` / `pool.ntp.org` | WiFi 后快速校时 | last / 图表 / reset 天数依赖 |
 
 ## 字段 → 界面
 
@@ -65,9 +66,10 @@ Host：`https://cursor.com`
 | [usage-summary.json](./usage-summary.json) | `GET /api/usage-summary` |
 | [usage-events.json](./usage-events.json) | `POST .../get-filtered-usage-events` |
 | [usage-events-request.json](./usage-events-request.json) | 事件列表请求体示例 |
+| [ntp-sync.md](./ntp-sync.md) | 拉取前 NTP 校时（`quickSyncTime`） |
 
 ## 拉取时机
 
-- 进入 App：只拉 auth + period（摘要）
+- 进入 App：WiFi → **NTP 校时** → auth + period（摘要）
 - 切到 last：再拉最近 10 条事件
 - 切到图表：按需分页拉事件并聚合
