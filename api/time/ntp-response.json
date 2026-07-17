@@ -1,0 +1,64 @@
+{
+  "_protocol": "SNTP over UDP/123",
+  "_note": "服务器原始包由协议栈解析；固件实际使用的是下方 application 结构",
+  "sntp_response": {
+    "li": 0,
+    "vn": 4,
+    "mode": 4,
+    "_mode_meaning": "4 = server",
+    "stratum": 2,
+    "transmitTimestamp": {
+      "_type": "NTP timestamp",
+      "_to_unix": "unix_sec = ntp_sec - 2208988800",
+      "_meaning": "服务器发出时刻 → 系统 UTC 时钟"
+    }
+  },
+  "application": {
+    "ok": true,
+    "source": "NTP",
+    "_source_enum": ["NTP", "RTC", "none"],
+    "timezone": "CST-8",
+    "epoch_utc": 1771077734,
+    "_epoch_valid_if": "> 1600000000",
+    "local": {
+      "year": 2026,
+      "month": 7,
+      "day": 17,
+      "hour": 15,
+      "minute": 26,
+      "second": 42,
+      "_from": "struct tm via getLocalTime / localtime_r"
+    },
+    "ui": {
+      "time": "15:26:42",
+      "date": "2026-07-17",
+      "tag": "NTP"
+    },
+    "rtc_if_enabled": {
+      "stored_as": "UTC",
+      "fields": {
+        "year": 2026,
+        "month": 7,
+        "day": 17,
+        "hours": 7,
+        "minutes": 26,
+        "seconds": 42
+      },
+      "_note": "东八区显示 15:26 时，RTC 存 07:26 UTC"
+    },
+    "config_written": {
+      "timezone": "CST-8",
+      "path": "config.json"
+    }
+  },
+  "failure": {
+    "ok": false,
+    "source": "none",
+    "reasons": [
+      "wifi fail / timeout",
+      "NTP timeout within RTC_SYNC_TIMEOUT_MS",
+      "no wifi_ssid in config"
+    ],
+    "ui_busy": ["wifi connecting...", "ntp syncing..."]
+  }
+}

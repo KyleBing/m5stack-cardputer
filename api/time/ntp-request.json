@@ -1,0 +1,39 @@
+{
+  "_protocol": "SNTP over UDP/123",
+  "_note": "由 ESP-IDF configTzTime 代发，应用层不手动组包；下列为逻辑字段说明",
+  "transport": {
+    "protocol": "UDP",
+    "port": 123,
+    "packet_bytes": 48,
+    "servers": [
+      "ntp.aliyun.com",
+      "pool.ntp.org",
+      "time.windows.com"
+    ]
+  },
+  "request": {
+    "li": 0,
+    "vn": 4,
+    "mode": 3,
+    "_mode_meaning": "3 = client",
+    "stratum": 0,
+    "poll": 0,
+    "precision": 0,
+    "rootDelay": 0,
+    "rootDispersion": 0,
+    "refId": 0,
+    "referenceTimestamp": 0,
+    "originateTimestamp": 0,
+    "receiveTimestamp": 0,
+    "transmitTimestamp": {
+      "_type": "NTP timestamp (seconds since 1900-01-01 + fraction)",
+      "_meaning": "客户端发出时刻（可选，用于 RTT）"
+    }
+  },
+  "firmware_call": {
+    "api": "configTzTime(tz, server1, server2, server3)",
+    "tz": "getAppTimezone() → config.json timezone，缺省 CST-8",
+    "timeout_ms": 10000,
+    "timeout_const": "RTC_SYNC_TIMEOUT_MS（含 WiFi + NTP）"
+  }
+}
