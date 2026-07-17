@@ -1,0 +1,41 @@
+{
+  "billingCycleStart": "2026-04-02T14:11:55.000Z",
+  "billingCycleEnd": "2026-05-02T14:11:55.000Z",
+  "membershipType": "pro",
+  "limitType": "user",
+  "isUnlimited": false,
+  "individualUsage": {
+    "plan": {
+      "enabled": true,
+      "used": 2000,
+      "limit": 2000,
+      "remaining": 0,
+      "autoPercentUsed": 0,
+      "apiPercentUsed": 100,
+      "totalPercentUsed": 100,
+      "breakdown": {
+        "included": 2000,
+        "bonus": 0,
+        "total": 2000
+      }
+    },
+    "onDemand": {
+      "enabled": true,
+      "used": 2309,
+      "limit": 10000,
+      "remaining": 7691,
+      "_ui": {
+        "ond": "used/limit → ond $23.09/$100.00；limit=null 时只显示 used"
+      }
+    }
+  },
+  "teamUsage": {
+    "onDemand": {
+      "enabled": true,
+      "used": 5000,
+      "limit": 50000,
+      "remaining": 45000
+    }
+  },
+  "_note": "GET /api/usage-summary；period POST 失败时回退。固件优先 spendLimitUsage，否则读 individualUsage.onDemand；plan 字段同 planUsage。"
+}

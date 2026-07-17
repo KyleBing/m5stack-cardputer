@@ -350,6 +350,8 @@ static void batDrawChart(const int x, const int y, const int w, const int bar_h)
         int bar_x = 0;
         int bar_w = 0;
         batBarLayout(x, w, n, BAT_CHART_GAP, marks[m], bar_x, bar_w);
+        // 末列 now 用绿色，与当前小时柱一致
+        M5Cardputer.Display.setTextColor(m == 4 ? APP_COLOR_OK : APP_COLOR_HINT, BLACK);
         M5Cardputer.Display.setCursor(bar_x, label_y);
         M5Cardputer.Display.print(labels[m]);
     }
@@ -369,6 +371,11 @@ static void batDrawHints() {
     M5Cardputer.Display.print(" ");
     M5Cardputer.Display.setTextColor(APP_COLOR_WARN, BLACK);
     M5Cardputer.Display.print("sleep");
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.print(" ");
+    // 绿色柱：此时此刻（当前小时）
+    M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
+    M5Cardputer.Display.print("now");
 }
 
 void enterBatteryApp() {

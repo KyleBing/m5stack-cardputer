@@ -1,0 +1,77 @@
+{
+  "totalUsageEventsCount": 3,
+  "usageEventsDisplay": [
+    {
+      "timestamp": "1775418973898",
+      "model": "cursor-grok-4.5-high-fast",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_BUSINESS",
+      "requestsCosts": 1.4,
+      "usageBasedCosts": "$0.00",
+      "isTokenBasedCall": true,
+      "tokenUsage": {
+        "inputTokens": 1200,
+        "outputTokens": 800,
+        "cacheWriteTokens": 50000,
+        "cacheReadTokens": 322900,
+        "totalCents": 0
+      },
+      "chargedCents": 0,
+      "isChargeable": false,
+      "isHeadless": false,
+      "_ui": {
+        "time": "timestamp → 本地 2026-07-17 11:56:46（拆成日期+大时间）",
+        "model": "model",
+        "tokens": "input+output+cacheWrite+cacheRead → 374.7K",
+        "Inc": "kind 含 INCLUDED → 绿徽章"
+      }
+    },
+    {
+      "timestamp": "1775418000000",
+      "model": "claude-4.5-sonnet",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "requestsCosts": 5,
+      "usageBasedCosts": "$0.21",
+      "isTokenBasedCall": true,
+      "tokenUsage": {
+        "inputTokens": 126,
+        "outputTokens": 450,
+        "cacheWriteTokens": 6112,
+        "cacheReadTokens": 11964,
+        "totalCents": 20.18
+      },
+      "chargedCents": 21.36,
+      "cursorTokenFee": 1.18,
+      "isChargeable": true,
+      "isHeadless": false,
+      "_ui_chart": "图表聚合用 totalCents，没有则用 chargedCents"
+    },
+    {
+      "timestamp": "1775417000000",
+      "model": "composer-2",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "tokenUsage": {
+        "inputTokens": 500,
+        "outputTokens": 200,
+        "cacheWriteTokens": 0,
+        "cacheReadTokens": 0,
+        "totalCents": 3.5
+      },
+      "chargedCents": 3.5
+    }
+  ],
+  "_filter_last": [
+    "timestamp",
+    "model",
+    "kind",
+    "tokenUsage.inputTokens",
+    "tokenUsage.outputTokens",
+    "tokenUsage.cacheWriteTokens",
+    "tokenUsage.cacheReadTokens"
+  ],
+  "_filter_chart": [
+    "totalUsageEventsCount",
+    "usageEventsDisplay[].timestamp",
+    "usageEventsDisplay[].tokenUsage.totalCents",
+    "usageEventsDisplay[].chargedCents"
+  ]
+}

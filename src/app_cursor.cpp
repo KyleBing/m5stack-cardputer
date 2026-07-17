@@ -43,28 +43,45 @@ enum class CursorPhase {
 
 enum class CursorPage {
     SUMMARY = 0,
-    CHART_24 = 1,
-    CHART_7 = 2,
-    CHART_30 = 3,
+    LAST = 1,      // 上次请求
+    CHART_24 = 2,
+    CHART_7 = 3,
+    CHART_30 = 4,
 };
+static constexpr int CURSOR_PAGE_COUNT = 5;
 
 enum class CursorFetchMode {
     FULL,
     PERIOD,
     CHART,
+    LAST, // 仅刷新最近请求列表
 };
 
 struct CursorUsageData {
     bool valid;
     float auto_pct;
     float api_pct;
-    int used_cents;
-    int limit_cents;
-    int remaining_cents;
+    // On-Demand（按量）：来自 spendLimitUsage / individualUsage.onDemand
+    bool ond_valid;
+    int ond_used_cents;
+    int ond_limit_cents; // 0 = 无上限 / null
     char reset_date[12];
+    time_t reset_epoch; // billingCycleEnd，用于算剩余天数
     float daily_cents[CURSOR_DAYS_MAX];
     int day_count;
 };
+
+// 最近 usage event：时间 / 模型 / token 量
+struct CursorLastRequest {
+    bool included;
+    char time_str[20]; // 2026-07-17 11:56:46
+    char model[40];
+    char tokens_str[12];
+};
+
+static constexpr int CURSOR_LAST_MAX = 10;
+static constexpr int CURSOR_LAST_PER_PAGE = 1; // usage 每页一条，方便阅读
+static constexpr int CURSOR_LAST_STATUS_H = 11;  // header 下分页/状态行
 
 static CursorPhase g_phase = CursorPhase::IDLE;
 static CursorPage g_page = CursorPage::SUMMARY;
@@ -77,7 +94,13 @@ static char g_status_msg[32] = "";
 static char g_cookie[CURSOR_TOKEN_MAX + 64] = "";
 static int g_user_id = 0;
 static CursorUsageData g_usage{};
+static CursorLastRequest g_last_reqs[CURSOR_LAST_MAX]{};
+static int g_last_req_count = 0;
+static int g_last_page = 0;            // usage 分页（0-based）
+static bool g_last_refreshing = false; // r 软刷新中（保留旧列表）
+static bool g_want_last_fetch = false; // 切到 last 时若尚未就绪则排队拉取
 static uint32_t g_last_period_fetch_ms = 0;
+static bool g_was_slow_loop = false; // 1s 慢循环态，用于右上角蓝点
 static uint32_t g_last_chart_24_fetch_ms = 0;
 static uint32_t g_last_chart_7_fetch_ms = 0;
 static uint32_t g_last_chart_30_fetch_ms = 0;
@@ -111,7 +134,7 @@ static uint8_t g_saved_brightness = 30;
 // Help 页（方向键翻页）
 static bool g_help_visible = false;
 static int g_help_page = 0;
-static constexpr int CURSOR_HELP_PAGE_COUNT = 4;
+static constexpr int CURSOR_HELP_PAGE_COUNT = 5;
 static constexpr int CURSOR_HELP_LINE_H = 11;
 // FreeRTOS：网络请求与主循环键扫分离
 static constexpr uint32_t CURSOR_FETCH_STACK = 8192; // FreeRTOS 单位：字（≈32KB）
@@ -123,6 +146,7 @@ static TaskHandle_t g_fetch_task = nullptr;
 
 static void beginCursorFetch(const CursorFetchMode mode);
 static void beginCursorChartFetch(const int days, const bool silent);
+static void beginCursorLastRefresh();
 static void startChartFetchTimer(const int days);
 static int chartFetchCountdownSec();
 static void refreshChartLoadingFrame();
@@ -181,6 +205,9 @@ static void triggerCursorIdleRefresh() {
 
   if (g_page == CursorPage::SUMMARY) {
     beginCursorFetch(CursorFetchMode::PERIOD);
+  } else if (g_page == CursorPage::LAST) {
+    // last 页空闲刷新只重拉列表
+    beginCursorLastRefresh();
   } else if (g_page == CursorPage::CHART_24 && g_chart_24_ready) {
     beginCursorChartFetch(24, true);
   } else if (g_page == CursorPage::CHART_7 && g_chart_7_ready) {
@@ -190,10 +217,12 @@ static void triggerCursorIdleRefresh() {
   }
 }
 
-// 仅刷新内容区；图表页 header 带 24h/7d/30d 副标题
+// 仅刷新内容区；last / 图表页 header 带副标题
 static void redrawCursorContent() {
     const char* accent = nullptr;
-    if (g_page == CursorPage::CHART_24) {
+    if (g_page == CursorPage::LAST) {
+        accent = "last";
+    } else if (g_page == CursorPage::CHART_24) {
         accent = "24h";
     } else if (g_page == CursorPage::CHART_7) {
         accent = "7d";
@@ -406,8 +435,12 @@ static time_t dayStartEpoch(const int days_ago) {
     return today - static_cast<time_t>(days_ago) * 86400;
 }
 
-// 解析周期用量
+// 解析周期用量（含 On-Demand）
 static void parsePeriodUsage(const JsonDocument& doc, CursorUsageData& out) {
+    out.ond_valid = false;
+    out.ond_used_cents = 0;
+    out.ond_limit_cents = 0;
+
     JsonVariantConst plan_var = doc["planUsage"];
     if (plan_var.isNull()) {
         JsonVariantConst individual = doc["individualUsage"];
@@ -418,23 +451,56 @@ static void parsePeriodUsage(const JsonDocument& doc, CursorUsageData& out) {
     if (!plan_var.isNull()) {
         out.auto_pct = plan_var["autoPercentUsed"] | 0.0f;
         out.api_pct = plan_var["apiPercentUsed"] | 0.0f;
-        out.used_cents = plan_var["totalSpend"] | plan_var["used"] | 0;
-        out.limit_cents = plan_var["limit"] | 0;
-        out.remaining_cents = plan_var["remaining"] | 0;
-        if (out.remaining_cents == 0 && out.limit_cents > 0 && out.used_cents > 0) {
-            out.remaining_cents = out.limit_cents - out.used_cents;
-            if (out.remaining_cents < 0) {
-                out.remaining_cents = 0;
+    }
+
+    // On-Demand：优先 spendLimitUsage（get-current-period-usage）
+    JsonVariantConst slu = doc["spendLimitUsage"];
+    if (!slu.isNull()) {
+        out.ond_valid = true;
+        // 个人优先，否则团队池
+        const int ind_used = slu["individualUsed"] | -1;
+        const int pool_used = slu["pooledUsed"] | -1;
+        if (ind_used >= 0) {
+            out.ond_used_cents = ind_used;
+            out.ond_limit_cents = slu["individualLimit"] | 0;
+        } else if (pool_used >= 0) {
+            out.ond_used_cents = pool_used;
+            out.ond_limit_cents = slu["pooledLimit"] | 0;
+        } else {
+            out.ond_used_cents = slu["totalSpend"] | 0;
+            out.ond_limit_cents = slu["individualLimit"] | slu["pooledLimit"] | 0;
+        }
+    }
+
+    // usage-summary：individualUsage.onDemand
+    JsonVariantConst individual = doc["individualUsage"];
+    if (!individual.isNull()) {
+        JsonVariantConst ond = individual["onDemand"];
+        if (!ond.isNull()) {
+            const bool en = ond["enabled"] | false;
+            const int used = ond["used"] | 0;
+            if (en || used > 0 || out.ond_valid) {
+                out.ond_valid = true;
+                out.ond_used_cents = used;
+                if (!ond["limit"].isNull() && ond["limit"].is<int>()) {
+                    out.ond_limit_cents = ond["limit"] | 0;
+                } else if (!ond["limit"].isNull() && ond["limit"].is<long>()) {
+                    out.ond_limit_cents = static_cast<int>(ond["limit"].as<long>());
+                }
+                // limit 为 null 时保持 0 = 无上限
             }
         }
     }
 
+    out.reset_epoch = 0;
+    out.reset_date[0] = '\0';
     const char* reset_raw = doc["billingCycleEnd"];
     if (reset_raw != nullptr) {
         if (isdigit(static_cast<unsigned char>(reset_raw[0]))) {
             const int64_t ms = strtoll(reset_raw, nullptr, 10);
             if (ms > 0) {
                 const time_t t = static_cast<time_t>(ms / 1000);
+                out.reset_epoch = t;
                 struct tm utc_tm;
                 if (gmtime_r(&t, &utc_tm) != nullptr) {
                     strftime(out.reset_date, sizeof(out.reset_date), "%m-%d", &utc_tm);
@@ -443,6 +509,17 @@ static void parsePeriodUsage(const JsonDocument& doc, CursorUsageData& out) {
         } else {
             strncpy(out.reset_date, reset_raw, sizeof(out.reset_date) - 1);
             out.reset_date[10] = '\0';
+            // ISO 日期：尽量解析出 epoch，供剩余天数
+            struct tm parsed {};
+            if (sscanf(reset_raw, "%d-%d-%d", &parsed.tm_year, &parsed.tm_mon, &parsed.tm_mday) == 3) {
+                parsed.tm_year -= 1900;
+                parsed.tm_mon -= 1;
+                parsed.tm_isdst = 0;
+                const time_t t = mktime(&parsed);
+                if (t > 0) {
+                    out.reset_epoch = t;
+                }
+            }
             if (strlen(out.reset_date) >= 10) {
                 out.reset_date[5] = out.reset_date[8];
                 out.reset_date[6] = out.reset_date[9];
@@ -450,6 +527,158 @@ static void parsePeriodUsage(const JsonDocument& doc, CursorUsageData& out) {
             }
         }
     }
+}
+
+// 距 billing 重置还剩几天（向上取整天；未知返回 -1）
+static int cursorResetDaysLeft() {
+  if (g_usage.reset_epoch <= 0) {
+    return -1;
+  }
+  const time_t now = time(nullptr);
+  if (now <= 1600000000) {
+    return -1;
+  }
+  const int64_t diff = static_cast<int64_t>(g_usage.reset_epoch) - static_cast<int64_t>(now);
+  if (diff <= 0) {
+    return 0;
+  }
+  return static_cast<int>((diff + 86399) / 86400);
+}
+
+// token 量格式：374.7K / 1.2M
+static void formatTokenCount(const uint64_t n, char* buf, const size_t buf_size) {
+  if (buf == nullptr || buf_size == 0) {
+    return;
+  }
+  if (n >= 1000000ULL) {
+    const float m = static_cast<float>(n) / 1000000.0f;
+    snprintf(buf, buf_size, "%.1fM", static_cast<double>(m));
+  } else if (n >= 1000ULL) {
+    const float k = static_cast<float>(n) / 1000.0f;
+    snprintf(buf, buf_size, "%.1fK", static_cast<double>(k));
+  } else {
+    snprintf(buf, buf_size, "%llu", static_cast<unsigned long long>(n));
+  }
+}
+
+// 解析单条 usage event → CursorLastRequest
+static void parseCursorLastEvent(JsonObject ev, CursorLastRequest& out) {
+  out = {};
+  const char* model = ev["model"] | "";
+  strncpy(out.model, model, sizeof(out.model) - 1);
+
+  const char* kind = ev["kind"] | "";
+  out.included = (strstr(kind, "INCLUDED") != nullptr) || (strstr(kind, "Included") != nullptr);
+
+  JsonObject tu = ev["tokenUsage"];
+  uint64_t tokens = 0;
+  if (!tu.isNull()) {
+    tokens += static_cast<uint64_t>(tu["inputTokens"] | 0);
+    tokens += static_cast<uint64_t>(tu["outputTokens"] | 0);
+    tokens += static_cast<uint64_t>(tu["cacheWriteTokens"] | 0);
+    tokens += static_cast<uint64_t>(tu["cacheReadTokens"] | 0);
+  }
+  formatTokenCount(tokens, out.tokens_str, sizeof(out.tokens_str));
+
+  int64_t ts_ms = 0;
+  if (ev["timestamp"].is<const char*>()) {
+    ts_ms = strtoll(ev["timestamp"].as<const char*>(), nullptr, 10);
+  } else {
+    ts_ms = ev["timestamp"].as<int64_t>();
+  }
+  if (ts_ms > 0) {
+    const time_t t = static_cast<time_t>(ts_ms / 1000);
+    struct tm local_tm;
+    if (localtime_r(&t, &local_tm) != nullptr) {
+      strftime(out.time_str, sizeof(out.time_str), "%Y-%m-%d %H:%M:%S", &local_tm);
+    }
+  }
+  if (out.time_str[0] == '\0') {
+    strncpy(out.time_str, "-", sizeof(out.time_str) - 1);
+  }
+}
+
+// 拉取最近 N 条请求，供 usage(last) 页展示
+static bool fetchCursorLastRequest() {
+  if (g_user_id <= 0 || g_cookie[0] == '\0') {
+    return false;
+  }
+  const time_t now = time(nullptr);
+  if (now <= 1600000000) {
+    return false;
+  }
+  const int64_t end_ms = static_cast<int64_t>(now) * 1000LL;
+  const int64_t start_ms = end_ms - 7LL * 86400LL * 1000LL;
+
+  char body[200];
+  snprintf(body, sizeof(body),
+           "{\"teamId\":0,\"startDate\":\"%lld\",\"endDate\":\"%lld\",\"userId\":%d,"
+           "\"page\":1,\"pageSize\":%d}",
+           static_cast<long long>(start_ms), static_cast<long long>(end_ms), g_user_id,
+           CURSOR_LAST_MAX);
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(15000);
+
+  HTTPClient http;
+  const String url = String(CURSOR_HOST) + "/api/dashboard/get-filtered-usage-events";
+  if (!http.begin(client, url)) {
+    return false;
+  }
+  http.setTimeout(15000);
+  http.addHeader("Cookie", g_cookie);
+  http.addHeader("Accept", "application/json");
+  http.addHeader("User-Agent", "Cardputer/1.0");
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Origin", "https://cursor.com");
+
+  const int code = http.POST(body);
+  if (code != 200) {
+    http.end();
+    Serial.printf("[cursor] last-req code=%d\n", code);
+    return false;
+  }
+
+  JsonDocument filter;
+  filter["usageEventsDisplay"][0]["timestamp"] = true;
+  filter["usageEventsDisplay"][0]["model"] = true;
+  filter["usageEventsDisplay"][0]["kind"] = true;
+  filter["usageEventsDisplay"][0]["tokenUsage"]["inputTokens"] = true;
+  filter["usageEventsDisplay"][0]["tokenUsage"]["outputTokens"] = true;
+  filter["usageEventsDisplay"][0]["tokenUsage"]["cacheWriteTokens"] = true;
+  filter["usageEventsDisplay"][0]["tokenUsage"]["cacheReadTokens"] = true;
+
+  JsonDocument doc;
+  const DeserializationError jerr =
+      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (jerr) {
+    Serial.printf("[cursor] last-req json=%s\n", jerr.c_str());
+    return false;
+  }
+
+  JsonArray events = doc["usageEventsDisplay"].as<JsonArray>();
+  int n = 0;
+  if (!events.isNull()) {
+    for (JsonObject ev : events) {
+      if (n >= CURSOR_LAST_MAX) {
+        break;
+      }
+      parseCursorLastEvent(ev, g_last_reqs[n]);
+      n++;
+    }
+  }
+  g_last_req_count = n;
+  const int pages =
+      g_last_req_count > 0 ? (g_last_req_count + CURSOR_LAST_PER_PAGE - 1) / CURSOR_LAST_PER_PAGE : 1;
+  if (g_last_page >= pages) {
+    g_last_page = pages - 1;
+  }
+  if (g_last_page < 0) {
+    g_last_page = 0;
+  }
+  return true;
 }
 
 // 将事件累计到每日数组（index 0 = 最早一天）
@@ -772,6 +1001,7 @@ static bool fetchCursorAuthPeriod() {
   parsePeriodUsage(usage_doc, g_usage);
   g_usage.valid = true;
   g_last_period_fetch_ms = millis();
+  // last 列表改到切页时再拉，进入 App 不请求
   return true;
 }
 
@@ -1041,24 +1271,29 @@ static void drawCursorHints() {
   const int hint_y = M5Cardputer.Display.height() - 12;
   M5Cardputer.Display.fillRect(APP_CONTENT_X, hint_y, 236, 12, BLACK);
   int cx = APP_CONTENT_X;
+  // 方向键切界面
   cx += drawArrowBadge(cx, hint_y, 1);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
   M5Cardputer.Display.setCursor(cx, hint_y);
   M5Cardputer.Display.print("pg ");
   cx += M5Cardputer.Display.textWidth("pg ");
+  // last 列表用 [ ]
+  if (g_page == CursorPage::LAST && g_last_req_count > CURSOR_LAST_PER_PAGE) {
+    cx += drawKeyBadge(cx, hint_y, '[', 1);
+    cx += drawKeyBadge(cx, hint_y, ']', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("rec ");
+    cx += M5Cardputer.Display.textWidth("rec ");
+  }
   cx += drawKeyBadge(cx, hint_y, 'r', 1);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
   M5Cardputer.Display.setCursor(cx, hint_y);
   M5Cardputer.Display.print("rf ");
   cx += M5Cardputer.Display.textWidth("rf ");
-  cx += drawTextBadge(cx, hint_y, "Tab", 1);
-  M5Cardputer.Display.setTextSize(1);
-  M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-  M5Cardputer.Display.setCursor(cx, hint_y);
-  M5Cardputer.Display.print("next ");
-  cx += M5Cardputer.Display.textWidth("next ");
   cx += drawTextBadge(cx, hint_y, "BtnA", 1);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
@@ -1138,23 +1373,33 @@ static void drawCursorHelpPage() {
 
   if (g_help_page == 0) {
     y = drawCursorHelpTitle(y, "Keys");
-    y = drawCursorHelpArrows(y, "usage / 24h / 7d / 30d");
+    y = drawCursorHelpArrows(y, "switch views");
+    y = drawCursorHelpKey(y, '[', "last prev");
+    y = drawCursorHelpKey(y, ']', "last next");
     y = drawCursorHelpKey(y, 'r', "refresh now");
     y = drawCursorHelpBadge(y, "BtnA", "screen off");
-    y = drawCursorHelpText(y, "any key wakes");
     y = drawCursorHelpKey(y, 'h', "help / close");
   } else if (g_help_page == 1) {
+    y = drawCursorHelpTitle(y, "Jump");
+    y = drawCursorHelpKey(y, 's', "home / summary");
+    y = drawCursorHelpKey(y, 'u', "usage 1/page");
+    y = drawCursorHelpKey(y, 'd', "24h (day)");
+    y = drawCursorHelpKey(y, 'w', "7d (week)");
+    y = drawCursorHelpKey(y, 'm', "30d (month)");
+  } else if (g_help_page == 2) {
     y = drawCursorHelpTitle(y, "Refresh");
     y = drawCursorHelpText(y, "idle 1m: first auto");
     y = drawCursorHelpText(y, "then every 5m");
     y = drawCursorHelpText(y, "silent: no UI flash");
     y = drawCursorHelpText(y, "blank: still refreshes");
-  } else if (g_help_page == 2) {
+    y = drawCursorHelpText(y, "blue dot: 1s slow loop");
+  } else if (g_help_page == 3) {
     y = drawCursorHelpTitle(y, "Usage");
-    y = drawCursorHelpText(y, "used: metered spend");
-    y = drawCursorHelpText(y, "not subscription fee");
-    y = drawCursorHelpText(y, "$20 plan is separate");
-    y = drawCursorHelpText(y, "right value: left quota");
+    y = drawCursorHelpText(y, "ond: On-Demand spend");
+    y = drawCursorHelpText(y, "L used / R limit");
+    y = drawCursorHelpText(y, "no limit: used only");
+    y = drawCursorHelpText(y, "Auto/API: remaining %");
+    y = drawCursorHelpText(y, "reset: days | MM-DD");
   } else {
     y = drawCursorHelpTitle(y, "WiFi");
     y = drawCursorHelpText(y, "connect only to fetch");
@@ -1166,7 +1411,7 @@ static void drawCursorHelpPage() {
   updateAppHeaderStatus();
 }
 
-// 摘要：标签色=条色；百分比右对齐同一起点；used/reset 数值用界面蓝色
+// 摘要：标签色=条色；百分比右对齐同一起点；On-Demand / reset 数值用界面蓝色
 static void drawCursorSummaryPage(const int y) {
   const int screen_h = M5Cardputer.Display.height();
   const int screen_w = M5Cardputer.Display.width();
@@ -1178,7 +1423,7 @@ static void drawCursorSummaryPage(const int y) {
   constexpr int bar_h = 14;
   constexpr int label_bar_gap = 1; // 标签与进度条间距（较原先各 -1）
   constexpr int block_gap = 4;
-  constexpr int footer_h = 14; // used/reset 一排
+  constexpr int footer_h = 14; // ond/reset 一排
   char buf[24];
 
   // 标签与百分比均用 2 倍字；按最长标签对齐百分比列
@@ -1211,41 +1456,230 @@ static void drawCursorSummaryPage(const int y) {
   drawUsageBlock(cy, "Auto", 100.0f - g_usage.auto_pct, APP_COLOR_OK);
   drawUsageBlock(cy, "API", 100.0f - g_usage.api_pct, ORANGE);
 
-  // 底栏：used / reset；标签 hint，数值界面蓝
+  // 底栏：On-Demand / reset
   const int footer_y = area_bottom - footer_h + 2;
   M5Cardputer.Display.setTextSize(1);
 
-  if (g_usage.limit_cents > 0) {
+  if (g_usage.ond_valid) {
     char used_s[16];
-    char left_s[16];
-    formatMoney(g_usage.used_cents, used_s, sizeof(used_s));
-    formatMoney(g_usage.remaining_cents, left_s, sizeof(left_s));
-    snprintf(buf, sizeof(buf), "%s/%s", used_s, left_s);
-
+    formatMoney(g_usage.ond_used_cents, used_s, sizeof(used_s));
+    if (g_usage.ond_limit_cents > 0) {
+      char lim_s[16];
+      formatMoney(g_usage.ond_limit_cents, lim_s, sizeof(lim_s));
+      snprintf(buf, sizeof(buf), "%s/%s", used_s, lim_s);
+    } else {
+      snprintf(buf, sizeof(buf), "%s", used_s);
+    }
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(pad_x, footer_y);
-    M5Cardputer.Display.print("used ");
+    M5Cardputer.Display.print("ond ");
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
     M5Cardputer.Display.print(buf);
   } else {
-    snprintf(buf, sizeof(buf), "%.2f%%", 100.0f - g_usage.api_pct);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(pad_x, footer_y);
-    M5Cardputer.Display.print("api left ");
-    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-    M5Cardputer.Display.print(buf);
+    M5Cardputer.Display.print("ond ");
+    M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
+    M5Cardputer.Display.print("-");
   }
 
-  if (g_usage.reset_date[0] != '\0') {
+  // 右侧：剩余天数 + 日期，如 24d | 08-09
+  const int days_left = cursorResetDaysLeft();
+  char reset_val[24] = "";
+  if (days_left >= 0 && g_usage.reset_date[0] != '\0') {
+    snprintf(reset_val, sizeof(reset_val), "%dd | %s", days_left, g_usage.reset_date);
+  } else if (days_left >= 0) {
+    snprintf(reset_val, sizeof(reset_val), "%dd", days_left);
+  } else if (g_usage.reset_date[0] != '\0') {
+    strncpy(reset_val, g_usage.reset_date, sizeof(reset_val) - 1);
+  }
+  if (reset_val[0] != '\0') {
     const char* reset_label = "reset ";
     const int rw =
-        M5Cardputer.Display.textWidth(reset_label) + M5Cardputer.Display.textWidth(g_usage.reset_date);
+        M5Cardputer.Display.textWidth(reset_label) + M5Cardputer.Display.textWidth(reset_val);
     M5Cardputer.Display.setCursor(pad_x + content_w - rw, footer_y);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.print(reset_label);
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-    M5Cardputer.Display.print(g_usage.reset_date);
+    M5Cardputer.Display.print(reset_val);
   }
+}
+
+// usage 页 header 下方状态行：分页 + 载入（小字）
+static void drawCursorLastStatusBar(const int y) {
+  const int pad_x = APP_CONTENT_X;
+  const int screen_w = M5Cardputer.Display.width();
+  M5Cardputer.Display.fillRect(0, y, screen_w, CURSOR_LAST_STATUS_H, BLACK);
+  M5Cardputer.Display.setTextSize(1);
+
+  const int pages =
+      g_last_req_count > 0
+          ? (g_last_req_count + CURSOR_LAST_PER_PAGE - 1) / CURSOR_LAST_PER_PAGE
+          : 0;
+  char page_s[12] = "";
+  if (pages > 0) {
+    snprintf(page_s, sizeof(page_s), "%d/%d", g_last_page + 1, pages);
+  }
+
+  // 左：分页
+  if (page_s[0] != '\0') {
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.setCursor(pad_x, y + 1);
+    M5Cardputer.Display.print(page_s);
+  }
+
+  // 右：载入/刷新状态（小字）
+  const char* st = nullptr;
+  if (g_last_refreshing) {
+    st = "loading...";
+  } else if (g_last_req_count <= 0) {
+    st = "no request";
+  }
+  if (st != nullptr) {
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    const int sw = M5Cardputer.Display.textWidth(st);
+    M5Cardputer.Display.setCursor(screen_w - pad_x - sw, y + 1);
+    M5Cardputer.Display.print(st);
+  }
+}
+
+// 截断到可用宽度（末尾加 ~）
+static void cursorFitText(char* buf, const size_t buf_size, const int max_w) {
+  if (buf == nullptr || buf_size == 0 || max_w <= 0) {
+    return;
+  }
+  M5Cardputer.Display.setTextSize(1);
+  if (M5Cardputer.Display.textWidth(buf) <= max_w) {
+    return;
+  }
+  while (strlen(buf) > 1 && M5Cardputer.Display.textWidth(buf) > max_w - 6) {
+    buf[strlen(buf) - 1] = '\0';
+  }
+  const size_t n = strlen(buf);
+  if (n + 1 < buf_size) {
+    buf[n] = '~';
+    buf[n + 1] = '\0';
+  }
+}
+
+// usage 页：每页 1 条；日期/模型分层，token 突出；分页在 header 下
+static void drawCursorLastPage(const int y) {
+  const int pad_x = APP_CONTENT_X + 2;
+  const int screen_w = M5Cardputer.Display.width();
+  const int content_w = screen_w - pad_x * 2;
+  const int hint_h = 12;
+  const int area_bottom = M5Cardputer.Display.height() - hint_h;
+
+  drawCursorLastStatusBar(y);
+  const int body_top = y + CURSOR_LAST_STATUS_H + 2;
+  const int body_h = area_bottom - body_top;
+  if (body_h < 20) {
+    return;
+  }
+
+  if (g_last_req_count <= 0) {
+    return;
+  }
+
+  const int pages = (g_last_req_count + CURSOR_LAST_PER_PAGE - 1) / CURSOR_LAST_PER_PAGE;
+  if (g_last_page >= pages) {
+    g_last_page = pages - 1;
+  }
+  if (g_last_page < 0) {
+    g_last_page = 0;
+  }
+
+  const CursorLastRequest& req = g_last_reqs[g_last_page];
+
+  // 拆分日期 / 时间，便于扫读
+  char date_s[12] = "";
+  char time_s[12] = "";
+  {
+    const char* sp = strchr(req.time_str, ' ');
+    if (sp != nullptr) {
+      const size_t dl = static_cast<size_t>(sp - req.time_str);
+      if (dl < sizeof(date_s)) {
+        memcpy(date_s, req.time_str, dl);
+        date_s[dl] = '\0';
+      }
+      strncpy(time_s, sp + 1, sizeof(time_s) - 1);
+    } else {
+      strncpy(date_s, req.time_str, sizeof(date_s) - 1);
+    }
+  }
+
+  char model_line[40];
+  strncpy(model_line, req.model[0] != '\0' ? req.model : "-", sizeof(model_line) - 1);
+  model_line[sizeof(model_line) - 1] = '\0';
+  cursorFitText(model_line, sizeof(model_line), content_w);
+
+  const char* tok = req.tokens_str[0] != '\0' ? req.tokens_str : "-";
+
+  // 块高：日期 + 大时间 + 间距 + 模型 + 间距 + token(+Inc)
+  constexpr int date_h = 10;
+  constexpr int time_h = INFO_LINE_H_2X;
+  constexpr int model_h = 12;
+  constexpr int token_h = INFO_LINE_H_2X;
+  constexpr int gap1 = 4;
+  constexpr int gap2 = 6;
+  const int block_h = date_h + time_h + gap1 + model_h + gap2 + token_h;
+  int cy = body_top + (body_h > block_h ? (body_h - block_h) / 2 : 0);
+
+  // 日期（次要）
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+  M5Cardputer.Display.setCursor(pad_x, cy);
+  M5Cardputer.Display.print(date_s[0] != '\0' ? date_s : "-");
+  cy += date_h;
+
+  // 时间（主时间，x2）
+  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setTextColor(WHITE, BLACK);
+  M5Cardputer.Display.setCursor(pad_x, cy);
+  M5Cardputer.Display.print(time_s[0] != '\0' ? time_s : "--:--:--");
+  cy += time_h + gap1;
+
+  // 模型
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+  M5Cardputer.Display.setCursor(pad_x, cy);
+  M5Cardputer.Display.print(model_line);
+  cy += model_h + gap2;
+
+  // token 大字 + Included 标签
+  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setTextColor(WHITE, BLACK);
+  M5Cardputer.Display.setCursor(pad_x, cy);
+  M5Cardputer.Display.print(tok);
+  if (req.included) {
+    const int tw = M5Cardputer.Display.textWidth(tok);
+    // 绿底小徽章，比纯文字更醒目
+    const char* badge = "Inc";
+    M5Cardputer.Display.setTextSize(1);
+    const int bw = M5Cardputer.Display.textWidth(badge) + 6;
+    const int bh = 10;
+    const int bx = pad_x + tw + 8;
+    const int by = cy + 3;
+    M5Cardputer.Display.fillRoundRect(bx, by, bw, bh, 2, APP_COLOR_OK);
+    M5Cardputer.Display.setTextColor(BLACK, APP_COLOR_OK);
+    M5Cardputer.Display.setCursor(bx + 3, by + 1);
+    M5Cardputer.Display.print(badge);
+  }
+}
+
+// 1s 慢循环：内容区右上角内缩 (3,3) 画 3x3 蓝点
+static void drawCursorSlowLoopDot() {
+  if (g_display_blanked) {
+    return;
+  }
+  if ((millis() - g_last_activity_ms) < CURSOR_SLOW_LOOP_IDLE_MS) {
+    return;
+  }
+  const int screen_w = M5Cardputer.Display.width();
+  constexpr int dot = 3;
+  constexpr int inset = 3;
+  M5Cardputer.Display.fillRect(screen_w - inset - dot, APP_CONTENT_Y + inset, dot, dot,
+                               APP_COLOR_LABEL);
 }
 
 static void drawCursorChartPage(const int days, const float* daily_cents, const bool ready) {
@@ -1321,6 +1755,15 @@ void drawCursorApp() {
     return;
   }
 
+  // usage 页可在 period 未就绪时单独展示/刷新
+  if (g_page == CursorPage::LAST) {
+    drawCursorLastPage(y);
+    drawCursorHints();
+    drawCursorSlowLoopDot();
+    updateAppHeaderStatus();
+    return;
+  }
+
   if (!g_usage.valid) {
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
@@ -1333,23 +1776,27 @@ void drawCursorApp() {
   if (g_page == CursorPage::SUMMARY) {
     drawCursorSummaryPage(y);
     drawCursorHints();
+    drawCursorSlowLoopDot();
     updateAppHeaderStatus();
     return;
   }
 
   if (g_page == CursorPage::CHART_24) {
     drawCursorChartPage(24, g_chart_24_cents, g_chart_24_ready);
+    drawCursorSlowLoopDot();
     updateAppHeaderStatus();
     return;
   }
 
   if (g_page == CursorPage::CHART_7) {
     drawCursorChartPage(7, g_chart_7_cents, g_chart_7_ready);
+    drawCursorSlowLoopDot();
     updateAppHeaderStatus();
     return;
   }
 
   drawCursorChartPage(30, g_chart_30_cents, g_chart_30_ready);
+  drawCursorSlowLoopDot();
   updateAppHeaderStatus();
 }
 
@@ -1366,6 +1813,9 @@ static void beginCursorFetch(const CursorFetchMode mode) {
   if (mode == CursorFetchMode::FULL) {
     g_phase = CursorPhase::WIFI;
     g_usage.valid = false;
+    g_last_req_count = 0;
+    g_last_page = 0;
+    g_last_refreshing = false;
     g_chart_24_ready = false;
     g_chart_7_ready = false;
     g_chart_30_ready = false;
@@ -1376,7 +1826,7 @@ static void beginCursorFetch(const CursorFetchMode mode) {
     return;
   }
 
-  if (mode == CursorFetchMode::PERIOD) {
+  if (mode == CursorFetchMode::PERIOD || mode == CursorFetchMode::LAST) {
     return;
   }
 
@@ -1433,19 +1883,33 @@ static void beginCursorChartFetch(const int days, const bool silent) {
   beginCursorFetch(CursorFetchMode::CHART);
 }
 
-static void cursorPageNav(const int delta) {
-  if (delta == 0) {
+// last 页拉取：软刷新保留旧列表；忙碌时排队，等会话就绪后再拉
+static void beginCursorLastRefresh() {
+  g_last_refreshing = true;
+  if (g_task_running || g_fetch_pending || g_user_id <= 0 || g_cookie[0] == '\0') {
+    g_want_last_fetch = true;
+    drawCursorApp();
     return;
   }
-  int next = static_cast<int>(g_page) + delta;
-  // Tab 下一页循环：usage / 24h / 7d / 30d
-  if (next > 3) {
-    next = 0;
-  }
-  if (next < 0) {
+  g_want_last_fetch = false;
+  invalidateCursorFetch();
+  g_fetch_mode = CursorFetchMode::LAST;
+  g_silent_fetch = true;
+  g_fetch_pending = true;
+  g_queue_other_chart = false;
+  g_error_msg[0] = '\0';
+  drawCursorApp();
+}
+
+// 跳到指定页；图表页无缓存则发起拉取
+static void cursorGotoPage(const CursorPage page) {
+  g_page = page;
+
+  // last：切到该页再请求（进入 App 不预拉）
+  if (g_page == CursorPage::LAST) {
+    beginCursorLastRefresh();
     return;
   }
-  g_page = static_cast<CursorPage>(next);
 
   // 翻页不取消后台拉取；有缓存直接画，进行中显示 ETA，否则才发起
   if (g_page == CursorPage::CHART_24) {
@@ -1481,11 +1945,46 @@ static void cursorPageNav(const int delta) {
   drawCursorApp();
 }
 
+// 方向键切界面（summary / last / 24h / 7d / 30d）
+static void cursorPageNav(const int delta) {
+  if (delta == 0) {
+    return;
+  }
+  int next = static_cast<int>(g_page) + delta;
+  if (next >= CURSOR_PAGE_COUNT) {
+    next = 0;
+  }
+  if (next < 0) {
+    return;
+  }
+  cursorGotoPage(static_cast<CursorPage>(next));
+}
+
+// last 列表内翻记录
+static void cursorLastRecNav(const int delta) {
+  if (delta == 0 || g_last_req_count <= 0) {
+    return;
+  }
+  const int pages =
+      (g_last_req_count + CURSOR_LAST_PER_PAGE - 1) / CURSOR_LAST_PER_PAGE;
+  g_last_page += delta;
+  if (g_last_page < 0) {
+    g_last_page = 0;
+  } else if (g_last_page >= pages) {
+    g_last_page = pages - 1;
+  }
+  drawCursorApp();
+}
+
 void enterCursorApp() {
   g_screen_ready = false;
   g_page = CursorPage::SUMMARY;
   g_periodic_refresh_active = false;
   g_last_activity_ms = millis();
+  g_was_slow_loop = false;
+  g_last_page = 0;
+  g_last_refreshing = false;
+  g_want_last_fetch = false;
   g_display_blanked = false;
   g_help_visible = false;
   g_help_page = 0;
@@ -1574,6 +2073,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     }
     g_fetch_pending = false;
     g_silent_fetch = false;
+    g_last_refreshing = false;
     if (g_phase != CursorPhase::ERROR) {
       g_phase = CursorPhase::READY;
     }
@@ -1591,11 +2091,14 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     }
     g_fetch_pending = false;
     g_silent_fetch = false;
+    g_last_refreshing = false;
     if (!silent) {
       g_phase = CursorPhase::ERROR;
       strncpy(g_error_msg, err, sizeof(g_error_msg) - 1);
       g_error_msg[sizeof(g_error_msg) - 1] = '\0';
       g_need_redraw = true;
+    } else {
+      g_need_redraw = true; // 软刷新失败也清 rf... 提示
     }
     if (aborted()) {
       return;
@@ -1626,8 +2129,9 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     return;
   }
 
-  // --- Auth + period（图表且已有 user_id 可跳过）---
-  const bool need_auth = !(mode == CursorFetchMode::CHART && g_user_id > 0);
+  // --- Auth + period（图表/last 且已有 user_id 可跳过）---
+  const bool need_auth =
+      !((mode == CursorFetchMode::CHART || mode == CursorFetchMode::LAST) && g_user_id > 0);
   if (need_auth) {
     if (!silent) {
       g_phase = CursorPhase::FETCHING;
@@ -1641,7 +2145,9 @@ static void cursorFetchTaskFn(void* /*arg*/) {
         if (!aborted()) {
           g_fetch_pending = false;
           g_silent_fetch = false;
+          g_last_refreshing = false;
           finishCursorWifi();
+          g_need_redraw = true;
         }
       }
       endCursorFetchTask();
@@ -1651,12 +2157,30 @@ static void cursorFetchTaskFn(void* /*arg*/) {
       endCursorFetchTask();
       return;
     }
-    if (mode == CursorFetchMode::PERIOD || mode == CursorFetchMode::FULL) {
+    if (mode == CursorFetchMode::PERIOD || mode == CursorFetchMode::FULL ||
+        mode == CursorFetchMode::LAST) {
       g_error_msg[0] = '\0';
       finish_ok();
       endCursorFetchTask();
       return;
     }
+  }
+
+  // --- 仅刷新最近请求列表（软刷新，不碰 period）---
+  if (mode == CursorFetchMode::LAST) {
+    if (!fetchCursorLastRequest()) {
+      if (!aborted()) {
+        finish_fail("last fail");
+      }
+      endCursorFetchTask();
+      return;
+    }
+    if (!aborted()) {
+      g_error_msg[0] = '\0';
+      finish_ok();
+    }
+    endCursorFetchTask();
+    return;
   }
 
   // --- Chart 分页（整段在 task 内跑完，页间检查取消）---
@@ -1775,8 +2299,25 @@ void updateCursorApp() {
     scheduleCursorFetchTask();
   }
 
+  // 切到 last 时若 period/auth 尚未完成，就绪后再拉列表
+  if (g_want_last_fetch && g_page == CursorPage::LAST && g_user_id > 0 &&
+      g_cookie[0] != '\0' && !g_task_running && !g_fetch_pending) {
+    beginCursorLastRefresh();
+  }
+
   if (!g_fetch_pending && !g_task_running && shouldScheduleCursorRefresh()) {
     triggerCursorIdleRefresh();
+  }
+
+  // 进入/退出 1s 慢循环时更新右上角蓝点
+  const bool slow = isCursorIdleSlowLoop() && !g_display_blanked;
+  if (slow != g_was_slow_loop) {
+    g_was_slow_loop = slow;
+    if (slow) {
+      drawCursorSlowLoopDot();
+    } else {
+      g_need_redraw = true;
+    }
   }
 }
 
@@ -1811,7 +2352,39 @@ void handleCursorApp(const Keyboard_Class::KeysState& status) {
     drawCursorHelpPage();
     return;
   }
-  // Tab：下一页（循环）
+  // 字母快捷跳转（与方向键并存）
+  if (key == "s") {
+    cursorGotoPage(CursorPage::SUMMARY);
+    return;
+  }
+  if (key == "u") {
+    cursorGotoPage(CursorPage::LAST);
+    return;
+  }
+  if (key == "d") {
+    cursorGotoPage(CursorPage::CHART_24);
+    return;
+  }
+  if (key == "w") {
+    cursorGotoPage(CursorPage::CHART_7);
+    return;
+  }
+  if (key == "m") {
+    cursorGotoPage(CursorPage::CHART_30);
+    return;
+  }
+  // last 列表：[] 翻记录
+  if (g_page == CursorPage::LAST) {
+    if (key == "[") {
+      cursorLastRecNav(-1);
+      return;
+    }
+    if (key == "]") {
+      cursorLastRecNav(1);
+      return;
+    }
+  }
+  // Tab：下一界面
   for (const uint8_t hid : status.hid_keys) {
     if (hid == 0x2B) {
       cursorPageNav(1);
@@ -1824,13 +2397,14 @@ void handleCursorApp(const Keyboard_Class::KeysState& status) {
       return;
     }
   }
+  // 方向键切界面
   const int delta = getMenuNavDelta(status);
   if (delta != 0) {
     cursorPageNav(delta);
     return;
   }
   if (key == "r") {
-    // 图表页：只重拉当前段（含失败后手动重试）；摘要页：整页刷新
+    // 图表页：只重拉当前段；usage：软刷新；摘要：整页刷新
     if (g_page == CursorPage::CHART_24) {
       g_chart_24_ready = false;
       g_chart_24_error[0] = '\0';
@@ -1847,6 +2421,10 @@ void handleCursorApp(const Keyboard_Class::KeysState& status) {
       g_chart_30_ready = false;
       g_chart_30_error[0] = '\0';
       beginCursorChartFetch(30, false);
+      return;
+    }
+    if (g_page == CursorPage::LAST) {
+      beginCursorLastRefresh();
       return;
     }
     beginCursorFetch(CursorFetchMode::FULL);

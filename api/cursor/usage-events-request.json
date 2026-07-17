@@ -1,0 +1,14 @@
+{
+  "teamId": 0,
+  "startDate": "1774846800000",
+  "endDate": "1775451599999",
+  "userId": 152683922,
+  "page": 1,
+  "pageSize": 10,
+  "_comment": {
+    "last页": "pageSize=10，近 7 天窗口",
+    "图表": "pageSize=200，按天/小时窗口分页拉直到取完",
+    "startDate_endDate": "Unix 毫秒字符串",
+    "teamId": "个人账号常用 0"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "id": 152683922,
+  "email": "user@example.com",
+  "_comment": "固件只用 id 作为 get-filtered-usage-events 的 userId"
+}

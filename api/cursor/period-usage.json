@@ -1,0 +1,35 @@
+{
+  "billingCycleStart": "1768399334000",
+  "billingCycleEnd": "1771077734000",
+  "planUsage": {
+    "totalSpend": 23222,
+    "includedSpend": 23222,
+    "bonusSpend": 0,
+    "remaining": 16778,
+    "limit": 40000,
+    "autoPercentUsed": 12.5,
+    "apiPercentUsed": 46.44,
+    "totalPercentUsed": 58.05,
+    "_ui": {
+      "Auto": "100 - autoPercentUsed → 剩余百分比条",
+      "API": "100 - apiPercentUsed → 剩余百分比条",
+      "note": "totalSpend/remaining 已不再显示在底栏"
+    }
+  },
+  "spendLimitUsage": {
+    "totalSpend": 231,
+    "individualLimit": 10000,
+    "individualUsed": 231,
+    "individualRemaining": 9769,
+    "pooledLimit": null,
+    "pooledUsed": null,
+    "pooledRemaining": null,
+    "limitType": "user",
+    "_ui": {
+      "ond": "individualUsed / individualLimit → ond $2.31/$100.00",
+      "fallback": "无 individual 时用 pooled*；再退回 totalSpend"
+    }
+  },
+  "displayMessage": "You've used 46% of your usage limit",
+  "_ui_reset": "billingCycleEnd(ms) → reset Nd | MM-DD"
+}
