@@ -12,6 +12,7 @@ struct MijiaDevice {
     char token[33];
     char model[48];
     char ble_key[33]; // 32 hex bindkey；空表示非 BLE
+    char hotkey;      // 快速选择快捷键：a-z / 0-9；'\0' 表示未设置
 };
 
 static constexpr int MIJIA_DEVICE_MAX = 50;
@@ -141,3 +142,12 @@ bool mijiaDeviceUsesBle(const MijiaDevice& dev);
 
 // 按设备 id 查找 devices[] 下标；未找到返回 -1
 int mijiaFindDeviceIndexById(const char* id);
+
+// 规范化快捷键：a-z / 0-9；非法或保留键 q 返回 '\0'
+char mijiaNormalizeHotkey(char c);
+
+// 按快捷键查找 devices[] 下标；未找到返回 -1
+int mijiaFindDeviceIndexByHotkey(char hotkey);
+
+// 写入设备快捷键并落盘；同键其它设备会被清空（调用方已确认替换）
+bool saveAppConfigDeviceHotkey(int device_idx, char hotkey);

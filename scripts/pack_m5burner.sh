@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # 编译固件 + LittleFS，生成 M5Burner zip 与可一键刷的 merged.bin
 #
+# LittleFS 固定打入 config.example.json，不会把本地 data/config.json（密钥等）打进发布包；
+# 打包结束后会原样恢复你的本地测试配置。
+#
 # 用法:
 #   ./scripts/pack_m5burner.sh           # 编译并打包
-#   ./scripts/pack_m5burner.sh --skip-build  # 仅用已有产物打包
+#   ./scripts/pack_m5burner.sh --skip-build  # 跳过固件编译，仍会用 example 重打 FS
 #
 # 输出:
 #   dist/m5burner/                 # M5Burner 目录结构
@@ -34,7 +37,7 @@ for arg in "$@"; do
   case "$arg" in
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      sed -n '2,15p' "$0"
       exit 0
       ;;
     *)
@@ -52,14 +55,49 @@ fi
 VERSION="$(python3 -c "import json; print(json.load(open('$META_SRC'))['version'])")"
 ZIP_NAME="CardputerApps-${VERSION}.zip"
 
+# 发布包用 example，绝不带入本地测试 config.json
+CFG_DATA="${ROOT}/data/config.json"
+CFG_EXAMPLE="${ROOT}/config.example.json"
+CFG_BAK="${ROOT}/data/config.json.packbak"
+CFG_HAD_LOCAL=0
+
+restore_local_config() {
+  if [[ -f "$CFG_BAK" ]]; then
+    mv -f "$CFG_BAK" "$CFG_DATA"
+    echo "==> 已恢复本地 data/config.json"
+  elif [[ "$CFG_HAD_LOCAL" -eq 0 ]]; then
+    # 打包前本来就没有本地配置，清掉临时拷贝的 example
+    rm -f "$CFG_DATA"
+  fi
+}
+
+prepare_example_config() {
+  if [[ ! -f "$CFG_EXAMPLE" ]]; then
+    echo "缺少 $CFG_EXAMPLE" >&2
+    exit 1
+  fi
+  if [[ -f "$CFG_DATA" ]]; then
+    CFG_HAD_LOCAL=1
+    mv -f "$CFG_DATA" "$CFG_BAK"
+  fi
+  cp "$CFG_EXAMPLE" "$CFG_DATA"
+  echo "==> LittleFS 使用 config.example.json（本地 config 已暂存）"
+}
+
 cd "$ROOT"
+trap restore_local_config EXIT
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> 编译固件"
   pio run -e "$ENV_NAME"
-  echo "==> 打包 LittleFS (data/)"
-  pio run -e "$ENV_NAME" -t buildfs
 fi
+
+# 无论是否 skip-build，都用 example 重打 LittleFS，避免旧产物夹带密钥
+prepare_example_config
+echo "==> 打包 LittleFS (data/ + example config)"
+pio run -e "$ENV_NAME" -t buildfs
+restore_local_config
+trap - EXIT
 
 for f in bootloader.bin partitions.bin firmware.bin littlefs.bin; do
   if [[ ! -f "${BUILD_DIR}/${f}" ]]; then

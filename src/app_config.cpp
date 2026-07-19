@@ -167,7 +167,29 @@ bool loadAppConfig() {
                 ble_key = device["ble_key"];
             }
             copyField(entry.ble_key, sizeof(entry.ble_key), ble_key);
+            // 快捷键：单字符 a-z / 0-9
+            entry.hotkey = '\0';
+            const char* hotkey = device["hotkey"];
+            if (hotkey != nullptr && hotkey[0] != '\0') {
+                entry.hotkey = mijiaNormalizeHotkey(hotkey[0]);
+            }
             g_config.device_count++;
+        }
+    }
+
+    // 快捷键去重：保留靠前的第一个，后面相同键清空
+    {
+        bool seen[256] = {};
+        for (int i = 0; i < g_config.device_count; i++) {
+            const unsigned char h = static_cast<unsigned char>(g_config.devices[i].hotkey);
+            if (h == 0) {
+                continue;
+            }
+            if (seen[h]) {
+                g_config.devices[i].hotkey = '\0';
+            } else {
+                seen[h] = true;
+            }
         }
     }
 
@@ -276,6 +298,91 @@ int mijiaFindDeviceIndexById(const char* id) {
         }
     }
     return -1;
+}
+
+char mijiaNormalizeHotkey(const char c) {
+    char key = c;
+    if (key >= 'A' && key <= 'Z') {
+        key = static_cast<char>(key - 'A' + 'a');
+    }
+    // q 留给快速选择页开关
+    if (key == 'q') {
+        return '\0';
+    }
+    if ((key >= 'a' && key <= 'z') || (key >= '0' && key <= '9')) {
+        return key;
+    }
+    return '\0';
+}
+
+int mijiaFindDeviceIndexByHotkey(const char hotkey) {
+    const char key = mijiaNormalizeHotkey(hotkey);
+    if (key == '\0') {
+        return -1;
+    }
+    for (int i = 0; i < g_config.device_count; i++) {
+        if (g_config.devices[i].hotkey == key) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool saveAppConfigDeviceHotkey(const int device_idx, const char hotkey) {
+    if (device_idx < 0 || device_idx >= g_config.device_count) {
+        return false;
+    }
+    const char key = mijiaNormalizeHotkey(hotkey);
+
+    JsonDocument doc;
+    if (LittleFS.exists(CONFIG_PATH)) {
+        File in = LittleFS.open(CONFIG_PATH, "r");
+        if (in) {
+            const DeserializationError err = deserializeJson(doc, in);
+            in.close();
+            if (err) {
+                return false;
+            }
+        }
+    }
+
+    JsonArray devices = doc["devices"].as<JsonArray>();
+    if (devices.isNull() || device_idx >= static_cast<int>(devices.size())) {
+        return false;
+    }
+
+    // 同键其它设备清空，保证唯一
+    for (size_t i = 0; i < devices.size(); i++) {
+        JsonObject d = devices[i].as<JsonObject>();
+        if (d.isNull()) {
+            continue;
+        }
+        if (static_cast<int>(i) == device_idx) {
+            if (key == '\0') {
+                d.remove("hotkey");
+            } else {
+                char buf[2] = {key, '\0'};
+                d["hotkey"] = buf;
+            }
+            continue;
+        }
+        if (key == '\0') {
+            continue;
+        }
+        const char* existing = d["hotkey"];
+        if (existing != nullptr && existing[0] != '\0' &&
+            mijiaNormalizeHotkey(existing[0]) == key) {
+            d.remove("hotkey");
+        }
+    }
+
+    File out = LittleFS.open(CONFIG_PATH, "w");
+    if (!out) {
+        return false;
+    }
+    serializeJsonPretty(doc, out);
+    out.close();
+    return loadAppConfig();
 }
 
 bool saveAppConfigJson(const char* json) {

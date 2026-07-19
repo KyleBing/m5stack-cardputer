@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-07-20
+
+### 新增
+
+- **Mijia 快捷键**：设备可配置 `hotkey`（a-z/0-9，`q` 保留）；`Q` 快速选择页、`Fn+Q` 编辑当前设备快捷键（冲突时 BtnA 确认替换）；列表/宫格名称旁显示彩色快捷键字母；Web 配网设备表增加快捷键列并去重
+- **诊断日志**：Cursor HTTPS 失败写入 LittleFS `/cursor.log`（HTTP 错误码、heap、RSSI）；Config Web `/cursor-log` 查看；主菜单 `Fn+i` 打开 Log App 翻页浏览
+- **Cursor 请求韧性**：连 WiFi 后预解析 DNS；传输层负错误自动重试；WiFi 超时放宽，减轻偶发 `auth -1/conn`
+
+### 改进
+
+- **M5Burner 打包**：LittleFS 固定使用 `config.example.json`，不把本地 `data/config.json`（密钥等）打进发布包；打包结束后恢复本地配置；忽略 `data/config.json.packbak`
+
+---
+
 ## 2026-07-19
 
 ### 新增

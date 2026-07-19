@@ -6,9 +6,12 @@
 #include "app_header.h"
 #include "M5Cardputer.h"
 #include <ArduinoJson.h>
+#include <FS.h>
 #include <HTTPClient.h>
+#include <LittleFS.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,13 +21,17 @@
 #include <time.h>
 
 static constexpr const char* CURSOR_HOST = "https://cursor.com";
+static constexpr const char* CURSOR_HOST_NAME = "cursor.com";
+static constexpr const char* CURSOR_LOG_PATH = "/cursor.log";
+static constexpr size_t CURSOR_LOG_MAX_BYTES = 12288; // 约 12KB，超限则截断旧内容
+static constexpr int CURSOR_HTTP_RETRIES = 3;         // TLS 偶发 -1 时重试
 static constexpr int CURSOR_DAYS_MAX = 31;
 static constexpr int CURSOR_HOURS = 24;
 static constexpr int CURSOR_CHART_PAGE_SIZE = 200; // 每页条数；配合流式解析避免 OOM
 static constexpr uint32_t CURSOR_IDLE_TRIGGER_MS = 60000;
 static constexpr uint32_t CURSOR_REFRESH_INTERVAL_MS = 300000;
 static constexpr uint32_t CURSOR_SLOW_LOOP_IDLE_MS = 300000; // 无操作 5 分钟后主循环 1s 一拍
-static constexpr uint32_t CURSOR_WIFI_TIMEOUT_MS = 5000;
+static constexpr uint32_t CURSOR_WIFI_TIMEOUT_MS = 8000; // 给 DHCP/DNS 多留一点时间
 static constexpr int CURSOR_BAR_MARGIN_X = 5;
 static constexpr int CURSOR_SUMMARY_PAD_X = 10; // 摘要页进度条左右 padding
 static constexpr int CURSOR_CHART_ETA_24_SEC = 3;   // 当天 24h 预计加载时间
@@ -367,25 +374,124 @@ static bool buildCursorCookie(const char* token, char* cookie, const size_t cook
     return true;
 }
 
-// HTTPS 请求（GET / POST）
-static bool cursorHttpRequest(const char* method, const char* path, const char* post_body,
-                              String& response, int& http_code) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(15000);
+// HTTPClient 负错误码短名（屏上/日志用）
+static const char* cursorHttpErrTag(const int code) {
+    switch (code) {
+    case HTTPC_ERROR_CONNECTION_REFUSED:
+        return "conn";
+    case HTTPC_ERROR_SEND_HEADER_FAILED:
+        return "hdr";
+    case HTTPC_ERROR_SEND_PAYLOAD_FAILED:
+        return "pay";
+    case HTTPC_ERROR_NOT_CONNECTED:
+        return "ncon";
+    case HTTPC_ERROR_CONNECTION_LOST:
+        return "lost";
+    case HTTPC_ERROR_NO_STREAM:
+        return "nost";
+    case HTTPC_ERROR_NO_HTTP_SERVER:
+        return "nosv";
+    case HTTPC_ERROR_TOO_LESS_RAM:
+        return "ram";
+    case HTTPC_ERROR_ENCODING:
+        return "enc";
+    case HTTPC_ERROR_STREAM_WRITE:
+        return "wrt";
+    case HTTPC_ERROR_READ_TIMEOUT:
+        return "tmo";
+    default:
+        return "?";
+    }
+}
 
-    HTTPClient http;
-    const String url = String(CURSOR_HOST) + path;
-    if (!http.begin(client, url)) {
-        http_code = -1;
-        return false;
+// 写诊断日志：Serial + LittleFS（超限截断旧内容，方便 config web 查看）
+static void cursorLog(const char* fmt, ...) {
+    char line[192];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+
+    Serial.printf("[cursor] %s\n", line);
+
+    if (!LittleFS.begin(false)) {
+        return;
     }
 
-    http.setTimeout(15000);
+    // 超限则丢掉旧文件，保留本次起的新日志
+    if (LittleFS.exists(CURSOR_LOG_PATH)) {
+        File cur = LittleFS.open(CURSOR_LOG_PATH, "r");
+        if (cur && cur.size() >= CURSOR_LOG_MAX_BYTES) {
+            cur.close();
+            LittleFS.remove(CURSOR_LOG_PATH);
+        } else if (cur) {
+            cur.close();
+        }
+    }
+
+    File f = LittleFS.open(CURSOR_LOG_PATH, "a");
+    if (!f) {
+        return;
+    }
+    const time_t now = time(nullptr);
+    if (now > 1700000000) {
+        struct tm local_tm;
+        if (localtime_r(&now, &local_tm) != nullptr) {
+            f.printf("%04d-%02d-%02d %02d:%02d:%02d ", local_tm.tm_year + 1900, local_tm.tm_mon + 1,
+                     local_tm.tm_mday, local_tm.tm_hour, local_tm.tm_min, local_tm.tm_sec);
+        }
+    } else {
+        f.printf("ms=%lu ", static_cast<unsigned long>(millis()));
+    }
+    f.printf("%s\n", line);
+    f.close();
+}
+
+// WiFi 连上后预解析 DNS，减轻首包 HTTPS 立刻 -1
+static bool warmCursorDns(const uint32_t gen) {
+    IPAddress ip;
+    for (int i = 0; i < 8; i++) {
+        if (gen != g_fetch_gen) {
+            return false;
+        }
+        if (WiFi.hostByName(CURSOR_HOST_NAME, ip) == 1 && static_cast<uint32_t>(ip) != 0) {
+            cursorLog("dns ok %s -> %s heap=%u rssi=%d", CURSOR_HOST_NAME, ip.toString().c_str(),
+                      ESP.getFreeHeap(), WiFi.RSSI());
+            return true;
+        }
+        delay(150);
+    }
+    cursorLog("dns fail host=%s wifi=%d heap=%u", CURSOR_HOST_NAME, WiFi.status(),
+              ESP.getFreeHeap());
+    return false;
+}
+
+// 单次 HTTPS 尝试；失败时写详细日志
+static int cursorHttpOnce(const char* method, const char* path, const char* post_body,
+                          String& response) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(20000);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    client.setHandshakeTimeout(30);
+#endif
+
+    HTTPClient http;
+    http.setReuse(false); // 避免 keep-alive 残留导致后续 -1/-2
+    const String url = String(CURSOR_HOST) + path;
+    if (!http.begin(client, url)) {
+        cursorLog("http begin fail %s %s wifi=%d heap=%u", method, path, WiFi.status(),
+                  ESP.getFreeHeap());
+        return HTTPC_ERROR_CONNECTION_REFUSED;
+    }
+
+    http.setTimeout(20000);
     http.addHeader("Cookie", g_cookie);
     http.addHeader("Accept", "application/json");
     http.addHeader("User-Agent", "Cardputer/1.0");
+    http.addHeader("Connection", "close");
 
+    int http_code = 0;
     if (strcmp(method, "POST") == 0) {
         http.addHeader("Content-Type", "application/json");
         http.addHeader("Origin", "https://cursor.com");
@@ -398,9 +504,46 @@ static bool cursorHttpRequest(const char* method, const char* path, const char* 
         response = http.getString();
     } else {
         response = "";
+        cursorLog("%s %s code=%d(%s) err=%s wifi=%d rssi=%d heap=%u", method, path, http_code,
+                  cursorHttpErrTag(http_code), HTTPClient::errorToString(http_code).c_str(),
+                  WiFi.status(), WiFi.RSSI(), ESP.getFreeHeap());
     }
     http.end();
-    return http_code == 200;
+    client.stop();
+    return http_code;
+}
+
+// HTTPS 请求（GET / POST），连接类错误自动重试
+static bool cursorHttpRequest(const char* method, const char* path, const char* post_body,
+                              String& response, int& http_code) {
+    http_code = 0;
+    for (int attempt = 1; attempt <= CURSOR_HTTP_RETRIES; attempt++) {
+        if (WiFi.status() != WL_CONNECTED) {
+            cursorLog("wifi lost before %s %s attempt=%d", method, path, attempt);
+            http_code = HTTPC_ERROR_NOT_CONNECTED;
+            return false;
+        }
+
+        http_code = cursorHttpOnce(method, path, post_body, response);
+        if (http_code == 200) {
+            if (attempt > 1) {
+                cursorLog("%s %s ok on retry %d heap=%u", method, path, attempt, ESP.getFreeHeap());
+            }
+            return true;
+        }
+
+        // 仅对传输层负错误重试；4xx/5xx 直接返回
+        if (http_code > 0) {
+            cursorLog("%s %s http=%d len=%u", method, path, http_code,
+                      static_cast<unsigned>(response.length()));
+            return false;
+        }
+        if (attempt < CURSOR_HTTP_RETRIES) {
+            cursorLog("retry %d/%d after %s %s", attempt, CURSOR_HTTP_RETRIES, method, path);
+            delay(400 * attempt);
+        }
+    }
+    return false;
 }
 
 // 快速 NTP 同步（已有 WiFi 时）
@@ -620,8 +763,10 @@ static bool fetchCursorLastRequest() {
   client.setTimeout(15000);
 
   HTTPClient http;
+  http.setReuse(false);
   const String url = String(CURSOR_HOST) + "/api/dashboard/get-filtered-usage-events";
   if (!http.begin(client, url)) {
+    cursorLog("last-req begin fail heap=%u", ESP.getFreeHeap());
     return false;
   }
   http.setTimeout(15000);
@@ -630,11 +775,13 @@ static bool fetchCursorLastRequest() {
   http.addHeader("User-Agent", "Cardputer/1.0");
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Origin", "https://cursor.com");
+  http.addHeader("Connection", "close");
 
   const int code = http.POST(body);
   if (code != 200) {
     http.end();
-    Serial.printf("[cursor] last-req code=%d\n", code);
+    client.stop();
+    cursorLog("last-req code=%d(%s) heap=%u", code, cursorHttpErrTag(code), ESP.getFreeHeap());
     return false;
   }
 
@@ -651,8 +798,9 @@ static bool fetchCursorLastRequest() {
   const DeserializationError jerr =
       deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
+  client.stop();
   if (jerr) {
-    Serial.printf("[cursor] last-req json=%s\n", jerr.c_str());
+    cursorLog("last-req json=%s heap=%u", jerr.c_str(), ESP.getFreeHeap());
     return false;
   }
 
@@ -795,9 +943,11 @@ static int stepChartPagedFetch() {
   client.setTimeout(20000);
 
   HTTPClient http;
+  http.setReuse(false);
   const String url = String(CURSOR_HOST) + "/api/dashboard/get-filtered-usage-events";
   if (!http.begin(client, url)) {
     g_chart_http_active = false;
+    cursorLog("chart begin fail p%d heap=%u", g_chart_http_page, ESP.getFreeHeap());
     if (g_chart_http_page == 1) {
       setChartError(g_chart_fetch_days, "http begin");
     }
@@ -810,10 +960,11 @@ static int stepChartPagedFetch() {
   http.addHeader("User-Agent", "Cardputer/1.0");
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Origin", "https://cursor.com");
+  http.addHeader("Connection", "close");
 
   const int code = http.POST(body);
-  Serial.printf("[cursor] chart p%d days=%d code=%d heap=%u\n", g_chart_http_page,
-                g_chart_fetch_days, code, ESP.getFreeHeap());
+  cursorLog("chart p%d days=%d code=%d heap=%u", g_chart_http_page, g_chart_fetch_days, code,
+            ESP.getFreeHeap());
 
   if (code != 200) {
     http.end();
@@ -847,7 +998,7 @@ static int stepChartPagedFetch() {
   http.end();
 
   if (jerr) {
-    Serial.printf("[cursor] chart json=%s heap=%u\n", jerr.c_str(), ESP.getFreeHeap());
+    cursorLog("chart json=%s heap=%u", jerr.c_str(), ESP.getFreeHeap());
     g_chart_http_active = false;
     if (g_chart_http_page == 1) {
       char msg[32];
@@ -946,7 +1097,15 @@ static bool ensureCursorWifi(const uint32_t timeout_ms, const uint32_t gen) {
     }
     delay(50);
   }
-  return WiFi.status() == WL_CONNECTED;
+  const bool ok = WiFi.status() == WL_CONNECTED;
+  if (!ok) {
+    cursorLog("wifi fail ssid=%s status=%d heap=%u", cfg.wifi_ssid, WiFi.status(),
+              ESP.getFreeHeap());
+  } else {
+    cursorLog("wifi ok ip=%s rssi=%d heap=%u", WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+              ESP.getFreeHeap());
+  }
+  return ok;
 }
 
 // 拉取认证与周期用量（较快，先展示摘要）
@@ -966,8 +1125,14 @@ static bool fetchCursorAuthPeriod() {
 
   strncpy(g_status_msg, "auth...", sizeof(g_status_msg));
   g_need_redraw = true;
+  cursorLog("auth start heap=%u wifi=%d rssi=%d", ESP.getFreeHeap(), WiFi.status(), WiFi.RSSI());
   if (!cursorHttpRequest("GET", "/api/auth/me", nullptr, response, code)) {
-    snprintf(g_error_msg, sizeof(g_error_msg), "auth %d", code);
+    if (code < 0) {
+      snprintf(g_error_msg, sizeof(g_error_msg), "auth %d/%s", code, cursorHttpErrTag(code));
+    } else {
+      snprintf(g_error_msg, sizeof(g_error_msg), "auth %d", code);
+    }
+    cursorLog("auth fail %s", g_error_msg);
     return false;
   }
 
@@ -986,7 +1151,12 @@ static bool fetchCursorAuthPeriod() {
   g_need_redraw = true;
   if (!cursorHttpRequest("POST", "/api/dashboard/get-current-period-usage", "{}", response, code)) {
     if (!cursorHttpRequest("GET", "/api/usage-summary", nullptr, response, code)) {
-      snprintf(g_error_msg, sizeof(g_error_msg), "usage %d", code);
+      if (code < 0) {
+        snprintf(g_error_msg, sizeof(g_error_msg), "usage %d/%s", code, cursorHttpErrTag(code));
+      } else {
+        snprintf(g_error_msg, sizeof(g_error_msg), "usage %d", code);
+      }
+      cursorLog("usage fail %s", g_error_msg);
       return false;
     }
   }
@@ -2129,6 +2299,12 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     return;
   }
   quickSyncTime();
+  if (aborted()) {
+    endCursorFetchTask();
+    return;
+  }
+  // 首包 TLS 前先解析 DNS，减少刚连上就 auth -1
+  warmCursorDns(gen);
   if (aborted()) {
     endCursorFetchTask();
     return;

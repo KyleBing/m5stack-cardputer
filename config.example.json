@@ -11,7 +11,8 @@
       "mac": "AA:BB:CC:DD:EE:FF",
       "ip": "192.168.1.50",
       "token": "0123456789abcdef0123456789abcdef",
-      "model": "yeelink.light.lamp2"
+      "model": "yeelink.light.lamp2",
+      "hotkey": "1"
     },
     {
       "name": "bedroom-light",
@@ -20,7 +21,8 @@
       "mac": "AA:BB:CC:DD:EE:01",
       "ip": "192.168.1.51",
       "token": "0123456789abcdef0123456789abcdef",
-      "model": "yeelink.light.lamp2"
+      "model": "yeelink.light.lamp2",
+      "hotkey": "2"
     },
     {
       "name": "Sensor_HT",
@@ -30,7 +32,8 @@
       "model": "miaomiaoce.sensor_ht.t2",
       "ble": {
         "key": "0123456789abcdef0123456789abcdef"
-      }
+      },
+      "hotkey": "s"
     }
   ],
   "device_groups": [

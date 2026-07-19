@@ -19,6 +19,7 @@
 #include "app_font_demo.h"
 #include "app_mic.h"
 #include "app_battery.h"
+#include "app_log.h"
 #include "app_hid_kb.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
@@ -65,6 +66,7 @@ enum class AppState {
     LED,
     BATTERY,
     HID_KB,
+    LOG, // 诊断日志查看（主菜单 Fn+i，不占字母菜单位）
 };
 
 struct MenuItem {
@@ -2518,6 +2520,9 @@ void enterApp(const AppState state) {
         case AppState::HID_KB:
             enterHidKbApp();
             break;
+        case AppState::LOG:
+            enterLogApp();
+            break;
         default:
             break;
     }
@@ -2599,7 +2604,8 @@ void loop() {
             updateMenuHeaderStatus(getMenuPageCount());
         } else if (currentState != AppState::SLEEP && currentState != AppState::DISP &&
                    !(currentState == AppState::RTC && isTimePureMode()) &&
-                   !(currentState == AppState::CURSOR && isCursorDisplayBlanked())) {
+                   !(currentState == AppState::CURSOR && isCursorDisplayBlanked()) &&
+                   !(currentState == AppState::MIJIA && mijiaAppSuppressesHeader())) {
             updateAppHeaderStatus();
         }
     }
@@ -2686,6 +2692,23 @@ void loop() {
             case AppState::MENU:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+                    // Fn+i：打开错误/诊断日志（不走字母菜单）
+                    if (status.fn) {
+                        bool opened_log = false;
+                        for (const char c : status.word) {
+                            if (c == 'i' || c == 'I') {
+                                enterApp(AppState::LOG);
+                                opened_log = true;
+                                break;
+                            }
+                        }
+                        if (opened_log) {
+                            break;
+                        }
+                        // Fn 按下时仍允许方向键翻菜单页
+                        (void)handleMenuPageNav(status);
+                        break;
+                    }
                     if (!handleMenuPageNav(status)) {
                         handleMenuKey(getPressedKey());
                     }
@@ -2722,6 +2745,9 @@ void loop() {
             case AppState::MIJIA:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+                    if (handleMijiaHotkeyUi(status)) {
+                        break;
+                    }
                     if (!handleMijiaOverviewPageNav(status) && !handleMijiaDeviceNav(status)) {
                         handleMijiaApp(getPressedKey());
                     }
@@ -2793,6 +2819,11 @@ void loop() {
             case AppState::HID_KB:
                 // 按下与松开都要处理，避免主机卡键
                 handleHidKbApp(M5Cardputer.Keyboard.keysState());
+                break;
+            case AppState::LOG:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleLogApp(M5Cardputer.Keyboard.keysState());
+                }
                 break;
             default:
                 break;

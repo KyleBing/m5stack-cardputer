@@ -54,7 +54,8 @@ static const char* DEFAULT_CONFIG = R"({
       "mac": "AA:BB:CC:DD:EE:FF",
       "ip": "192.168.1.50",
       "token": "0123456789abcdef0123456789abcdef",
-      "model": "yeelink.light.lamp2"
+      "model": "yeelink.light.lamp2",
+      "hotkey": "1"
     },
     {
       "name": "bedroom-light",
@@ -63,7 +64,8 @@ static const char* DEFAULT_CONFIG = R"({
       "mac": "AA:BB:CC:DD:EE:01",
       "ip": "192.168.1.51",
       "token": "0123456789abcdef0123456789abcdef",
-      "model": "yeelink.light.lamp2"
+      "model": "yeelink.light.lamp2",
+      "hotkey": "2"
     },
     {
       "name": "Sensor_HT",
@@ -71,7 +73,8 @@ static const char* DEFAULT_CONFIG = R"({
       "id": "blt.3.example",
       "mac": "A4:C1:38:00:00:00",
       "model": "miaomiaoce.sensor_ht.t2",
-      "ble": { "key": "0123456789abcdef0123456789abcdef" }
+      "ble": { "key": "0123456789abcdef0123456789abcdef" },
+      "hotkey": "s"
     }
   ],
   "device_groups": [
@@ -199,7 +202,7 @@ static void sendHtmlPage(const String& body) {
               ".toolbar{margin:10px 0;display:flex;flex-wrap:wrap;align-items:center;gap:6px}"
               ".toolbar .count{font-size:13px;color:var(--hint);margin-left:auto}"
               ".table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}"
-              "table.dev-table{width:100%;min-width:948px;border-collapse:collapse;table-layout:fixed}"
+              "table.dev-table{width:100%;min-width:1000px;border-collapse:collapse;table-layout:fixed}"
               ".dev-table th,.dev-table td{border:1px solid var(--tab-bd);padding:4px;vertical-align:top;"
               "background:var(--td-bg)}"
               ".dev-table th{background:var(--th-bg);font-size:12px;font-weight:600;text-align:left;"
@@ -213,13 +216,16 @@ static void sendHtmlPage(const String& body) {
               "gap:3px;align-items:center}"
               ".dev-table .col-act button{width:auto;margin:0;flex-shrink:0}"
               ".dev-table .col-name{width:10%}"
-              ".dev-table .col-namezh{width:10%}"
+              ".dev-table .col-namezh{width:9%}"
+              ".dev-table .col-hotkey{width:52px}"
+              ".dev-table .col-hotkey textarea{text-align:center;text-transform:lowercase;"
+              "font-weight:700;max-width:40px}"
               ".dev-table .col-ip{width:9%}"
-              ".dev-table .col-token{width:14%}"
-              ".dev-table .col-ble{width:14%}"
-              ".dev-table .col-model{width:16%}"
+              ".dev-table .col-token{width:13%}"
+              ".dev-table .col-ble{width:13%}"
+              ".dev-table .col-model{width:15%}"
               ".dev-table .col-id{width:10%}"
-              ".dev-table .col-mac{width:10%}"
+              ".dev-table .col-mac{width:9%}"
               ".model-cell{display:flex;gap:6px;align-items:flex-start}"
               ".model-cell textarea{flex:1;min-width:0}"
               ".dev-icon{width:32px;height:32px;object-fit:contain;flex-shrink:0;margin-top:2px;"
@@ -282,7 +288,8 @@ static void handleFormRoot() {
               "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
               "<div class='brand-text'><h1>Cardputer Config</h1>"
               "<p class='nav'><a href='/advanced'>高级 JSON</a> · "
-              "<a href='/example'>示例</a></p></div></div></div>"
+              "<a href='/example'>示例</a> · "
+              "<a href='/cursor-log'>Cursor 日志</a></p></div></div></div>"
               "<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
               "<div class='tabs'>"
@@ -307,6 +314,7 @@ static void handleFormRoot() {
               "<th class='col-idx'>#</th>"
               "<th class='col-name'>名称</th>"
               "<th class='col-namezh'>中文名</th>"
+              "<th class='col-hotkey' title='快速选择快捷键 a-z/0-9，勿用 q'>快捷键</th>"
               "<th class='col-act'>操作</th>"
               "<th class='col-ip'>IP</th>"
               "<th class='col-token'>Token</th>"
@@ -356,6 +364,11 @@ static void handleFormRoot() {
               "（<code>sub::jwt</code> 或 <code>sub%3A%3Ajwt</code>）；"
               "或仅粘贴 JWT。</p>"
               "<label>Session Token<textarea id='cursor-key' rows='4'></textarea></label>"
+              "<h3 class='token-method-title'>诊断日志</h3>"
+              "<p class='hint'>Cursor App 请求失败时会写入 LittleFS "
+              "<code>/cursor.log</code>（含 HTTP 错误码、heap、RSSI）。"
+              "出现 <code>auth -1/conn</code> 时可打开查看。</p>"
+              "<p class='nav'><a href='/cursor-log' target='_blank'>查看 Cursor 日志</a></p>"
               "</div>"
               "<div id='panel-system' class='panel'>"
               "<h2>系统设置</h2>"
@@ -460,7 +473,16 @@ static void handleFormRoot() {
         "const bk=d.ble_key||'';delete d.ble_key;"
         "if(bk)d.ble={key:bk};else delete d.ble;"
         "if(!d.name_zh)delete d.name_zh;"
+        // 快捷键：仅保留首个 a-z/0-9；q 保留给设备端快速选择
+        "let hk=String(d.hotkey||'').trim().toLowerCase();"
+        "hk=hk.length?hk[0]:'';"
+        "if(/^[a-z0-9]$/.test(hk)&&hk!=='q')d.hotkey=hk;else delete d.hotkey;"
         "cfg.devices.push(d);});}"
+        // 快捷键去重：保留靠前第一个，后面清空
+        "function dedupeDeviceHotkeys(){const seen=new Set();"
+        "(cfg.devices||[]).forEach(d=>{if(!d||!d.hotkey)return;"
+        "const h=String(d.hotkey).toLowerCase()[0];"
+        "if(!h||seen.has(h)){delete d.hotkey;return;}seen.add(h);d.hotkey=h;});}"
         "function collectGroups(){cfg.device_groups=[];"
         "document.querySelectorAll('#group-list .group-card').forEach(card=>{"
         "const g={name:card.querySelector('[data-gf=name]').value||'',"
@@ -493,12 +515,14 @@ static void handleFormRoot() {
         "cfg.Infrared.tv_brand=document.getElementById('sys-ir-tv-brand').value||'samsung';"
         "cfg.Infrared.ac_brand=document.getElementById('sys-ir-ac-brand').value||'midea';"
         "collectDevices();collectGroups();"
+        "dedupeDeviceHotkeys();"
         "(cfg.device_groups||[]).forEach(syncGroupMembers);}"
         "function renderDevices(){const tb=document.getElementById('dev-tbody');tb.innerHTML='';"
         "cfg.devices.forEach((d,i)=>{const tr=document.createElement('tr');tr.dataset.i=i;"
         "tr.innerHTML=`<td class='col-idx'>${i+1}</td>"
         "<td class='col-name'>${ta('name',d.name)}</td>"
         "<td class='col-namezh'>${ta('name_zh',d.name_zh||d.name_cn||'')}</td>"
+        "<td class='col-hotkey'>${ta('hotkey',d.hotkey||'')}</td>"
         "<td class='col-act'><div class='act-stack'>"
         "<button type='button' class='icon-btn' data-act='up' title='上移'>↑</button>"
         "<button type='button' class='icon-btn' data-act='down' title='下移'>↓</button>"
@@ -597,7 +621,7 @@ static void handleFormRoot() {
         "t.onclick=()=>switchTab(t.dataset.tab);});"
         "document.getElementById('btn-add').onclick=()=>{collect();"
         "if(cfg.devices.length>=DEV_MAX){alert('最多 '+DEV_MAX+' 台设备');return;}"
-        "cfg.devices.push({name:'',name_zh:'',id:'',mac:'',ip:'',token:'',model:'',ble:{key:''}});"
+        "cfg.devices.push({name:'',name_zh:'',id:'',mac:'',ip:'',token:'',model:'',hotkey:'',ble:{key:''}});"
         "render();"
         "switchTab('devices');};"
         "document.getElementById('btn-add-group').onclick=()=>{collect();"
@@ -684,6 +708,7 @@ static void handleSave() {
 static void handleExample() {
     String body = F("<h1>示例 config.json</h1><p>WiFi 米家用 <code>ip</code> + <code>token</code>；"
                     "BLE 传感器用 <code>mac</code> + <code>ble.key</code>，可加 <code>name_zh</code>。"
+                    "可选 <code>hotkey</code>（a-z/0-9，勿用 q）供设备端 Q 快速选择；重复时保留靠前第一个。"
                     "米家设备编组见 <code>device_groups</code>，成员用设备 <code>id</code> 引用。"
                     "系统项见主页 <strong>系统设置</strong>（时区 / 亮度 / 提示音 / Infrared）。"
                     "Cursor 用量见主页 "
@@ -691,6 +716,22 @@ static void handleExample() {
     body += DEFAULT_CONFIG;
     body += F("</pre><p class='nav'><a href='/'>← 返回主页</a></p>");
     sendHtmlPage(body);
+}
+
+// 查看 Cursor App 诊断日志（LittleFS /cursor.log）
+static void handleCursorLog() {
+    if (!LittleFS.exists("/cursor.log")) {
+        g_server.send(200, "text/plain; charset=utf-8",
+                      "(empty) Cursor 尚未写入日志。打开 Cursor App 触发请求后再刷新。\n");
+        return;
+    }
+    File file = LittleFS.open("/cursor.log", "r");
+    if (!file) {
+        g_server.send(500, "text/plain", "open /cursor.log failed");
+        return;
+    }
+    g_server.streamFile(file, "text/plain");
+    file.close();
 }
 
 // 重置并进入连接流程
@@ -793,6 +834,7 @@ static void registerWebRoutes() {
     g_server.on("/advanced", HTTP_GET, handleAdvancedRoot);
     g_server.on("/save", HTTP_POST, handleSave);
     g_server.on("/example", HTTP_GET, handleExample);
+    g_server.on("/cursor-log", HTTP_GET, handleCursorLog);
     g_server.onNotFound([]() {
         if (tryServeFavicon() || tryServeDeviceIcon()) {
             return;

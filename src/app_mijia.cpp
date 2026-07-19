@@ -23,6 +23,11 @@ static bool mijiaOverviewMode = false; // 是否在概览模式
 static bool mijiaOverviewGridMode = false; // 是否在宫格模式
 static bool mijiaGroupMode = false; // 是否在编组模式（d 键）
 static bool mijiaHelpVisible = false; // 是否在帮助模式
+static bool mijiaQuickSelectMode = false; // Q 快速选择页
+static bool mijiaHotkeyEditMode = false;  // Fn+Q 编辑当前设备快捷键
+static char mijiaHotkeyEditPending = '\0'; // 编辑中待保存的快捷键
+static int mijiaHotkeyEditConflictIdx = -1; // 冲突设备下标；-1 无冲突
+static int mijiaQuickSelectScroll = 0; // 快速选择页滚动起始项
 static int mijiaOverviewScrollIdx = 0; // 概览模式下的滚动索引
 static int mijiaOverviewEntryDeviceIdx = 0; // 概览模式下的入口设备索引
 static int mijiaGroupIdx = 0; // 当前编组
@@ -139,6 +144,15 @@ static void mijiaJobTaskFn(void* arg);
 static void drawMijiaHelpPage();
 static void drawMijiaGridHelpPage();
 static void drawMijiaGroupHelpPage();
+static void drawMijiaQuickSelectPage();
+static void drawMijiaHotkeyEditPage();
+static void openMijiaDeviceControl(int idx);
+static void enterMijiaQuickSelect();
+static void exitMijiaQuickSelect();
+static void enterMijiaHotkeyEdit();
+static void exitMijiaHotkeyEdit(bool redraw);
+static void confirmMijiaHotkeyEdit();
+static uint16_t mijiaHotkeyLetterColor(char c);
 static void invalidateMijiaControlSurface();
 static void applyMijiaControlRefresh(bool force_full = false);
 static void drawMijiaOverview(int& y);
@@ -299,6 +313,10 @@ static bool mijiaPanelRightVisualChanged(const MijiaUiState& old_ui, const Mijia
 
 // 控制页局部刷新：仅重绘变化的图标/右栏区域
 static void applyMijiaControlRefresh(const bool force_full) {
+    // 无 Header 覆盖页：禁止 beginAppScreen / 局部刷控制页
+    if (mijiaQuickSelectMode || mijiaHotkeyEditMode) {
+        return;
+    }
     const AppConfig& cfg = getAppConfig();
     const MijiaDevice* dev = getCurrentMijiaDevice();
     const int panel_y = APP_CONTENT_Y;
@@ -366,6 +384,16 @@ static void applyMijiaControlRefresh(const bool force_full) {
 
 // 按当前模式重绘控制页、概览、编组或帮助页
 static void redrawMijiaScreen() {
+    if (mijiaHotkeyEditMode) {
+        invalidateMijiaControlSurface();
+        drawMijiaHotkeyEditPage();
+        return;
+    }
+    if (mijiaQuickSelectMode) {
+        invalidateMijiaControlSurface();
+        drawMijiaQuickSelectPage();
+        return;
+    }
     if (mijiaHelpVisible) {
         invalidateMijiaControlSurface();
         if (mijiaGroupMode) {
@@ -2309,6 +2337,12 @@ static void drawMijiaOverviewItem(const MijiaDevice& entry, const int device_idx
     } else {
         M5Cardputer.Display.print("device");
     }
+    // 名称后空格 + 黄色快捷键
+    if (entry.hotkey != '\0') {
+        M5Cardputer.Display.print(' ');
+        M5Cardputer.Display.setTextColor(YELLOW, BLACK);
+        M5Cardputer.Display.print(entry.hotkey);
+    }
 
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(text_x, text_y + INFO_LINE_H);
@@ -2403,6 +2437,9 @@ static void drawMijiaOverview(int& y) {
 }
 
 bool handleMijiaOverviewPageNav(const Keyboard_Class::KeysState& status) {
+    if (mijiaQuickSelectMode || mijiaHotkeyEditMode) {
+        return false;
+    }
     if (mijiaGroupMode) {
         if (mijiaHelpVisible) {
             return false;
@@ -2457,7 +2494,8 @@ bool handleMijiaOverviewPageNav(const Keyboard_Class::KeysState& status) {
 
 // 控制页切换设备
 bool handleMijiaDeviceNav(const Keyboard_Class::KeysState& status) {
-    if (mijiaOverviewMode || mijiaGroupMode || mijiaHelpVisible) {
+    if (mijiaOverviewMode || mijiaGroupMode || mijiaHelpVisible || mijiaQuickSelectMode ||
+        mijiaHotkeyEditMode) {
         return false;
     }
 
@@ -2473,6 +2511,400 @@ bool handleMijiaDeviceNav(const Keyboard_Class::KeysState& status) {
 
     switchMijiaDevice(delta, cfg.device_count);
     return true;
+}
+
+// 快捷键字母配色（小字彩色）
+static uint16_t mijiaHotkeyLetterColor(const char c) {
+    static const uint16_t kColors[] = {
+        YELLOW, CYAN, ORANGE, GREEN, MAGENTA, 0xF81F, 0x07FF, 0xFFE0,
+    };
+    return kColors[static_cast<unsigned char>(c) %
+                   (sizeof(kColors) / sizeof(kColors[0]))];
+}
+
+// 跳到指定设备的控制页并拉状态
+static void openMijiaDeviceControl(const int idx) {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || idx < 0 || idx >= cfg.device_count) {
+        return;
+    }
+
+    mijiaQuickSelectMode = false;
+    mijiaHotkeyEditMode = false;
+    mijiaHotkeyEditConflictIdx = -1;
+    mijiaHelpVisible = false;
+    if (mijiaGroupMode) {
+        exitMijiaGroupMode();
+    }
+    if (mijiaOverviewMode) {
+        mijiaOverviewMode = false;
+        mijiaOverviewGridMode = false;
+    }
+
+    cancelMijiaPendingJobs();
+    if (mijiaBleFocusActive) {
+        mijiaBleScanPending = false;
+        mijiaBleFocusActive = false;
+        mijiaBleScanAbort();
+    }
+
+    mijiaDeviceIdx = idx;
+    mijiaResetUiState(mijiaUi);
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev != nullptr && mijiaDeviceUsesBle(*dev)) {
+        if (!applyBleCacheToUi(mijiaDeviceIdx, mijiaUi, true)) {
+            strncpy(mijiaUi.status, mijiaBleCanScan(*dev) ? "listening" : "ble n/a",
+                    sizeof(mijiaUi.status));
+        }
+        applyMijiaControlRefresh(true);
+        mijiaRefreshTimedOut = false;
+        mijiaRefreshDeadlineMs = 0;
+        requestMijiaBleBackground();
+        return;
+    }
+    strncpy(mijiaUi.status, "query...", sizeof(mijiaUi.status));
+    applyMijiaControlRefresh(true);
+    mijiaRefreshTimedOut = false;
+    mijiaRefreshDeadlineMs = millis() + MIJIA_REFRESH_TIMEOUT_MS;
+    scheduleMijiaRefresh();
+}
+
+static void exitMijiaQuickSelect() {
+    mijiaQuickSelectMode = false;
+    mijiaQuickSelectScroll = 0;
+}
+
+static void enterMijiaQuickSelect() {
+    if (mijiaHotkeyEditMode) {
+        exitMijiaHotkeyEdit(false);
+    }
+    mijiaHelpVisible = false;
+    mijiaQuickSelectMode = true;
+    mijiaQuickSelectScroll = 0;
+    redrawMijiaScreen();
+}
+
+static void exitMijiaHotkeyEdit(const bool redraw) {
+    mijiaHotkeyEditMode = false;
+    mijiaHotkeyEditPending = '\0';
+    mijiaHotkeyEditConflictIdx = -1;
+    if (redraw) {
+        redrawMijiaScreen();
+    }
+}
+
+static void enterMijiaHotkeyEdit() {
+    // 仅控制页可改快捷键
+    if (mijiaOverviewMode || mijiaGroupMode || mijiaHelpVisible || mijiaQuickSelectMode) {
+        return;
+    }
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.device_count == 0) {
+        return;
+    }
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev == nullptr) {
+        return;
+    }
+    mijiaHotkeyEditMode = true;
+    mijiaHotkeyEditPending = dev->hotkey;
+    mijiaHotkeyEditConflictIdx = -1;
+    redrawMijiaScreen();
+}
+
+static void confirmMijiaHotkeyEdit() {
+    if (!mijiaHotkeyEditMode) {
+        return;
+    }
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || mijiaDeviceIdx < 0 || mijiaDeviceIdx >= cfg.device_count) {
+        exitMijiaHotkeyEdit(true);
+        return;
+    }
+
+    const char pending = mijiaHotkeyEditPending;
+    // 有冲突且未确认替换：BtnA 表示确认替换
+    if (pending != '\0' && mijiaHotkeyEditConflictIdx >= 0) {
+        if (!saveAppConfigDeviceHotkey(mijiaDeviceIdx, pending)) {
+            // 保存失败仍退出编辑，避免卡死
+        }
+        exitMijiaHotkeyEdit(true);
+        return;
+    }
+
+    const char current = cfg.devices[mijiaDeviceIdx].hotkey;
+    if (pending == current) {
+        exitMijiaHotkeyEdit(true);
+        return;
+    }
+    if (!saveAppConfigDeviceHotkey(mijiaDeviceIdx, pending)) {
+        // ignore
+    }
+    exitMijiaHotkeyEdit(true);
+}
+
+// 快速选择：无 Header，尽量多行；彩色字母 + 白字英文名
+static void drawMijiaQuickSelectPage() {
+    M5Cardputer.Display.fillScreen(BLACK);
+
+    const AppConfig& cfg = getAppConfig();
+    constexpr int pad_x = 2;
+    constexpr int pad_top = 2;
+    constexpr int hint_h = 11;
+    constexpr int cols = 2;
+    constexpr int row_h = INFO_LINE_H;
+    const int screen_w = M5Cardputer.Display.width();
+    const int screen_h = M5Cardputer.Display.height();
+    const int col_w = (screen_w - pad_x * 2) / cols;
+    const int rows = (screen_h - pad_top - hint_h) / row_h;
+    const int page_size = rows * cols;
+
+    // 收集已设快捷键的设备
+    int indices[MIJIA_DEVICE_MAX];
+    int count = 0;
+    if (cfg.loaded) {
+        for (int i = 0; i < cfg.device_count && count < MIJIA_DEVICE_MAX; i++) {
+            if (cfg.devices[i].hotkey != '\0') {
+                indices[count++] = i;
+            }
+        }
+    }
+
+    if (count == 0) {
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(pad_x, pad_top);
+        M5Cardputer.Display.print("no hotkeys");
+        M5Cardputer.Display.setCursor(pad_x, pad_top + row_h);
+        M5Cardputer.Display.print("Fn+Q set / web config");
+    } else {
+        if (mijiaQuickSelectScroll >= count) {
+            mijiaQuickSelectScroll = 0;
+        }
+        if (mijiaQuickSelectScroll < 0) {
+            mijiaQuickSelectScroll = 0;
+        }
+
+        for (int slot = 0; slot < page_size; slot++) {
+            const int list_i = mijiaQuickSelectScroll + slot;
+            if (list_i >= count) {
+                break;
+            }
+            const int di = indices[list_i];
+            const MijiaDevice& d = cfg.devices[di];
+            const int col = slot / rows;
+            const int row = slot % rows;
+            const int x = pad_x + col * col_w;
+            const int y = pad_top + row * row_h;
+
+            char letter[2] = {d.hotkey, '\0'};
+            M5Cardputer.Display.setTextSize(1);
+            M5Cardputer.Display.setTextColor(mijiaHotkeyLetterColor(d.hotkey), BLACK);
+            M5Cardputer.Display.setCursor(x, y);
+            M5Cardputer.Display.print(letter);
+
+            const int name_x = x + M5Cardputer.Display.textWidth(letter) + 3;
+            M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
+            M5Cardputer.Display.setCursor(name_x, y);
+            const char* name = d.name[0] != '\0' ? d.name : "device";
+            // 截断避免跨列
+            char buf[28];
+            strncpy(buf, name, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            const int max_w = col_w - (name_x - x) - 2;
+            while (buf[0] != '\0' && M5Cardputer.Display.textWidth(buf) > max_w) {
+                buf[strlen(buf) - 1] = '\0';
+            }
+            M5Cardputer.Display.print(buf);
+        }
+    }
+
+    // 底栏：q 退出；多页时 [ ]
+    const int hint_y = screen_h - hint_h;
+    int cx = pad_x;
+    cx += drawKeyBadge(cx, hint_y, 'q', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("back");
+    if (count > page_size) {
+        cx += M5Cardputer.Display.textWidth("back") + 6;
+        cx += drawTextBadge(cx, hint_y, "[ ]", 1);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, hint_y);
+        M5Cardputer.Display.print("page");
+    }
+}
+
+// Fn+Q：编辑当前设备快捷键
+static void drawMijiaHotkeyEditPage() {
+    M5Cardputer.Display.fillScreen(BLACK);
+    const AppConfig& cfg = getAppConfig();
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    constexpr int x = 4;
+    int y = 4;
+
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print("Set hotkey");
+    y += INFO_LINE_H + 2;
+
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(dev != nullptr && dev->name[0] != '\0' ? dev->name : "device");
+    y += INFO_LINE_H + 2;
+
+    const char original = (dev != nullptr) ? dev->hotkey : '\0';
+    M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print("now ");
+    if (original != '\0') {
+        M5Cardputer.Display.setTextColor(YELLOW, BLACK);
+        M5Cardputer.Display.print(original);
+    } else {
+        M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
+        M5Cardputer.Display.print("-");
+    }
+    y += INFO_LINE_H + 2;
+
+    M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print("new ");
+    if (mijiaHotkeyEditPending != '\0') {
+        M5Cardputer.Display.setTextColor(YELLOW, BLACK);
+        M5Cardputer.Display.print(mijiaHotkeyEditPending);
+    } else {
+        M5Cardputer.Display.setTextColor(APP_COLOR_MUTED, BLACK);
+        M5Cardputer.Display.print("-");
+    }
+    y += INFO_LINE_H + 4;
+
+    if (mijiaHotkeyEditConflictIdx >= 0 && cfg.loaded &&
+        mijiaHotkeyEditConflictIdx < cfg.device_count) {
+        M5Cardputer.Display.setTextColor(APP_COLOR_WARN, BLACK);
+        M5Cardputer.Display.setCursor(x, y);
+        M5Cardputer.Display.print("used by ");
+        const char* other = cfg.devices[mijiaHotkeyEditConflictIdx].name;
+        M5Cardputer.Display.print(other[0] != '\0' ? other : "device");
+        y += INFO_LINE_H;
+        M5Cardputer.Display.setCursor(x, y);
+        M5Cardputer.Display.print("BtnA replace?");
+    } else {
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(x, y);
+        M5Cardputer.Display.print("press key");
+        y += INFO_LINE_H;
+        M5Cardputer.Display.setCursor(x, y);
+        M5Cardputer.Display.print("BtnA save");
+    }
+}
+
+bool handleMijiaHotkeyUi(const Keyboard_Class::KeysState& status) {
+    // 编辑快捷键页
+    if (mijiaHotkeyEditMode) {
+        for (const char c : status.word) {
+            if (c == 'q' || c == 'Q') {
+                // q 保留；提示仍显示当前 pending
+                continue;
+            }
+            const char key = mijiaNormalizeHotkey(c);
+            if (key == '\0') {
+                continue;
+            }
+            mijiaHotkeyEditPending = key;
+            const int other = mijiaFindDeviceIndexByHotkey(key);
+            if (other >= 0 && other != mijiaDeviceIdx) {
+                mijiaHotkeyEditConflictIdx = other;
+            } else {
+                mijiaHotkeyEditConflictIdx = -1;
+            }
+            redrawMijiaScreen();
+            return true;
+        }
+        return true; // 吞掉其它键
+    }
+
+    // 快速选择页
+    if (mijiaQuickSelectMode) {
+        for (const char c : status.word) {
+            if (c == 'q' || c == 'Q') {
+                exitMijiaQuickSelect();
+                redrawMijiaScreen();
+                return true;
+            }
+            if (c == '[' || c == ']') {
+                const AppConfig& cfg = getAppConfig();
+                int count = 0;
+                for (int i = 0; i < cfg.device_count; i++) {
+                    if (cfg.devices[i].hotkey != '\0') {
+                        count++;
+                    }
+                }
+                const int rows =
+                    (M5Cardputer.Display.height() - 2 - 11) / INFO_LINE_H;
+                const int page_size = rows * 2;
+                if (count <= page_size) {
+                    return true;
+                }
+                if (c == '[') {
+                    mijiaQuickSelectScroll -= page_size;
+                    if (mijiaQuickSelectScroll < 0) {
+                        const int pages = (count + page_size - 1) / page_size;
+                        mijiaQuickSelectScroll = (pages - 1) * page_size;
+                    }
+                } else {
+                    mijiaQuickSelectScroll += page_size;
+                    if (mijiaQuickSelectScroll >= count) {
+                        mijiaQuickSelectScroll = 0;
+                    }
+                }
+                redrawMijiaScreen();
+                return true;
+            }
+            char match = c;
+            if (match >= 'A' && match <= 'Z') {
+                match = static_cast<char>(match - 'A' + 'a');
+            }
+            if (!((match >= 'a' && match <= 'z') || (match >= '0' && match <= '9'))) {
+                continue;
+            }
+            const AppConfig& cfg = getAppConfig();
+            for (int i = 0; i < cfg.device_count; i++) {
+                if (cfg.devices[i].hotkey == match) {
+                    openMijiaDeviceControl(i);
+                    return true;
+                }
+            }
+        }
+        return true;
+    }
+
+    // Fn+Q：控制页编辑快捷键
+    if (status.fn) {
+        for (const char c : status.word) {
+            if (c == 'q' || c == 'Q') {
+                if (!mijiaOverviewMode && !mijiaGroupMode && !mijiaHelpVisible) {
+                    enterMijiaHotkeyEdit();
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Q：打开快速选择
+    for (const char c : status.word) {
+        if (c == 'q' || c == 'Q') {
+            if (mijiaHelpVisible) {
+                return false;
+            }
+            enterMijiaQuickSelect();
+            return true;
+        }
+    }
+    return false;
 }
 
 // Help 分栏标题（蓝底黑字，宫格/编组 Help 用）
@@ -2626,6 +3058,7 @@ static void drawMijiaHelpContent(const MijiaDevice* dev) {
         {'i', "off"},
         {'t', "tog/BtnA"},
         {'r', "refresh"},
+        {'q', "quick"},
         {'h', "help"},
     };
     static const KeyHintItem nav_items[] = {{'l', "list"}, {'g', "grid"}, {'d', "groups"}};
@@ -2639,10 +3072,11 @@ static void drawMijiaHelpContent(const MijiaDevice* dev) {
     M5Cardputer.Display.drawFastVLine(special_x - col_gap / 2, col_y, content_h, DARKGREY);
 
     int y = drawMijiaHelpColumnHeader(common_x, col_y, col_w, "common");
-    drawKeyHintsWrappedInColumn(common_x + 2, y, col_w - 4, common_items, 5, APP_COLOR_HINT);
+    drawKeyHintsWrappedInColumn(common_x + 2, y, col_w - 4, common_items, 6, APP_COLOR_HINT);
 
     y = drawMijiaHelpColumnHeader(nav_x, col_y, col_w, "navigation");
     y = drawKeyHintsWrappedInColumn(nav_x + 2, y, col_w - 4, nav_items, 3, APP_COLOR_HINT);
+    y = drawMijiaHelpBadge(nav_x + 2, y, "Fn+q", "hotkey");
     drawMijiaSwitchHelpInColumn(nav_x + 2, y);
 
     y = drawMijiaHelpColumnHeader(special_x, col_y, screen_w - special_x, "special");
@@ -2789,6 +3223,14 @@ static void drawMijiaGroupHelpPage() {
 }
 
 void drawMijiaApp() {
+    if (mijiaHotkeyEditMode) {
+        drawMijiaHotkeyEditPage();
+        return;
+    }
+    if (mijiaQuickSelectMode) {
+        drawMijiaQuickSelectPage();
+        return;
+    }
     if (mijiaGroupMode) {
         beginAppScreenAccent("Mijia ", "Group", APP_COLOR_LABEL);
         drawMijiaGroupView();
@@ -2810,6 +3252,11 @@ void enterMijiaApp() {
     mijiaOverviewGridMode = false;
     mijiaGroupMode = false;
     mijiaHelpVisible = false;
+    mijiaQuickSelectMode = false;
+    mijiaHotkeyEditMode = false;
+    mijiaHotkeyEditPending = '\0';
+    mijiaHotkeyEditConflictIdx = -1;
+    mijiaQuickSelectScroll = 0;
     mijiaOverviewScrollIdx = 0;
     mijiaGroupIdx = 0;
     mijiaGroupScrollIdx = 0;
@@ -2850,6 +3297,10 @@ void leaveMijiaApp() {
     mijiaBleBgEnabled = false;
     mijiaBleScanPending = false;
     mijiaBleFocusActive = false;
+    mijiaQuickSelectMode = false;
+    mijiaHotkeyEditMode = false;
+    mijiaHotkeyEditPending = '\0';
+    mijiaHotkeyEditConflictIdx = -1;
     mijiaBleScanAbort();
     cancelMijiaPendingJobs();
 }
@@ -2896,7 +3347,8 @@ void updateMijiaApp() {
                 storeBleCache(device_idx, reading);
                 applyBleReadingToUi(mijiaOverviewUi[device_idx], reading, "ok");
                 queueMijiaGridCellRefresh(device_idx);
-                if (device_idx == mijiaDeviceIdx && !mijiaOverviewMode && !mijiaGroupMode) {
+                if (device_idx == mijiaDeviceIdx && !mijiaOverviewMode && !mijiaGroupMode &&
+                    !mijiaQuickSelectMode && !mijiaHotkeyEditMode) {
                     applyBleReadingToUi(mijiaUi, reading, "ok");
                     applyMijiaControlRefresh(false);
                 }
@@ -2921,7 +3373,8 @@ void updateMijiaApp() {
     }
 
     // 控制页 BLE：刷新「Xs ago」年龄文案
-    if (!mijiaOverviewMode && !mijiaGroupMode && !mijiaHelpVisible && !mijiaBleFocusActive) {
+    if (!mijiaOverviewMode && !mijiaGroupMode && !mijiaHelpVisible && !mijiaBleFocusActive &&
+        !mijiaQuickSelectMode && !mijiaHotkeyEditMode) {
         const MijiaDevice* dev = getCurrentMijiaDevice();
         if (dev != nullptr && mijiaDeviceUsesBle(*dev) && mijiaBleCache[mijiaDeviceIdx].valid) {
             const char* st = mijiaUi.status;
@@ -2940,7 +3393,10 @@ void updateMijiaApp() {
     if (mijiaNeedRedraw) {
         mijiaNeedRedraw = false;
         mijiaNeedGroupHintsRedraw = false;
-        redrawMijiaScreen();
+        // 快速选择 / 编辑页不跟随后台查询重绘（避免闪烁；header 由主循环另控）
+        if (!mijiaQuickSelectMode && !mijiaHotkeyEditMode) {
+            redrawMijiaScreen();
+        }
     } else if (mijiaNeedGroupHintsRedraw) {
         mijiaNeedGroupHintsRedraw = false;
         if (mijiaGroupMode && !mijiaHelpVisible) {
@@ -2949,9 +3405,20 @@ void updateMijiaApp() {
     }
 }
 
-// BtnA：控制页 / Grid 切换当前设备；编组页切换整组
+bool mijiaAppSuppressesHeader() {
+    return mijiaQuickSelectMode || mijiaHotkeyEditMode;
+}
+
+// BtnA：快捷键编辑确认；控制页 / Grid 切换当前设备；编组页切换整组
 void pollMijiaBtnA() {
     if (!M5Cardputer.BtnA.wasPressed()) {
+        return;
+    }
+    if (mijiaHotkeyEditMode) {
+        confirmMijiaHotkeyEdit();
+        return;
+    }
+    if (mijiaQuickSelectMode) {
         return;
     }
     if (mijiaHelpVisible) {
