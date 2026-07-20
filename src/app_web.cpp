@@ -4,6 +4,7 @@
 #include "app_connectivity.h"
 #include "app_device_icons.h"
 #include "app_header.h"
+#include "app_screenshot.h"
 #include <FS.h>
 #include <LittleFS.h>
 #include <WebServer.h>
@@ -199,6 +200,22 @@ static void sendHtmlPage(const String& body) {
               ".panel{display:none}"
               ".panel.active{display:block}"
               ".hint{font-size:12px;color:var(--hint);margin:0 0 10px}"
+              ".shot-space{font-size:13px;margin:0 0 12px;padding:10px 12px;border:1px solid var(--tab-bd);"
+              "border-radius:6px;background:var(--td-bg);line-height:1.5}"
+              ".shot-space .bar{height:8px;border-radius:4px;background:var(--code-bg);margin:8px 0 0;"
+              "overflow:hidden}"
+              ".shot-space .bar>i{display:block;height:100%;background:var(--tab-act);border-radius:4px}"
+              ".shot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));"
+              "gap:12px;margin:12px 0}"
+              ".shot-card{border:1px solid var(--tab-bd);border-radius:6px;padding:8px;"
+              "background:var(--td-bg)}"
+              ".shot-card a.thumb{display:block;background:#000;border-radius:4px;overflow:hidden;"
+              "aspect-ratio:240/135}"
+              ".shot-card img{width:100%;height:100%;object-fit:contain;display:block;"
+              "image-rendering:pixelated}"
+              ".shot-card .meta{margin-top:6px;font-size:12px;line-height:1.35}"
+              ".shot-card .meta a{color:var(--link);word-break:break-all}"
+              ".shot-card .size{color:var(--hint)}"
               ".toolbar{margin:10px 0;display:flex;flex-wrap:wrap;align-items:center;gap:6px}"
               ".toolbar .count{font-size:13px;color:var(--hint);margin-left:auto}"
               ".table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}"
@@ -289,6 +306,7 @@ static void handleFormRoot() {
               "<div class='brand-text'><h1>Cardputer Config</h1>"
               "<p class='nav'><a href='/advanced'>高级 JSON</a> · "
               "<a href='/example'>示例</a> · "
+              "<a href='/shots'>截图</a> · "
               "<a href='/cursor-err'>Cursor 错误</a> · "
               "<a href='/cursor-log'>Cursor 日志</a></p></div></div></div>"
               "<form id='save-form' method='POST' action='/save'>"
@@ -667,6 +685,7 @@ static void handleAdvancedRoot() {
               "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
               "<div class='brand-text'><h1>Cardputer Config</h1>"
               "<p class='nav'><a href='/'>← 返回主页</a> · "
+              "<a href='/shots'>截图</a> · "
               "<a href='/example'>示例格式</a></p></div></div></div>"
               "<h2>高级 JSON 编辑</h2>"
               "<form method='POST' action='/save'>"
@@ -745,6 +764,139 @@ static void handleCursorLog() {
 static void handleCursorErr() {
     handleCursorLogFile("/cursor.err",
                         "(empty) 尚无错误记录。出现 auth fail / lowmem / 异常重启后会写入。\n");
+}
+
+// 人类可读字节数（如 1.2 MB）
+static String formatBytesHuman(const size_t n) {
+    char buf[32];
+    if (n >= 1024u * 1024u) {
+        const float mb = static_cast<float>(n) / (1024.0f * 1024.0f);
+        snprintf(buf, sizeof(buf), "%.2f MB", static_cast<double>(mb));
+    } else if (n >= 1024u) {
+        const float kb = static_cast<float>(n) / 1024.0f;
+        snprintf(buf, sizeof(buf), "%.1f KB", static_cast<double>(kb));
+    } else {
+        snprintf(buf, sizeof(buf), "%u B", static_cast<unsigned>(n));
+    }
+    return String(buf);
+}
+
+// 截图列表页：预览 + Flash 空间；Fn+s 存到 /shot
+static void handleShotsList() {
+    size_t fs_total = 0;
+    size_t fs_used = 0;
+    size_t fs_free = 0;
+    getFlashDataSpace(&fs_total, &fs_used, &fs_free);
+    const int shot_count = countScreenshots();
+    const size_t shot_bytes = screenshotsUsedBytes();
+    const int used_pct =
+        (fs_total > 0) ? static_cast<int>((fs_used * 100u) / fs_total) : 0;
+
+    String body;
+    body.reserve(4096);
+    body += F("<div class='topbar'><div class='brand'>"
+              "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
+              "<div class='brand-text'><h1>截图</h1>"
+              "<p class='nav'><a href='/'>← 返回主页</a></p></div></div></div>"
+              "<p class='hint'>任意界面按 <code>Fn+s</code> 截图到 Flash；"
+              "文件名 <code>app_&lt;界面&gt;_001.bmp</code> 序号递增。"
+              "本页仅在 Config 联网时可预览/下载。</p>"
+              "<div class='shot-space'>"
+              "<div><strong>Flash Data（LittleFS）</strong></div>"
+              "<div>总容量：");
+    body += formatBytesHuman(fs_total);
+    body += F(" · 已占用：");
+    body += formatBytesHuman(fs_used);
+    body += F(" · 剩余：");
+    body += formatBytesHuman(fs_free);
+    body += F("</div><div>截图：");
+    body += String(shot_count);
+    body += F(" 张 · 占用 ");
+    body += formatBytesHuman(shot_bytes);
+    body += F("</div><div class='bar'><i style='width:");
+    body += String(used_pct);
+    body += F("%'></i></div></div>");
+
+    if (shot_count > 0) {
+        body += F("<div class='toolbar'>"
+                  "<form method='POST' action='/shots/clear' style='margin:0'>"
+                  "<button type='submit' class='danger' "
+                  "onclick=\"return confirm('删除全部截图？')\">清空全部</button></form>"
+                  "<span class='count'>共 ");
+        body += String(shot_count);
+        body += F(" 张</span></div><div class='shot-grid'>");
+
+        File dir = LittleFS.open(SHOT_DIR);
+        if (dir && dir.isDirectory()) {
+            File f = dir.openNextFile();
+            while (f) {
+                const char* name = f.name();
+                const char* slash = strrchr(name, '/');
+                const char* base = slash != nullptr ? slash + 1 : name;
+                if (strncmp(base, "app_", 4) == 0 && strstr(base, ".bmp") != nullptr) {
+                    const size_t sz = static_cast<size_t>(f.size());
+                    body += F("<div class='shot-card'>"
+                              "<a class='thumb' href='/shot/");
+                    body += base;
+                    body += F("' target='_blank' rel='noopener'>"
+                              "<img src='/shot/");
+                    body += base;
+                    body += F("' alt='");
+                    body += base;
+                    body += F("' loading='lazy'></a>"
+                              "<div class='meta'><a href='/shot/");
+                    body += base;
+                    body += F("?dl=1' download='");
+                    body += base;
+                    body += F("'>");
+                    body += base;
+                    body += F("</a><div class='size'>");
+                    body += formatBytesHuman(sz);
+                    body += F("</div></div></div>");
+                }
+                f = dir.openNextFile();
+            }
+            dir.close();
+        }
+        body += F("</div>");
+    } else {
+        body += F("<p class='hint'>暂无截图。到任意界面按 Fn+s 后再刷新本页。</p>");
+    }
+
+    sendHtmlPage(body);
+}
+
+// 清空全部截图
+static void handleShotsClear() {
+    const int n = clearAllScreenshots();
+    String body = F("<h1>已清空</h1><p>删除 ");
+    body += String(n);
+    body += F(" 张截图。</p><p class='nav'><a href='/shots'>← 返回截图列表</a></p>");
+    sendHtmlPage(body);
+}
+
+// 提供 /shot/app_*.bmp：默认内联预览；?dl=1 强制下载
+static bool tryServeShotFile() {
+    const String uri = g_server.uri();
+    if (!isSafeShotPath(uri)) {
+        return false;
+    }
+    File file = LittleFS.open(uri, "r");
+    if (!file) {
+        return false;
+    }
+    const char* base = uri.c_str() + strlen("/shot/");
+    char disposition[96];
+    // 预览用 inline；带 ?dl=1 时 attachment 下载
+    if (g_server.hasArg("dl")) {
+        snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"", base);
+    } else {
+        snprintf(disposition, sizeof(disposition), "inline; filename=\"%s\"", base);
+    }
+    g_server.sendHeader("Content-Disposition", disposition);
+    g_server.streamFile(file, "image/bmp");
+    file.close();
+    return true;
 }
 
 // 重置并进入连接流程
@@ -850,8 +1002,10 @@ static void registerWebRoutes() {
     g_server.on("/example", HTTP_GET, handleExample);
     g_server.on("/cursor-log", HTTP_GET, handleCursorLog);
     g_server.on("/cursor-err", HTTP_GET, handleCursorErr);
+    g_server.on("/shots", HTTP_GET, handleShotsList);
+    g_server.on("/shots/clear", HTTP_POST, handleShotsClear);
     g_server.onNotFound([]() {
-        if (tryServeFavicon() || tryServeDeviceIcon()) {
+        if (tryServeFavicon() || tryServeDeviceIcon() || tryServeShotFile()) {
             return;
         }
         g_server.send(404, "text/plain", "not found");
@@ -1046,6 +1200,8 @@ static void drawWebHelpPage() {
     y = drawWebHelpText(manual_x + 2, y, "edit WiFi/devices");
     y = drawWebHelpText(manual_x + 2, y, "set Cursor/system");
     y = drawWebHelpText(manual_x + 2, y, "save to config.json");
+    y = drawWebHelpText(manual_x + 2, y, "Fn+s any screen");
+    y = drawWebHelpText(manual_x + 2, y, "then /shots DL");
 
     drawHelpHintRight("close");
     updateAppHeaderStatus();
@@ -1196,6 +1352,11 @@ void handleWebApp(const String& key) {
 void enterWebApp() {
     g_web_screen_ready = false;
     g_web_help_visible = false;
+    // 已在跑则只刷新界面，避免打断后台截图服务
+    if (g_running && g_startup_phase == WebStartupPhase::READY) {
+        drawWebApp();
+        return;
+    }
     beginWebStartup(false);
     drawWebApp();
 }

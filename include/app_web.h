@@ -21,6 +21,9 @@ const char* getConfigWebApPass();
 const char* getConfigWebUrl();
 const char* getConfigWebStatus();
 
+// 当前界面短名（main 实现），截图文件为 app_<slug>_NNN.bmp
+const char* getCurrentAppShotSlug();
+
 void drawWebApp();
 void enterWebApp();
 void handleWebApp(const String& key);

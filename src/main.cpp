@@ -21,6 +21,7 @@
 #include "app_battery.h"
 #include "app_log.h"
 #include "app_hid_kb.h"
+#include "app_screenshot.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
@@ -139,6 +140,62 @@ const char* getMenuItemNameFull(const AppState state) {
         }
     }
     return "?";
+}
+
+// 截图文件名短名：app_<slug>_NNN.bmp
+const char* getCurrentAppShotSlug() {
+    switch (currentState) {
+        case AppState::MENU:
+            return "menu";
+        case AppState::VERSION:
+            return "version";
+        case AppState::KEYBOARD:
+            return "keyboard";
+        case AppState::BMI:
+            return "imu";
+        case AppState::MIC:
+            return "mic";
+        case AppState::SETTINGS:
+            return "options";
+        case AppState::RTC:
+            return "time";
+        case AppState::IN_I2C:
+            return "ini2c";
+        case AppState::EX_I2C:
+            return "exi2c";
+        case AppState::WIFI:
+            return "wifi";
+        case AppState::BLE:
+            return "ble";
+        case AppState::DISP:
+            return "display";
+        case AppState::ICONS:
+            return "icons";
+        case AppState::SLEEP:
+            return "sleep";
+        case AppState::MIJIA:
+            return "mijia";
+        case AppState::WEB:
+            return "config";
+        case AppState::CURSOR:
+            return "cursor";
+        case AppState::MORSE:
+            return "morse";
+        case AppState::IR:
+            return "ir";
+        case AppState::FONT_DEMO:
+            return "font";
+        case AppState::LED:
+            return "led";
+        case AppState::BATTERY:
+            return "battery";
+        case AppState::HID_KB:
+            return "hidkb";
+        case AppState::LOG:
+            return "log";
+        default:
+            return "unknown";
+    }
 }
 static constexpr int MENU_COLS = 3;
 static constexpr int MENU_ROWS_PER_PAGE = 5;
@@ -2254,6 +2311,7 @@ static constexpr uint32_t SLEEP_PROMPT_MS = 5000;
 
 // 入睡前断开无线
 static void shutdownRadiosForSleep() {
+    stopConfigWebServer();
     forceShutdownStaWifi();
     stopBleStack();
 }
@@ -2539,6 +2597,8 @@ void setup() {
         Serial.println("wake: BtnA from deep sleep");
     }
     if (initAppConfigFs()) {
+        // 启动失败/空间不足时删最后一张截图，避免 Flash 撑死起不来
+        recoverScreenshotsOnBoot();
         if (loadAppConfig()) {
             Serial.printf("config: %d mijia device(s)\n", getAppConfig().device_count);
         } else {
@@ -2561,6 +2621,8 @@ void setup() {
     M5Cardputer.Display.setBrightness(brightnessPercentToHw(brightness));
     flushCardputerInput();
     showMenu();
+    // 正常进主菜单后清除 boot_pending
+    markScreenshotBootOk();
 }
 
 void loop() {
@@ -2693,6 +2755,10 @@ void loop() {
     }
 
     if (M5Cardputer.Keyboard.isChange()) {
+        // 任意界面 Fn+s：截图存 Flash（进 Config → /shots 下载）
+        if (tryHandleScreenshotHotkey()) {
+            return;
+        }
         switch (currentState) {
             case AppState::MENU:
                 if (M5Cardputer.Keyboard.isPressed()) {

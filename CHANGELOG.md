@@ -10,6 +10,9 @@
 
 ### 新增
 
+- **截图**：任意界面 `Fn+s` 将当前屏存为 LittleFS `/shot/app_<界面>_NNN.bmp`；空间不足时自动删最旧一张腾地方
+- **Config `/shots`**：缩略图预览、下载；显示 LittleFS 总容量 / 已占用 / 剩余与截图占用；支持一键清空
+- **截图开机恢复**：上次启动崩溃则删最后一张；Flash 过紧时继续删到可用，避免截图撑满起不来
 - **GitHub Release**：推送 `v*` tag 时自动编译并发布 `firmware` / `littlefs` / 含 FS 的 `merged` 全镜像（`.github/workflows/release.yml`）
 - **Mijia 快捷键**：设备可配置 `hotkey`（a-z/0-9，`q` 保留）；`Q` 快速选择页、`Fn+Q` 编辑当前设备快捷键（冲突时 BtnA 确认替换）；列表/宫格名称旁显示彩色快捷键字母；Web 配网设备表增加快捷键列并去重
 - **诊断日志**：Cursor HTTPS 失败写入 LittleFS `/cursor.log`（HTTP 错误码、heap、RSSI、max_alloc）；Config Web `/cursor-log` 查看；主菜单 `Fn+i` 打开 Log App 翻页浏览
@@ -18,6 +21,7 @@
 
 ### 改进
 
+- **截图清空**：删前关闭文件句柄，修复 Web「清空全部」删除 0 张的问题
 - **菜单**：BMI App 显示名改为 **IMU**（快捷键仍为 `g`）
 - **WiFi STA 生命周期**：统一到 `app_connectivity`（`ensureStaWifi` / `releaseStaWifi` / `forceShutdownStaWifi`）；用完立刻 `disconnect` + `WIFI_OFF`；同 SSID 已连则复用，避免无谓硬重启造成堆碎片
 - **Cursor WiFi**：去掉用户操作后 1 分钟宽限保持；拉取结束与离开 App 一律立刻关射频；连网不再先 `WIFI_OFF`，仅错 SSID 时断开
