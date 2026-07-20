@@ -17,10 +17,12 @@
 
 ### 改进
 
+- **WiFi STA 生命周期**：统一到 `app_connectivity`（`ensureStaWifi` / `releaseStaWifi` / `forceShutdownStaWifi`）；用完立刻 `disconnect` + `WIFI_OFF`；同 SSID 已连则复用，避免无谓硬重启造成堆碎片
+- **Cursor WiFi**：去掉用户操作后 1 分钟宽限保持；拉取结束与离开 App 一律立刻关射频；连网不再先 `WIFI_OFF`，仅错 SSID 时断开
 - **Cursor 低内存防护**：HTTPS / 建 task 前检查 free heap 与 max_alloc；不足时跳过并提示 `auth lowmem`，避免误报 `auth -1/conn`；周期刷新已有 `user_id` 时跳过 `/api/auth/me`
-- **Cursor WiFi**：用户操作后宽限保持约 1 分钟（modem sleep）再断；空闲/周期静默刷新仍立即断开；Last 用户触发与摘要等页一致
 - **Cursor 日志**：`/cursor.log` 超限改为保留尾部，不再整文件清空；Help 注明 `auth -1` 可能由低内存/碎片引起
 - **Config**：堆过低时跳过 softAP，降低 Cursor 失败后再开配网导致重启的风险
+- **Mijia**：离开 App 时立刻释放 WiFi
 - **M5Burner 打包**：LittleFS 固定使用 `config.example.json`，不把本地 `data/config.json`（密钥等）打进发布包；打包结束后恢复本地配置；忽略 `data/config.json.packbak`
 
 ---

@@ -150,10 +150,6 @@ static bool g_chart_http_active = false;
 static uint32_t g_last_activity_ms = 0;
 static uint32_t g_last_scheduled_refresh_ms = 0;
 static bool g_periodic_refresh_active = false;
-// 用户操作后的 WiFi 宽限：保持连接，空闲 1 分钟再断；周期刷新立即断
-static bool g_wifi_hold_for_idle = false;
-// Last 等软刷新 UI 仍 silent，但用户触发时要与其它页一样走宽限断网
-static bool g_wifi_hold_after_fetch = false;
 // 熄屏：关背光/面板，后台仍按 5 分钟刷新
 static bool g_display_blanked = false;
 static uint8_t g_saved_brightness = 30;
@@ -188,42 +184,18 @@ static void noteCursorActivity() {
   g_periodic_refresh_active = false;
 }
 
-// 立刻关 WiFi（周期刷新结束 / 空闲宽限到期 / 离开 App）
-static void cursorWifiPowerOff() {
+// 拉取结束：立刻关射频
+static void finishCursorWifi() {
   g_chart_http_active = false;
   g_chart_http_target = nullptr;
-  g_wifi_hold_for_idle = false;
-  if (WiFi.getMode() != WIFI_OFF || WiFi.status() == WL_CONNECTED) {
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-  }
+  releaseConfigWifi();
   g_need_redraw = true;
-}
-
-// 拉取结束：用户触发则宽限保持连接；静默/周期刷新则立即断开。
-// hold 期间开 modem sleep，减轻发热。
-static void finishCursorWifi(const bool keep_for_user_idle) {
-  g_chart_http_active = false;
-  g_chart_http_target = nullptr;
-  if (keep_for_user_idle) {
-    g_wifi_hold_for_idle = true;
-    WiFi.setSleep(true);
-    g_need_redraw = true;
-    return;
-  }
-  cursorWifiPowerOff();
 }
 
 // HTTPS 前检查空闲堆与最大可分配块（碎片时 free 够但 max_alloc 不够）
 static bool cursorHeapOkForHttps() {
   return ESP.getFreeHeap() >= CURSOR_HTTPS_MIN_HEAP &&
          ESP.getMaxAllocHeap() >= CURSOR_HTTPS_MIN_MAXALLOC;
-}
-
-static void releaseCursorWifi() {
-  g_chart_http_active = false;
-  g_chart_http_target = nullptr;
-  releaseConfigWifi();
 }
 
 // 是否到达空闲首次刷新或周期刷新时间点
@@ -1221,20 +1193,22 @@ static void waitCursorFetchTaskDone(const uint32_t timeout_ms) {
   }
 }
 
-// 可取消的 WiFi 连接：leave 递增 gen 后尽快返回，避免卡死 5s 并污染下次连网
+// 可取消的 WiFi 连接：leave 递增 gen 后尽快返回；复用系统层已连 STA，避免 WIFI_OFF 硬重启
 static bool ensureCursorWifi(const uint32_t timeout_ms, const uint32_t gen) {
   const AppConfig& cfg = getAppConfig();
   if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
     return false;
   }
+  claimStaWifi();
   if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid) {
     return true;
   }
 
-  // 先彻底关射频再开，避免上次 ESC 中途断连后 begin 立刻失败
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  delay(80);
+  // 仅错 SSID 时断开；不 WIFI_OFF，减少堆碎片
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.disconnect(true);
+    delay(50);
+  }
   if (gen != g_fetch_gen) {
     return false;
   }
@@ -2222,8 +2196,9 @@ static void beginCursorChartFetch(const int days, const bool silent) {
 }
 
 // last 页拉取：软刷新保留旧列表；忙碌时排队，等会话就绪后再拉。
-// from_idle：后台周期刷新立即断 WiFi；用户切页/按 r 则与其它页一样空闲 1 分钟再断。
+// from_idle：后台周期刷新；用户切页/按 r 触发
 static void beginCursorLastRefresh(const bool from_idle) {
+  (void)from_idle;
   g_last_refreshing = true;
   if (g_task_running || g_fetch_pending || g_user_id <= 0 || g_cookie[0] == '\0') {
     g_want_last_fetch = true;
@@ -2234,7 +2209,6 @@ static void beginCursorLastRefresh(const bool from_idle) {
   invalidateCursorFetch();
   g_fetch_mode = CursorFetchMode::LAST;
   g_silent_fetch = true; // UI 仍软刷新
-  g_wifi_hold_after_fetch = !from_idle;
   g_fetch_pending = true;
   g_queue_other_chart = false;
   g_error_msg[0] = '\0';
@@ -2330,7 +2304,7 @@ void enterCursorApp() {
   beginCursorFetch(CursorFetchMode::FULL);
 }
 
-// 离开 Cursor：中止后台拉取并释放 WiFi
+// 离开 Cursor：中止后台拉取并立刻关 WiFi
 void leaveCursorApp() {
   g_help_visible = false;
   g_fetch_pending = false;
@@ -2339,17 +2313,13 @@ void leaveCursorApp() {
   g_chart_fetch_start_ms = 0;
   g_last_countdown_sec = -1;
   g_status_msg[0] = '\0';
+  g_chart_http_active = false;
+  g_chart_http_target = nullptr;
   invalidateCursorFetch();
-  g_wifi_hold_for_idle = false;
-  g_wifi_hold_after_fetch = false;
-  // 先断网加速卡在 HTTPS / WiFi begin 上的 task 退出
-  WiFi.disconnect(true);
-  // 等够 HTTPS 超时 + 余量，避免僵尸 task 与 Config 抢 WiFi
+  // 等够 HTTPS 超时 + 余量，避免僵尸 task
   waitCursorFetchTaskDone(CURSOR_HTTP_TIMEOUT_MS + 2000);
   wakeCursorDisplay(false);
-  releaseCursorWifi();
-  // 射频冷却，降低紧接着再 enter 时 begin 立刻失败概率
-  delay(80);
+  releaseConfigWifi();
 }
 
 bool isCursorDisplayBlanked() {
@@ -2421,14 +2391,11 @@ static void cursorFetchTaskFn(void* /*arg*/) {
   const uint32_t gen = g_fetch_gen;
   const CursorFetchMode mode = g_fetch_mode;
   const bool silent = g_silent_fetch;
-  // Last 用户触发：UI silent 但 WiFi 仍走宽限
-  const bool hold_wifi = !silent || g_wifi_hold_after_fetch;
-  g_wifi_hold_after_fetch = false;
   const int chart_days = g_chart_fetch_days;
 
   auto aborted = [gen]() -> bool { return gen != g_fetch_gen; };
 
-  auto finish_ok = [aborted, hold_wifi]() {
+  auto finish_ok = [aborted]() {
     if (aborted()) {
       return;
     }
@@ -2438,16 +2405,14 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     if (g_phase != CursorPhase::ERROR) {
       g_phase = CursorPhase::READY;
     }
-    // 再次确认，避免 leave 后误关新 task 的 WiFi
+    // 再次确认，避免 leave 后误调度新 task 的 WiFi
     if (aborted()) {
       return;
     }
-    // 用户拉取 / Last 用户触发：空闲 1 分钟再断；周期静默：立即断
-    finishCursorWifi(hold_wifi);
-    g_need_redraw = true;
+    finishCursorWifi();
   };
 
-  auto finish_fail = [aborted, silent, hold_wifi](const char* err) {
+  auto finish_fail = [aborted, silent](const char* err) {
     if (aborted()) {
       return;
     }
@@ -2465,7 +2430,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     if (aborted()) {
       return;
     }
-    finishCursorWifi(hold_wifi);
+    finishCursorWifi();
   };
 
   // --- WiFi + NTP ---
@@ -2506,7 +2471,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
       g_fetch_pending = false;
       g_silent_fetch = false;
       g_last_refreshing = false;
-      finishCursorWifi(hold_wifi);
+      finishCursorWifi();
       g_need_redraw = true;
     }
     endCursorFetchTask();
@@ -2530,7 +2495,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
           g_fetch_pending = false;
           g_silent_fetch = false;
           g_last_refreshing = false;
-          finishCursorWifi(hold_wifi);
+          finishCursorWifi();
           g_need_redraw = true;
         }
       }
@@ -2586,7 +2551,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
       if (!aborted()) {
         g_fetch_pending = false;
         g_silent_fetch = false;
-        finishCursorWifi(hold_wifi);
+        finishCursorWifi();
         if (g_phase != CursorPhase::ERROR) {
           g_phase = CursorPhase::READY;
         }
@@ -2638,7 +2603,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     if (!aborted()) {
       g_fetch_pending = false;
       g_silent_fetch = false;
-      finishCursorWifi(hold_wifi);
+      finishCursorWifi();
       if (g_phase != CursorPhase::ERROR) {
         g_phase = CursorPhase::READY;
       }
@@ -2700,13 +2665,9 @@ void updateCursorApp() {
     beginCursorLastRefresh(false);
   }
 
-  // 先调度空闲刷新（可复用宽限期内仍连着的 WiFi），再考虑到期断开
+  // 空闲刷新：按需重新连 WiFi
   if (!g_fetch_pending && !g_task_running && shouldScheduleCursorRefresh()) {
     triggerCursorIdleRefresh();
-  } else if (g_wifi_hold_for_idle && !g_task_running && !g_fetch_pending &&
-             (millis() - g_last_activity_ms) >= CURSOR_IDLE_TRIGGER_MS) {
-    // 用户操作后空闲 1 分钟：无刷新任务时关掉 WiFi
-    cursorWifiPowerOff();
   }
 
   // 进入/退出 1s 慢循环时更新右上角蓝点

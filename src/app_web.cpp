@@ -758,8 +758,8 @@ static void beginWebStartup(const bool force_ap) {
         g_mode = ConfigWebMode::NONE;
         g_web_url[0] = '\0';
     }
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+    // AP/STA 切换需立刻关射频
+    forceShutdownStaWifi();
 
     g_force_ap_mode = force_ap;
     g_startup_phase = WebStartupPhase::CONNECTING;
@@ -772,6 +772,7 @@ static void beginWebStartup(const bool force_ap) {
 static void startWifiConnectAttempt() {
     const AppConfig& cfg = getAppConfig();
     if (!g_force_ap_mode && cfg.loaded && cfg.wifi_ssid[0] != '\0') {
+        claimStaWifi();
         WiFi.mode(WIFI_STA);
         applyWifiRadioSleepPolicy();
         WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);

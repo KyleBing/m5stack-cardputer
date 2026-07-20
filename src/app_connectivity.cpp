@@ -1,4 +1,6 @@
 #include "app_connectivity.h"
+#include "app_config.h"
+#include "app_header.h"
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <WiFi.h>
@@ -35,6 +37,53 @@ int getWifiStaRssi() {
         return 0;
     }
     return WiFi.RSSI();
+}
+
+void claimStaWifi() {
+    // 无延迟关射频后无需取消计时；保留空实现兼容调用点
+}
+
+bool ensureStaWifi(const uint32_t timeout_ms) {
+    const AppConfig& cfg = getAppConfig();
+    if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
+        return false;
+    }
+
+    if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid) {
+        return true;
+    }
+
+    // 已连其它 SSID 时才断开，避免无谓 WIFI_OFF 硬重启
+    if (WiFi.status() == WL_CONNECTED) {
+        WiFi.disconnect(true);
+        delay(50);
+    }
+
+    WiFi.mode(WIFI_STA);
+    applyWifiRadioSleepPolicy();
+    WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
+
+    const uint32_t deadline = millis() + timeout_ms;
+    while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(millis() - deadline) < 0) {
+        delay(200);
+    }
+    return WiFi.status() == WL_CONNECTED;
+}
+
+void releaseStaWifi() {
+    forceShutdownStaWifi();
+}
+
+void forceShutdownStaWifi() {
+    if (WiFi.getMode() != WIFI_OFF || WiFi.status() == WL_CONNECTED) {
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+    }
+    updateAppHeaderStatus();
+}
+
+void updateStaWifiIdle() {
+    // 已无延迟关射频
 }
 
 void applyWifiRadioSleepPolicy() {

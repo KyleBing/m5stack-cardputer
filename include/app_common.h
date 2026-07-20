@@ -55,11 +55,14 @@ void drawHelpHintRight(const char* help_label = "help", int y_offset = 0);
 // 提示小字：',' 左箭头，'.' 右箭头
 void drawHintText(int x, int y, const char* text, int text_size = 1);
 
-// 使用 config 连接 WiFi（Mijia / Time 等按需调用，timeout_ms 为最长等待毫秒）
+// 使用 config 连接 WiFi（timeout_ms 为最长等待毫秒）
 bool ensureConfigWifi(uint32_t timeout_ms = 12000);
 
-// 断开 WiFi 并关闭射频（离开应用或用完网络后调用）
+// 用完网络：立刻 disconnect + WIFI_OFF
 void releaseConfigWifi();
+
+// 立刻关闭 WiFi（休眠 / AP 等必须独占射频时）；与 releaseConfigWifi 同效
+void forceReleaseConfigWifi();
 
 // 启动/唤醒后调用，避免 deep sleep 恢复了 UTC 时钟却未设 TZ
 void applyLocalTimezone();

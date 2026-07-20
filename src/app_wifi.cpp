@@ -418,6 +418,7 @@ static void startWifiConfigConnect() {
     }
 
     if (isWifiConfigConnected()) {
+        claimStaWifi();
         wifiConnectFromConfig = false;
         wifiPhase = WifiAppPhase::STATUS;
         wifiStatus[0] = '\0';
@@ -426,6 +427,7 @@ static void startWifiConfigConnect() {
         return;
     }
 
+    claimStaWifi();
     WiFi.mode(WIFI_STA);
     applyWifiRadioSleepPolicy();
     WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
@@ -449,6 +451,7 @@ static void startWifiScan() {
     M5Cardputer.Display.setCursor(APP_CONTENT_X, APP_CONTENT_Y);
     M5Cardputer.Display.println("scanning...");
 
+    claimStaWifi();
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     WiFi.scanDelete();
@@ -463,6 +466,7 @@ static void startWifiConnect(const char* password) {
     }
 
     const String ssid = WiFi.SSID(wifiSelectedIdx);
+    claimStaWifi();
     WiFi.mode(WIFI_STA);
     applyWifiRadioSleepPolicy();
     // 切换 SSID 时才断开，避免频繁 disconnect 导致连接超时

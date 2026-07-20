@@ -1,10 +1,27 @@
 #pragma once
 
+#include <stdint.h>
+
 // 全局 WiFi STA 是否已连接
 bool isWifiStaConnected();
 
 // 已连接时返回 RSSI，否则 0
 int getWifiStaRssi();
+
+// 使用 config 连接 WiFi；已连同 SSID 则复用
+bool ensureStaWifi(uint32_t timeout_ms = 12000);
+
+// 声明正在使用 WiFi（自行 WiFi.begin 前调用；兼容旧调用）
+void claimStaWifi();
+
+// 用完后立刻 disconnect + WIFI_OFF
+void releaseStaWifi();
+
+// 立刻关闭射频（休眠 / AP 配网 / 必须独占射频时）；与 releaseStaWifi 同效
+void forceShutdownStaWifi();
+
+// 兼容旧调用（已无延迟关射频逻辑）
+void updateStaWifiIdle();
 
 // 按 BLE 初始化状态配置 WiFi 休眠，避免 ESP-IDF coexist 层 abort
 void applyWifiRadioSleepPolicy();

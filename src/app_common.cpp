@@ -3,7 +3,6 @@
 #include "app_connectivity.h"
 #include "app_header.h"
 #include "app_icons.h"
-#include <WiFi.h>
 #include <cctype>
 #include <cstring>
 #include <cstdlib>
@@ -215,31 +214,15 @@ void drawInfoLineInt(const int x, int& y, const char* label, const int value) {
 }
 
 bool ensureConfigWifi(const uint32_t timeout_ms) {
-    const AppConfig& cfg = getAppConfig();
-    if (!cfg.loaded || cfg.wifi_ssid[0] == '\0') {
-        return false;
-    }
-
-    if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid) {
-        return true;
-    }
-
-    WiFi.mode(WIFI_STA);
-    applyWifiRadioSleepPolicy();
-    WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
-
-    const uint32_t deadline = millis() + timeout_ms;
-    while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(millis() - deadline) < 0) {
-        delay(200);
-    }
-    return WiFi.status() == WL_CONNECTED;
+    return ensureStaWifi(timeout_ms);
 }
 
 void releaseConfigWifi() {
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    // 立即刷新 header，避免 WiFi 图标残影
-    updateAppHeaderStatus();
+    releaseStaWifi();
+}
+
+void forceReleaseConfigWifi() {
+    forceShutdownStaWifi();
 }
 
 String getPressedKey() {

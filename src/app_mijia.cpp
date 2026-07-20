@@ -206,12 +206,14 @@ static void startMijiaWifiConnect() {
     }
 
     if (isMijiaConfigWifiConnected()) {
+        claimStaWifi();
         mijiaWifiPhase = MijiaWifiPhase::READY;
         strncpy(mijiaNetStatus, "已连接", sizeof(mijiaNetStatus));
         requestMijiaRefresh();
         return;
     }
 
+    claimStaWifi();
     WiFi.mode(WIFI_STA);
     applyWifiRadioSleepPolicy();
     WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
@@ -3303,6 +3305,8 @@ void leaveMijiaApp() {
     mijiaHotkeyEditConflictIdx = -1;
     mijiaBleScanAbort();
     cancelMijiaPendingJobs();
+    // 立刻关射频
+    releaseConfigWifi();
 }
 
 void updateMijiaApp() {

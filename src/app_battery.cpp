@@ -114,9 +114,11 @@ static void batUpdateTimeSync() {
                 return;
             }
             if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid) {
+                claimStaWifi();
                 g_sync_state = BatTimeSync::BeginNtp;
                 return;
             }
+            claimStaWifi();
             WiFi.mode(WIFI_STA);
             applyWifiRadioSleepPolicy();
             WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);

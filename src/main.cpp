@@ -2254,8 +2254,7 @@ static constexpr uint32_t SLEEP_PROMPT_MS = 5000;
 
 // 入睡前断开无线
 static void shutdownRadiosForSleep() {
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+    forceShutdownStaWifi();
     stopBleStack();
 }
 
@@ -2553,7 +2552,7 @@ void setup() {
     // config 加载后再设时区（deep sleep 唤醒后时钟可能已是 UTC）
     applyLocalTimezone();
     initBatteryLog();
-    WiFi.mode(WIFI_OFF);
+    forceShutdownStaWifi();
     M5Cardputer.Display.setRotation(1);
     uint8_t brightness = 30;
     if (getAppConfig().loaded) {

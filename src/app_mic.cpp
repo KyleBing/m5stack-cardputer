@@ -263,9 +263,11 @@ static void micUpdateTimeSync() {
                 return;
             }
             if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == cfg.wifi_ssid) {
+                claimStaWifi();
                 micSyncState = MicTimeSync::BeginNtp;
                 return;
             }
+            claimStaWifi();
             WiFi.mode(WIFI_STA);
             applyWifiRadioSleepPolicy();
             WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
