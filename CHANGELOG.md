@@ -11,11 +11,16 @@
 ### 新增
 
 - **Mijia 快捷键**：设备可配置 `hotkey`（a-z/0-9，`q` 保留）；`Q` 快速选择页、`Fn+Q` 编辑当前设备快捷键（冲突时 BtnA 确认替换）；列表/宫格名称旁显示彩色快捷键字母；Web 配网设备表增加快捷键列并去重
-- **诊断日志**：Cursor HTTPS 失败写入 LittleFS `/cursor.log`（HTTP 错误码、heap、RSSI）；Config Web `/cursor-log` 查看；主菜单 `Fn+i` 打开 Log App 翻页浏览
+- **诊断日志**：Cursor HTTPS 失败写入 LittleFS `/cursor.log`（HTTP 错误码、heap、RSSI、max_alloc）；Config Web `/cursor-log` 查看；主菜单 `Fn+i` 打开 Log App 翻页浏览
+- **错误轨 `/cursor.err`**：fail / lowmem / 负 HTTP 码与开机 `boot reset=...` 单独落盘；重启后仍可查；Log 默认 Err（`f` 切完整 log）；Config Web `/cursor-err`
 - **Cursor 请求韧性**：连 WiFi 后预解析 DNS；传输层负错误自动重试；WiFi 超时放宽，减轻偶发 `auth -1/conn`
 
 ### 改进
 
+- **Cursor 低内存防护**：HTTPS / 建 task 前检查 free heap 与 max_alloc；不足时跳过并提示 `auth lowmem`，避免误报 `auth -1/conn`；周期刷新已有 `user_id` 时跳过 `/api/auth/me`
+- **Cursor WiFi**：用户操作后宽限保持约 1 分钟（modem sleep）再断；空闲/周期静默刷新仍立即断开；Last 用户触发与摘要等页一致
+- **Cursor 日志**：`/cursor.log` 超限改为保留尾部，不再整文件清空；Help 注明 `auth -1` 可能由低内存/碎片引起
+- **Config**：堆过低时跳过 softAP，降低 Cursor 失败后再开配网导致重启的风险
 - **M5Burner 打包**：LittleFS 固定使用 `config.example.json`，不把本地 `data/config.json`（密钥等）打进发布包；打包结束后恢复本地配置；忽略 `data/config.json.packbak`
 
 ---

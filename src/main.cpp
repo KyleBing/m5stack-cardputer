@@ -2442,6 +2442,10 @@ void enterApp(const AppState state) {
     if (currentState == AppState::HID_KB && state != AppState::HID_KB) {
         leaveHidKbApp();
     }
+    // 防御：离开 Cursor 时务必停 fetch / 放 WiFi，避免与 Config 抢射频
+    if (currentState == AppState::CURSOR && state != AppState::CURSOR) {
+        leaveCursorApp();
+    }
     currentState = state;
 
     // Sleep 先显示 5 秒提示，再关屏
@@ -2541,6 +2545,8 @@ void setup() {
         } else {
             Serial.println("config: /config.json missing or invalid");
         }
+        // 尽早记下复位原因，崩溃后 Fn+i 看 Err 仍能对照
+        cursorLogBootBreadcrumb();
     } else {
         Serial.println("config: LittleFS mount failed");
     }

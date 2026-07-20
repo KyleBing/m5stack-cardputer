@@ -289,6 +289,7 @@ static void handleFormRoot() {
               "<div class='brand-text'><h1>Cardputer Config</h1>"
               "<p class='nav'><a href='/advanced'>高级 JSON</a> · "
               "<a href='/example'>示例</a> · "
+              "<a href='/cursor-err'>Cursor 错误</a> · "
               "<a href='/cursor-log'>Cursor 日志</a></p></div></div></div>"
               "<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
@@ -365,10 +366,11 @@ static void handleFormRoot() {
               "或仅粘贴 JWT。</p>"
               "<label>Session Token<textarea id='cursor-key' rows='4'></textarea></label>"
               "<h3 class='token-method-title'>诊断日志</h3>"
-              "<p class='hint'>Cursor App 请求失败时会写入 LittleFS "
-              "<code>/cursor.log</code>（含 HTTP 错误码、heap、RSSI）。"
-              "出现 <code>auth -1/conn</code> 时可打开查看。</p>"
-              "<p class='nav'><a href='/cursor-log' target='_blank'>查看 Cursor 日志</a></p>"
+              "<p class='hint'>失败/低内存会写入 <code>/cursor.err</code>（重启后仍在）；"
+              "完整轨迹在 <code>/cursor.log</code>。"
+              "设备上也可主菜单 <code>Fn+i</code> 查看，无需开 Config。</p>"
+              "<p class='nav'><a href='/cursor-err' target='_blank'>查看错误轨</a> · "
+              "<a href='/cursor-log' target='_blank'>查看完整日志</a></p>"
               "</div>"
               "<div id='panel-system' class='panel'>"
               "<h2>系统设置</h2>"
@@ -718,20 +720,31 @@ static void handleExample() {
     sendHtmlPage(body);
 }
 
-// 查看 Cursor App 诊断日志（LittleFS /cursor.log）
-static void handleCursorLog() {
-    if (!LittleFS.exists("/cursor.log")) {
-        g_server.send(200, "text/plain; charset=utf-8",
-                      "(empty) Cursor 尚未写入日志。打开 Cursor App 触发请求后再刷新。\n");
+// 流式返回 LittleFS 文本日志
+static void handleCursorLogFile(const char* path, const char* empty_msg) {
+    if (!LittleFS.exists(path)) {
+        g_server.send(200, "text/plain; charset=utf-8", empty_msg);
         return;
     }
-    File file = LittleFS.open("/cursor.log", "r");
+    File file = LittleFS.open(path, "r");
     if (!file) {
-        g_server.send(500, "text/plain", "open /cursor.log failed");
+        g_server.send(500, "text/plain", "open log failed");
         return;
     }
     g_server.streamFile(file, "text/plain");
     file.close();
+}
+
+// 完整诊断日志
+static void handleCursorLog() {
+    handleCursorLogFile("/cursor.log",
+                        "(empty) Cursor 尚未写入日志。打开 Cursor App 触发请求后再刷新。\n");
+}
+
+// 错误轨：fail/lowmem/boot reset，崩溃重启后优先看这个
+static void handleCursorErr() {
+    handleCursorLogFile("/cursor.err",
+                        "(empty) 尚无错误记录。出现 auth fail / lowmem / 异常重启后会写入。\n");
 }
 
 // 重置并进入连接流程
@@ -835,6 +848,7 @@ static void registerWebRoutes() {
     g_server.on("/save", HTTP_POST, handleSave);
     g_server.on("/example", HTTP_GET, handleExample);
     g_server.on("/cursor-log", HTTP_GET, handleCursorLog);
+    g_server.on("/cursor-err", HTTP_GET, handleCursorErr);
     g_server.onNotFound([]() {
         if (tryServeFavicon() || tryServeDeviceIcon()) {
             return;
@@ -861,6 +875,13 @@ static bool startStaConfigWebServer() {
 
 // 未联网时开 AP 热点配网
 static bool startApConfigWebServer() {
+    // softAP + WebServer 在低堆/碎片时易 panic，宁可不启也不重启
+    if (ESP.getFreeHeap() < 40000 || ESP.getMaxAllocHeap() < 20000) {
+        Serial.printf("[web] ap skip lowmem heap=%u max=%u\n", ESP.getFreeHeap(),
+                      ESP.getMaxAllocHeap());
+        strncpy(g_web_status, "low mem", sizeof(g_web_status));
+        return false;
+    }
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                       IPAddress(255, 255, 255, 0));

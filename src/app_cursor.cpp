@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mbedtls/base64.h>
@@ -23,8 +24,20 @@
 static constexpr const char* CURSOR_HOST = "https://cursor.com";
 static constexpr const char* CURSOR_HOST_NAME = "cursor.com";
 static constexpr const char* CURSOR_LOG_PATH = "/cursor.log";
-static constexpr size_t CURSOR_LOG_MAX_BYTES = 12288; // 约 12KB，超限则截断旧内容
+static constexpr const char* CURSOR_LOG_TMP_PATH = "/cursor.log.tmp";
+static constexpr const char* CURSOR_ERR_PATH = "/cursor.err";
+static constexpr const char* CURSOR_ERR_TMP_PATH = "/cursor.err.tmp";
+static constexpr size_t CURSOR_LOG_MAX_BYTES = 12288; // 约 12KB，超限则保留尾部
+static constexpr size_t CURSOR_LOG_KEEP_BYTES = 8192; // 轮转时保留最近约 8KB
+static constexpr size_t CURSOR_ERR_MAX_BYTES = 4096;  // 错误专用，小文件不易被冲掉
+static constexpr size_t CURSOR_ERR_KEEP_BYTES = 3072;
 static constexpr int CURSOR_HTTP_RETRIES = 3;         // TLS 偶发 -1 时重试
+// TLS/mbedTLS 需要较大连续块；空闲过低时 -1 常被误报为 connection refused
+static constexpr uint32_t CURSOR_HTTPS_MIN_HEAP = 48000;
+static constexpr uint32_t CURSOR_HTTPS_MIN_MAXALLOC = 24000;
+// 创建 fetch task（≈32KB 栈）前的最低空闲堆
+static constexpr uint32_t CURSOR_TASK_MIN_HEAP = 90000;
+static constexpr uint32_t CURSOR_HTTP_TIMEOUT_MS = 20000;
 static constexpr int CURSOR_DAYS_MAX = 31;
 static constexpr int CURSOR_HOURS = 24;
 static constexpr int CURSOR_CHART_PAGE_SIZE = 200; // 每页条数；配合流式解析避免 OOM
@@ -137,6 +150,10 @@ static bool g_chart_http_active = false;
 static uint32_t g_last_activity_ms = 0;
 static uint32_t g_last_scheduled_refresh_ms = 0;
 static bool g_periodic_refresh_active = false;
+// 用户操作后的 WiFi 宽限：保持连接，空闲 1 分钟再断；周期刷新立即断
+static bool g_wifi_hold_for_idle = false;
+// Last 等软刷新 UI 仍 silent，但用户触发时要与其它页一样走宽限断网
+static bool g_wifi_hold_after_fetch = false;
 // 熄屏：关背光/面板，后台仍按 5 分钟刷新
 static bool g_display_blanked = false;
 static uint8_t g_saved_brightness = 30;
@@ -152,7 +169,7 @@ static TaskHandle_t g_fetch_task = nullptr;
 
 static void beginCursorFetch(const CursorFetchMode mode);
 static void beginCursorChartFetch(const int days, const bool silent);
-static void beginCursorLastRefresh();
+static void beginCursorLastRefresh(bool from_idle);
 static void startChartFetchTimer(const int days);
 static int chartFetchCountdownSec();
 static void refreshChartLoadingFrame();
@@ -171,14 +188,36 @@ static void noteCursorActivity() {
   g_periodic_refresh_active = false;
 }
 
-// 拉取结束断开 WiFi 省电；下次请求再 ensureConfigWifi。
-// 后台 task 不调 Display 回调，仅关射频；header 由主循环 redraw 刷新。
-static void finishCursorWifi() {
+// 立刻关 WiFi（周期刷新结束 / 空闲宽限到期 / 离开 App）
+static void cursorWifiPowerOff() {
   g_chart_http_active = false;
   g_chart_http_target = nullptr;
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
+  g_wifi_hold_for_idle = false;
+  if (WiFi.getMode() != WIFI_OFF || WiFi.status() == WL_CONNECTED) {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+  }
   g_need_redraw = true;
+}
+
+// 拉取结束：用户触发则宽限保持连接；静默/周期刷新则立即断开。
+// hold 期间开 modem sleep，减轻发热。
+static void finishCursorWifi(const bool keep_for_user_idle) {
+  g_chart_http_active = false;
+  g_chart_http_target = nullptr;
+  if (keep_for_user_idle) {
+    g_wifi_hold_for_idle = true;
+    WiFi.setSleep(true);
+    g_need_redraw = true;
+    return;
+  }
+  cursorWifiPowerOff();
+}
+
+// HTTPS 前检查空闲堆与最大可分配块（碎片时 free 够但 max_alloc 不够）
+static bool cursorHeapOkForHttps() {
+  return ESP.getFreeHeap() >= CURSOR_HTTPS_MIN_HEAP &&
+         ESP.getMaxAllocHeap() >= CURSOR_HTTPS_MIN_MAXALLOC;
 }
 
 static void releaseCursorWifi() {
@@ -211,8 +250,8 @@ static void triggerCursorIdleRefresh() {
   if (g_page == CursorPage::SUMMARY) {
     beginCursorFetch(CursorFetchMode::PERIOD);
   } else if (g_page == CursorPage::LAST) {
-    // last 页空闲刷新只重拉列表
-    beginCursorLastRefresh();
+    // last 页空闲刷新只重拉列表（立即断 WiFi）
+    beginCursorLastRefresh(true);
   } else if (g_page == CursorPage::CHART_24 && g_chart_24_ready) {
     beginCursorChartFetch(24, true);
   } else if (g_page == CursorPage::CHART_7 && g_chart_7_ready) {
@@ -404,32 +443,63 @@ static const char* cursorHttpErrTag(const int code) {
     }
 }
 
-// 写诊断日志：Serial + LittleFS（超限截断旧内容，方便 config web 查看）
-static void cursorLog(const char* fmt, ...) {
-    char line[192];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
-
-    Serial.printf("[cursor] %s\n", line);
-
-    if (!LittleFS.begin(false)) {
+// 超限时保留尾部（path / tmp / 上限可配）
+static void cursorLogRotateFile(const char* path, const char* tmp_path, const size_t max_bytes,
+                                const size_t keep_bytes) {
+    if (!LittleFS.exists(path)) {
+        return;
+    }
+    File cur = LittleFS.open(path, "r");
+    if (!cur) {
+        return;
+    }
+    const size_t sz = cur.size();
+    if (sz < max_bytes) {
+        cur.close();
         return;
     }
 
-    // 超限则丢掉旧文件，保留本次起的新日志
-    if (LittleFS.exists(CURSOR_LOG_PATH)) {
-        File cur = LittleFS.open(CURSOR_LOG_PATH, "r");
-        if (cur && cur.size() >= CURSOR_LOG_MAX_BYTES) {
-            cur.close();
-            LittleFS.remove(CURSOR_LOG_PATH);
-        } else if (cur) {
-            cur.close();
+    size_t start = sz > keep_bytes ? sz - keep_bytes : 0;
+    if (!cur.seek(start)) {
+        cur.close();
+        LittleFS.remove(path);
+        return;
+    }
+    // 对齐到下一整行，避免半截
+    if (start > 0) {
+        while (cur.available()) {
+            const int c = cur.read();
+            if (c < 0 || c == '\n') {
+                break;
+            }
         }
     }
 
-    File f = LittleFS.open(CURSOR_LOG_PATH, "a");
+    File tmp = LittleFS.open(tmp_path, "w");
+    if (!tmp) {
+        cur.close();
+        LittleFS.remove(path);
+        return;
+    }
+    uint8_t buf[256];
+    while (cur.available()) {
+        const size_t n = cur.read(buf, sizeof(buf));
+        if (n == 0) {
+            break;
+        }
+        tmp.write(buf, n);
+    }
+    cur.close();
+    tmp.close();
+    LittleFS.remove(path);
+    LittleFS.rename(tmp_path, path);
+}
+
+// 追加一行到指定文件（close 即 flush，崩溃前已落盘的行可保留）
+static void cursorLogAppendFile(const char* path, const char* tmp_path, const size_t max_bytes,
+                                const size_t keep_bytes, const char* line) {
+    cursorLogRotateFile(path, tmp_path, max_bytes, keep_bytes);
+    File f = LittleFS.open(path, "a");
     if (!f) {
         return;
     }
@@ -445,6 +515,81 @@ static void cursorLog(const char* fmt, ...) {
     }
     f.printf("%s\n", line);
     f.close();
+}
+
+// fail / lowmem / 负 HTTP 码等：额外写入 /cursor.err，不被 wifi ok 冲掉
+static bool cursorLogLineIsCritical(const char* line) {
+    if (line == nullptr || line[0] == '\0') {
+        return false;
+    }
+    if (strstr(line, "fail") != nullptr || strstr(line, "lowmem") != nullptr ||
+        strstr(line, "abort") != nullptr) {
+        return true;
+    }
+    // GET ... code=-1(conn)
+    return strstr(line, "code=-") != nullptr;
+}
+
+static const char* cursorResetReasonTag() {
+    switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:
+        return "poweron";
+    case ESP_RST_EXT:
+        return "ext";
+    case ESP_RST_SW:
+        return "sw";
+    case ESP_RST_PANIC:
+        return "panic";
+    case ESP_RST_INT_WDT:
+        return "int_wdt";
+    case ESP_RST_TASK_WDT:
+        return "task_wdt";
+    case ESP_RST_WDT:
+        return "wdt";
+    case ESP_RST_DEEPSLEEP:
+        return "deepsleep";
+    case ESP_RST_BROWNOUT:
+        return "brownout";
+    case ESP_RST_SDIO:
+        return "sdio";
+    default:
+        return "unknown";
+    }
+}
+
+// 写诊断日志：Serial + /cursor.log；关键错误再写 /cursor.err
+static void cursorLog(const char* fmt, ...) {
+    char line[192];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+
+    Serial.printf("[cursor] %s\n", line);
+
+    if (!LittleFS.begin(false)) {
+        return;
+    }
+
+    cursorLogAppendFile(CURSOR_LOG_PATH, CURSOR_LOG_TMP_PATH, CURSOR_LOG_MAX_BYTES,
+                        CURSOR_LOG_KEEP_BYTES, line);
+    if (cursorLogLineIsCritical(line)) {
+        cursorLogAppendFile(CURSOR_ERR_PATH, CURSOR_ERR_TMP_PATH, CURSOR_ERR_MAX_BYTES,
+                            CURSOR_ERR_KEEP_BYTES, line);
+    }
+}
+
+// 开机面包屑：重启后用 Fn+i 看 Err 可知上次是 panic/wdt 还是软复位
+void cursorLogBootBreadcrumb() {
+    if (!LittleFS.begin(false)) {
+        return;
+    }
+    char line[160];
+    snprintf(line, sizeof(line), "boot reset=%s heap=%u max=%u", cursorResetReasonTag(),
+             ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    Serial.printf("[cursor] %s\n", line);
+    cursorLogAppendFile(CURSOR_ERR_PATH, CURSOR_ERR_TMP_PATH, CURSOR_ERR_MAX_BYTES,
+                        CURSOR_ERR_KEEP_BYTES, line);
 }
 
 // WiFi 连上后预解析 DNS，减轻首包 HTTPS 立刻 -1
@@ -469,9 +614,15 @@ static bool warmCursorDns(const uint32_t gen) {
 // 单次 HTTPS 尝试；失败时写详细日志
 static int cursorHttpOnce(const char* method, const char* path, const char* post_body,
                           String& response) {
+    if (!cursorHeapOkForHttps()) {
+        cursorLog("http skip lowmem %s %s heap=%u max=%u", method, path, ESP.getFreeHeap(),
+                  ESP.getMaxAllocHeap());
+        return HTTPC_ERROR_TOO_LESS_RAM;
+    }
+
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(20000);
+    client.setTimeout(CURSOR_HTTP_TIMEOUT_MS);
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
     client.setHandshakeTimeout(30);
 #endif
@@ -480,12 +631,12 @@ static int cursorHttpOnce(const char* method, const char* path, const char* post
     http.setReuse(false); // 避免 keep-alive 残留导致后续 -1/-2
     const String url = String(CURSOR_HOST) + path;
     if (!http.begin(client, url)) {
-        cursorLog("http begin fail %s %s wifi=%d heap=%u", method, path, WiFi.status(),
-                  ESP.getFreeHeap());
+        cursorLog("http begin fail %s %s wifi=%d heap=%u max=%u", method, path, WiFi.status(),
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         return HTTPC_ERROR_CONNECTION_REFUSED;
     }
 
-    http.setTimeout(20000);
+    http.setTimeout(CURSOR_HTTP_TIMEOUT_MS);
     http.addHeader("Cookie", g_cookie);
     http.addHeader("Accept", "application/json");
     http.addHeader("User-Agent", "Cardputer/1.0");
@@ -504,16 +655,16 @@ static int cursorHttpOnce(const char* method, const char* path, const char* post
         response = http.getString();
     } else {
         response = "";
-        cursorLog("%s %s code=%d(%s) err=%s wifi=%d rssi=%d heap=%u", method, path, http_code,
+        cursorLog("%s %s code=%d(%s) err=%s wifi=%d rssi=%d heap=%u max=%u", method, path, http_code,
                   cursorHttpErrTag(http_code), HTTPClient::errorToString(http_code).c_str(),
-                  WiFi.status(), WiFi.RSSI(), ESP.getFreeHeap());
+                  WiFi.status(), WiFi.RSSI(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     }
     http.end();
     client.stop();
     return http_code;
 }
 
-// HTTPS 请求（GET / POST），连接类错误自动重试
+// HTTPS 请求（GET / POST），连接类错误自动重试（低内存不重试，避免越重试越碎）
 static bool cursorHttpRequest(const char* method, const char* path, const char* post_body,
                               String& response, int& http_code) {
     http_code = 0;
@@ -532,10 +683,12 @@ static bool cursorHttpRequest(const char* method, const char* path, const char* 
             return true;
         }
 
-        // 仅对传输层负错误重试；4xx/5xx 直接返回
-        if (http_code > 0) {
-            cursorLog("%s %s http=%d len=%u", method, path, http_code,
-                      static_cast<unsigned>(response.length()));
+        // 仅对传输层负错误重试；4xx/5xx / 明确低内存直接返回
+        if (http_code > 0 || http_code == HTTPC_ERROR_TOO_LESS_RAM) {
+            if (http_code > 0) {
+                cursorLog("%s %s http=%d len=%u", method, path, http_code,
+                          static_cast<unsigned>(response.length()));
+            }
             return false;
         }
         if (attempt < CURSOR_HTTP_RETRIES) {
@@ -1099,11 +1252,11 @@ static bool ensureCursorWifi(const uint32_t timeout_ms, const uint32_t gen) {
   }
   const bool ok = WiFi.status() == WL_CONNECTED;
   if (!ok) {
-    cursorLog("wifi fail ssid=%s status=%d heap=%u", cfg.wifi_ssid, WiFi.status(),
-              ESP.getFreeHeap());
+    cursorLog("wifi fail ssid=%s status=%d heap=%u max=%u", cfg.wifi_ssid, WiFi.status(),
+              ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   } else {
-    cursorLog("wifi ok ip=%s rssi=%d heap=%u", WiFi.localIP().toString().c_str(), WiFi.RSSI(),
-              ESP.getFreeHeap());
+    cursorLog("wifi ok ip=%s rssi=%d heap=%u max=%u", WiFi.localIP().toString().c_str(),
+              WiFi.RSSI(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   }
   return ok;
 }
@@ -1123,28 +1276,36 @@ static bool fetchCursorAuthPeriod() {
   String response;
   int code = 0;
 
-  strncpy(g_status_msg, "auth...", sizeof(g_status_msg));
-  g_need_redraw = true;
-  cursorLog("auth start heap=%u wifi=%d rssi=%d", ESP.getFreeHeap(), WiFi.status(), WiFi.RSSI());
-  if (!cursorHttpRequest("GET", "/api/auth/me", nullptr, response, code)) {
-    if (code < 0) {
-      snprintf(g_error_msg, sizeof(g_error_msg), "auth %d/%s", code, cursorHttpErrTag(code));
-    } else {
-      snprintf(g_error_msg, sizeof(g_error_msg), "auth %d", code);
+  // 周期刷新已有 user_id 时跳过 /api/auth/me；FULL 仍校验 token
+  if (g_user_id > 0 && g_fetch_mode != CursorFetchMode::FULL) {
+    cursorLog("auth skip uid=%d heap=%u max=%u", g_user_id, ESP.getFreeHeap(),
+              ESP.getMaxAllocHeap());
+  } else {
+    strncpy(g_status_msg, "auth...", sizeof(g_status_msg));
+    g_need_redraw = true;
+    cursorLog("auth start heap=%u max=%u wifi=%d rssi=%d", ESP.getFreeHeap(),
+              ESP.getMaxAllocHeap(), WiFi.status(), WiFi.RSSI());
+    if (!cursorHttpRequest("GET", "/api/auth/me", nullptr, response, code)) {
+      if (code < 0) {
+        snprintf(g_error_msg, sizeof(g_error_msg), "auth %d/%s", code, cursorHttpErrTag(code));
+      } else {
+        snprintf(g_error_msg, sizeof(g_error_msg), "auth %d", code);
+      }
+      cursorLog("auth fail %s heap=%u max=%u", g_error_msg, ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+      return false;
     }
-    cursorLog("auth fail %s", g_error_msg);
-    return false;
-  }
 
-  JsonDocument me_doc;
-  if (deserializeJson(me_doc, response)) {
-    strncpy(g_error_msg, "auth json err", sizeof(g_error_msg));
-    return false;
-  }
-  g_user_id = me_doc["id"] | 0;
-  if (g_user_id == 0) {
-    strncpy(g_error_msg, "no user id", sizeof(g_error_msg));
-    return false;
+    JsonDocument me_doc;
+    if (deserializeJson(me_doc, response)) {
+      strncpy(g_error_msg, "auth json err", sizeof(g_error_msg));
+      return false;
+    }
+    g_user_id = me_doc["id"] | 0;
+    if (g_user_id == 0) {
+      strncpy(g_error_msg, "no user id", sizeof(g_error_msg));
+      return false;
+    }
   }
 
   strncpy(g_status_msg, "usage...", sizeof(g_status_msg));
@@ -1543,12 +1704,13 @@ static void drawCursorHelpPage() {
 
   y = drawCursorHelpColHeader(manual_x, col_y, screen_w - manual_x, "manual");
   y = drawCursorHelpText(manual_x + 2, y, "Cursor usage viewer");
-  y = drawCursorHelpText(manual_x + 2, y, "Auto/API remaining");
-  y = drawCursorHelpText(manual_x + 2, y, "On-Demand spend");
-  y = drawCursorHelpText(manual_x + 2, y, "latest requests");
-  y = drawCursorHelpText(manual_x + 2, y, "24h/7d/30d charts");
-  y = drawCursorHelpText(manual_x + 2, y, "auto refresh idle");
-  y = drawCursorHelpText(manual_x + 2, y, "WiFi only on fetch");
+  y = drawCursorHelpText(manual_x + 2, y, "Auto/API / On-Demand");
+  y = drawCursorHelpText(manual_x + 2, y, "latest + charts");
+  y = drawCursorHelpText(manual_x + 2, y, "idle auto refresh");
+  y = drawCursorHelpText(manual_x + 2, y, "WiFi hold 1m / off");
+  // 长时间反复连断可能导致堆碎片，TLS 失败显示为 auth -1
+  y = drawCursorHelpText(manual_x + 2, y, "auth -1: low mem");
+  y = drawCursorHelpText(manual_x + 2, y, "r retry / reboot");
 
   drawHelpHintRight("close");
   updateAppHeaderStatus();
@@ -2059,8 +2221,9 @@ static void beginCursorChartFetch(const int days, const bool silent) {
   beginCursorFetch(CursorFetchMode::CHART);
 }
 
-// last 页拉取：软刷新保留旧列表；忙碌时排队，等会话就绪后再拉
-static void beginCursorLastRefresh() {
+// last 页拉取：软刷新保留旧列表；忙碌时排队，等会话就绪后再拉。
+// from_idle：后台周期刷新立即断 WiFi；用户切页/按 r 则与其它页一样空闲 1 分钟再断。
+static void beginCursorLastRefresh(const bool from_idle) {
   g_last_refreshing = true;
   if (g_task_running || g_fetch_pending || g_user_id <= 0 || g_cookie[0] == '\0') {
     g_want_last_fetch = true;
@@ -2070,7 +2233,8 @@ static void beginCursorLastRefresh() {
   g_want_last_fetch = false;
   invalidateCursorFetch();
   g_fetch_mode = CursorFetchMode::LAST;
-  g_silent_fetch = true;
+  g_silent_fetch = true; // UI 仍软刷新
+  g_wifi_hold_after_fetch = !from_idle;
   g_fetch_pending = true;
   g_queue_other_chart = false;
   g_error_msg[0] = '\0';
@@ -2083,7 +2247,7 @@ static void cursorGotoPage(const CursorPage page) {
 
   // last：切到该页再请求（进入 App 不预拉）
   if (g_page == CursorPage::LAST) {
-    beginCursorLastRefresh();
+    beginCursorLastRefresh(false);
     return;
   }
 
@@ -2176,10 +2340,12 @@ void leaveCursorApp() {
   g_last_countdown_sec = -1;
   g_status_msg[0] = '\0';
   invalidateCursorFetch();
+  g_wifi_hold_for_idle = false;
+  g_wifi_hold_after_fetch = false;
   // 先断网加速卡在 HTTPS / WiFi begin 上的 task 退出
   WiFi.disconnect(true);
-  // 等够 WiFi 超时 + 余量，避免僵尸 task 干扰下次进 App
-  waitCursorFetchTaskDone(CURSOR_WIFI_TIMEOUT_MS + 2000);
+  // 等够 HTTPS 超时 + 余量，避免僵尸 task 与 Config 抢 WiFi
+  waitCursorFetchTaskDone(CURSOR_HTTP_TIMEOUT_MS + 2000);
   wakeCursorDisplay(false);
   releaseCursorWifi();
   // 射频冷却，降低紧接着再 enter 时 begin 立刻失败概率
@@ -2213,6 +2379,23 @@ static void scheduleCursorFetchTask() {
   if (g_task_running || !g_fetch_pending) {
     return;
   }
+  // task 栈约 32KB，堆不够时创建成功也会立刻 TLS -1
+  if (ESP.getFreeHeap() < CURSOR_TASK_MIN_HEAP ||
+      ESP.getMaxAllocHeap() < CURSOR_HTTPS_MIN_MAXALLOC) {
+    const bool silent = g_silent_fetch;
+    cursorLog("task skip lowmem heap=%u max=%u silent=%d", ESP.getFreeHeap(),
+              ESP.getMaxAllocHeap(), silent ? 1 : 0);
+    g_fetch_pending = false;
+    g_silent_fetch = false;
+    g_last_refreshing = false;
+    // 静默周期刷新失败不打断 READY；用户主动拉取则提示 lowmem
+    if (!silent) {
+      g_phase = CursorPhase::ERROR;
+      strncpy(g_error_msg, "auth lowmem", sizeof(g_error_msg));
+    }
+    g_need_redraw = true;
+    return;
+  }
   g_task_running = true;
   if (xTaskCreate(cursorFetchTaskFn, "cursor_fetch", CURSOR_FETCH_STACK, nullptr, 1,
                   &g_fetch_task) != pdPASS) {
@@ -2238,11 +2421,14 @@ static void cursorFetchTaskFn(void* /*arg*/) {
   const uint32_t gen = g_fetch_gen;
   const CursorFetchMode mode = g_fetch_mode;
   const bool silent = g_silent_fetch;
+  // Last 用户触发：UI silent 但 WiFi 仍走宽限
+  const bool hold_wifi = !silent || g_wifi_hold_after_fetch;
+  g_wifi_hold_after_fetch = false;
   const int chart_days = g_chart_fetch_days;
 
   auto aborted = [gen]() -> bool { return gen != g_fetch_gen; };
 
-  auto finish_ok = [aborted]() {
+  auto finish_ok = [aborted, hold_wifi]() {
     if (aborted()) {
       return;
     }
@@ -2256,11 +2442,12 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     if (aborted()) {
       return;
     }
-    finishCursorWifi();
+    // 用户拉取 / Last 用户触发：空闲 1 分钟再断；周期静默：立即断
+    finishCursorWifi(hold_wifi);
     g_need_redraw = true;
   };
 
-  auto finish_fail = [aborted, silent](const char* err) {
+  auto finish_fail = [aborted, silent, hold_wifi](const char* err) {
     if (aborted()) {
       return;
     }
@@ -2278,7 +2465,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     if (aborted()) {
       return;
     }
-    finishCursorWifi();
+    finishCursorWifi(hold_wifi);
   };
 
   // --- WiFi + NTP ---
@@ -2309,6 +2496,22 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     endCursorFetchTask();
     return;
   }
+  // WiFi 连接后堆可能已不足，静默刷新直接跳过，避免 -1/conn 连打三次
+  if (!cursorHeapOkForHttps()) {
+    cursorLog("https abort lowmem heap=%u max=%u silent=%d", ESP.getFreeHeap(),
+              ESP.getMaxAllocHeap(), silent ? 1 : 0);
+    if (!silent) {
+      finish_fail("auth lowmem");
+    } else if (!aborted()) {
+      g_fetch_pending = false;
+      g_silent_fetch = false;
+      g_last_refreshing = false;
+      finishCursorWifi(hold_wifi);
+      g_need_redraw = true;
+    }
+    endCursorFetchTask();
+    return;
+  }
 
   // --- Auth + period（图表/last 且已有 user_id 可跳过）---
   const bool need_auth =
@@ -2327,7 +2530,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
           g_fetch_pending = false;
           g_silent_fetch = false;
           g_last_refreshing = false;
-          finishCursorWifi();
+          finishCursorWifi(hold_wifi);
           g_need_redraw = true;
         }
       }
@@ -2383,7 +2586,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
       if (!aborted()) {
         g_fetch_pending = false;
         g_silent_fetch = false;
-        finishCursorWifi();
+        finishCursorWifi(hold_wifi);
         if (g_phase != CursorPhase::ERROR) {
           g_phase = CursorPhase::READY;
         }
@@ -2435,7 +2638,7 @@ static void cursorFetchTaskFn(void* /*arg*/) {
     if (!aborted()) {
       g_fetch_pending = false;
       g_silent_fetch = false;
-      finishCursorWifi();
+      finishCursorWifi(hold_wifi);
       if (g_phase != CursorPhase::ERROR) {
         g_phase = CursorPhase::READY;
       }
@@ -2494,11 +2697,16 @@ void updateCursorApp() {
   // 切到 last 时若 period/auth 尚未完成，就绪后再拉列表
   if (g_want_last_fetch && g_page == CursorPage::LAST && g_user_id > 0 &&
       g_cookie[0] != '\0' && !g_task_running && !g_fetch_pending) {
-    beginCursorLastRefresh();
+    beginCursorLastRefresh(false);
   }
 
+  // 先调度空闲刷新（可复用宽限期内仍连着的 WiFi），再考虑到期断开
   if (!g_fetch_pending && !g_task_running && shouldScheduleCursorRefresh()) {
     triggerCursorIdleRefresh();
+  } else if (g_wifi_hold_for_idle && !g_task_running && !g_fetch_pending &&
+             (millis() - g_last_activity_ms) >= CURSOR_IDLE_TRIGGER_MS) {
+    // 用户操作后空闲 1 分钟：无刷新任务时关掉 WiFi
+    cursorWifiPowerOff();
   }
 
   // 进入/退出 1s 慢循环时更新右上角蓝点
@@ -2609,7 +2817,7 @@ void handleCursorApp(const Keyboard_Class::KeysState& status) {
       return;
     }
     if (g_page == CursorPage::LAST) {
-      beginCursorLastRefresh();
+      beginCursorLastRefresh(false);
       return;
     }
     beginCursorFetch(CursorFetchMode::FULL);

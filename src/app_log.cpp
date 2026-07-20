@@ -9,7 +9,8 @@
 #include <cstdio>
 #include <cstring>
 
-static constexpr const char* LOG_PATH = "/cursor.log";
+static constexpr const char* LOG_PATH_ERR = "/cursor.err"; // 错误专用，重启后优先看这个
+static constexpr const char* LOG_PATH_FULL = "/cursor.log";
 static constexpr size_t LOG_BUF_MAX = 12288;
 static constexpr int LOG_LINE_MAX = 400;   // 源日志行
 static constexpr int LOG_DISP_MAX = 800;   // 换行后显示行
@@ -35,6 +36,7 @@ static int g_page = 0;
 static bool g_help_visible = false;
 static bool g_loaded = false;
 static bool g_empty = true;
+static bool g_view_err = true; // 默认 Err；f 切换完整 log
 
 static int logContentHeight() {
     return M5Cardputer.Display.height() - APP_CONTENT_Y - LOG_HINT_H - 2;
@@ -159,6 +161,10 @@ static void rebuildDispRows() {
     }
 }
 
+static const char* currentLogPath() {
+    return g_view_err ? LOG_PATH_ERR : LOG_PATH_FULL;
+}
+
 // 从 LittleFS 加载日志并拆行
 static void loadLogFile() {
     g_line_count = 0;
@@ -168,11 +174,12 @@ static void loadLogFile() {
     g_loaded = true;
     g_empty = true;
 
-    if (!LittleFS.begin(false) || !LittleFS.exists(LOG_PATH)) {
+    const char* path = currentLogPath();
+    if (!LittleFS.begin(false) || !LittleFS.exists(path)) {
         return;
     }
 
-    File f = LittleFS.open(LOG_PATH, "r");
+    File f = LittleFS.open(path, "r");
     if (!f) {
         return;
     }
@@ -271,13 +278,14 @@ static void drawLogHelpPage() {
     y = drawLogHelpBadge(2, y, "[ ]", "page");
     y = drawLogHelpArrows(2, y, "page");
     y = drawLogHelpKey(2, y, 'r', "reload");
+    y = drawLogHelpKey(2, y, 'f', "err/full");
     y = drawLogHelpKey(2, y, 'h', "help");
 
     y = drawLogHelpColHeader(manual_x, col_y, screen_w - manual_x, "manual");
-    y = drawLogHelpText(manual_x + 2, y, "Error / diag log");
-    y = drawLogHelpText(manual_x + 2, y, "file: /cursor.log");
-    y = drawLogHelpText(manual_x + 2, y, "also: Config web");
-    y = drawLogHelpText(manual_x + 2, y, "/cursor-log");
+    y = drawLogHelpText(manual_x + 2, y, "survives reboot");
+    y = drawLogHelpText(manual_x + 2, y, "Err: /cursor.err");
+    y = drawLogHelpText(manual_x + 2, y, "Full: /cursor.log");
+    y = drawLogHelpText(manual_x + 2, y, "web: /cursor-err");
     y = drawLogHelpText(manual_x + 2, y, "entry: Fn+i");
 
     drawHelpHintRight("close");
@@ -296,11 +304,17 @@ static void drawLogHints() {
     M5Cardputer.Display.setCursor(cx, hint_y);
     M5Cardputer.Display.print("page ");
     cx = M5Cardputer.Display.getCursorX();
-    cx += drawArrowBadge(cx, hint_y, 1);
+    cx += drawKeyBadge(cx, hint_y, 'f', 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, hint_y);
-    M5Cardputer.Display.print("page");
+    M5Cardputer.Display.print(g_view_err ? "full " : "err ");
+    cx = M5Cardputer.Display.getCursorX();
+    cx += drawKeyBadge(cx, hint_y, 'r', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, hint_y);
+    M5Cardputer.Display.print("reload");
 
     drawHelpHintRight("help");
 }
@@ -360,7 +374,7 @@ static void drawDispRow(const int x, const int y, const LogDispRow& row) {
 }
 
 static void drawLogContent() {
-    char accent[12];
+    char accent[16];
     const int pages = logPageCount();
     if (g_page >= pages) {
         g_page = pages - 1;
@@ -369,7 +383,8 @@ static void drawLogContent() {
         g_page = 0;
     }
     snprintf(accent, sizeof(accent), "%d/%d", g_page + 1, pages);
-    beginAppScreenAccent("Log ", accent, APP_COLOR_LABEL);
+    // Err = 崩溃后优先看的错误轨；Full = 完整诊断
+    beginAppScreenAccent(g_view_err ? "Err " : "Log ", accent, APP_COLOR_LABEL);
 
     int y = APP_CONTENT_Y;
     M5Cardputer.Display.setFont(nullptr);
@@ -378,7 +393,11 @@ static void drawLogContent() {
     if (!g_loaded || g_empty) {
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
-        M5Cardputer.Display.print("(empty) open Cursor App to generate log");
+        if (g_view_err) {
+            M5Cardputer.Display.print("(empty err) press f for full log");
+        } else {
+            M5Cardputer.Display.print("(empty) open Cursor App to generate");
+        }
         drawLogHints();
         updateAppHeaderStatus();
         return;
@@ -409,6 +428,11 @@ static void logPageNav(const int delta) {
 
 void enterLogApp() {
     g_help_visible = false;
+    // 有错误轨则默认 Err，否则退回完整 log
+    g_view_err = true;
+    if (LittleFS.begin(false) && !LittleFS.exists(LOG_PATH_ERR)) {
+        g_view_err = false;
+    }
     loadLogFile();
     drawLogContent();
 }
@@ -427,6 +451,14 @@ void handleLogApp(const Keyboard_Class::KeysState& status) {
     if (key == "h") {
         g_help_visible = true;
         drawLogHelpPage();
+        return;
+    }
+
+    if (key == "f") {
+        // 切换 Err / 完整 log（崩溃后不用开 Config）
+        g_view_err = !g_view_err;
+        loadLogFile();
+        drawLogContent();
         return;
     }
 
