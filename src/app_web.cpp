@@ -7,9 +7,14 @@
 #include "app_screenshot.h"
 #include <FS.h>
 #include <LittleFS.h>
+#include <SD.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
+#include <sys/stat.h>
+#include <time.h>
 
 static constexpr const char* AP_SSID = "cardputer";
 static constexpr const char* AP_PASS = "cardputer";
@@ -95,7 +100,8 @@ static const char* DEFAULT_CONFIG = R"({
   "brightness": 30,
   "sound": {
     "time_key": true,
-    "mijia_on_off": true
+    "mijia_on_off": true,
+    "volume": 25
   },
   "time": {
     "default": "up"
@@ -289,6 +295,53 @@ static void sendHtmlPage(const String& body) {
               ".sys-grid .bright-row input[type=range]{flex:1;min-width:0;padding:0}"
               ".sys-grid .bright-val{min-width:2.5em;font-variant-numeric:tabular-nums;"
               "color:var(--fg)}"
+              /* TF 文件管理：简单表格列表 */
+              ".fm-crumb{display:flex;flex-wrap:wrap;align-items:center;gap:4px 2px;"
+              "font-size:13px;margin:0 0 12px;padding:8px 10px;border:1px solid var(--tab-bd);"
+              "border-radius:6px;background:var(--td-bg);word-break:break-all}"
+              ".fm-crumb a{color:var(--link);text-decoration:none;padding:2px 4px;border-radius:4px}"
+              ".fm-crumb a:hover{background:var(--td-hover)}"
+              ".fm-crumb .sep{color:var(--hint);padding:0 2px}"
+              ".fm-crumb .cur{color:var(--fg-h);font-weight:600;padding:2px 4px}"
+              ".fm-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}"
+              ".fm-mkdir{display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex:1;min-width:220px;"
+              "margin:0;padding:8px 10px;border:1px solid var(--tab-bd);border-radius:6px;"
+              "background:var(--td-bg)}"
+              ".fm-mkdir label{margin:0;color:var(--hint);font-size:12px;white-space:nowrap}"
+              ".fm-mkdir input[type=text]{flex:1;min-width:120px;margin:0;width:auto}"
+              ".fm-mkdir button{margin:0}"
+              ".fm-count{font-size:13px;color:var(--hint);margin-left:auto}"
+              ".fm-flash{margin:0 0 12px;padding:8px 12px;border-radius:6px;font-size:13px}"
+              ".fm-flash.ok{background:#1b3d2f;color:#81c784;border:1px solid #2e5a45}"
+              ".fm-flash.err{background:#3d1b1b;color:#ff8a80;border:1px solid #5c3333}"
+              "@media(prefers-color-scheme:light){"
+              ".fm-flash.ok{background:#e8f5e9;color:#2e7d32;border-color:#a5d6a7}"
+              ".fm-flash.err{background:#ffebee;color:#c62828;border-color:#ef9a9a}}"
+              "table.fm-table{width:100%;min-width:560px;border-collapse:collapse;table-layout:fixed}"
+              ".fm-table th,.fm-table td{border:1px solid var(--tab-bd);padding:6px 8px;"
+              "vertical-align:middle;background:var(--td-bg);font-size:13px}"
+              ".fm-table th{background:var(--th-bg);font-size:12px;font-weight:600;text-align:left;"
+              "color:var(--fg);white-space:nowrap}"
+              ".fm-table tr:nth-child(even) td{background:var(--td-alt)}"
+              ".fm-table tr:hover td{background:var(--td-hover)!important}"
+              ".fm-table .col-name{width:36%}"
+              ".fm-table .col-size{width:12%;white-space:nowrap;font-variant-numeric:tabular-nums;"
+              "color:var(--hint)}"
+              ".fm-table .col-time{width:18%;white-space:nowrap;font-variant-numeric:tabular-nums;"
+              "font-size:12px;color:var(--hint)}"
+              ".fm-table .col-act{width:16%;white-space:nowrap}"
+              ".fm-table a.name{color:var(--link);text-decoration:none;word-break:break-all}"
+              ".fm-table a.name:hover{text-decoration:underline}"
+              ".fm-table .tag{display:inline-block;margin-right:4px;padding:1px 5px;border-radius:3px;"
+              "font-size:10px;font-weight:700;letter-spacing:.02em;color:var(--hint);"
+              "background:var(--code-bg);vertical-align:middle}"
+              ".fm-table .tag.dir{color:#b8860b}"
+              ".fm-table .acts{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center}"
+              ".fm-table .acts form{display:inline;margin:0}"
+              ".fm-table .acts .btn,.fm-table .acts button{margin:0;padding:4px 8px;font-size:12px}"
+              ".fm-empty{text-align:center;padding:28px 12px;border:1px dashed var(--tab-bd);"
+              "border-radius:6px;color:var(--hint);font-size:13px;background:var(--td-bg)}"
+              ".fm-empty strong{display:block;color:var(--fg-h);margin-bottom:4px;font-size:14px}"
               "</style></head><body>");
     html += body;
     html += F("</body></html>");
@@ -307,6 +360,7 @@ static void handleFormRoot() {
               "<p class='nav'><a href='/advanced'>高级 JSON</a> · "
               "<a href='/example'>示例</a> · "
               "<a href='/shots'>截图</a> · "
+              "<a href='/files'>TF 文件</a> · "
               "<a href='/cursor-err'>Cursor 错误</a> · "
               "<a href='/cursor-log'>Cursor 日志</a></p></div></div></div>"
               "<form id='save-form' method='POST' action='/save'>"
@@ -408,6 +462,11 @@ static void handleFormRoot() {
               "<label class='check-row'>"
               "<input id='sys-sound-mijia' type='checkbox'>"
               "<span>米家开/关提示音</span></label>"
+              "<label>喇叭音量（0~100）"
+              "<div class='bright-row'>"
+              "<input id='sys-sound-volume' type='range' min='0' max='100' step='1'>"
+              "<span class='bright-val' id='sys-sound-volume-val'>25</span>"
+              "</div></label>"
               "<label>Time 默认模块"
               "<select id='sys-time-default'>"
               "<option value='up'>Uptime</option>"
@@ -461,7 +520,7 @@ static void handleFormRoot() {
     body += F("];");
     body += F(
         "let cfg={wifi:{ssid:'',password:''},devices:[],device_groups:[],cursor:{token:''},"
-        "timezone:'CST-8',brightness:30,sound:{time_key:true,mijia_on_off:true},"
+        "timezone:'CST-8',brightness:30,sound:{time_key:true,mijia_on_off:true,volume:25},"
         "time:{default:'up'},Infrared:{default:'tv',tv_brand:'samsung',ac_brand:'midea'}};"
         "function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/\"/g,'&quot;')"
         ".replace(/</g,'&lt;');}"
@@ -527,6 +586,8 @@ static void handleFormRoot() {
         "if(!cfg.sound)cfg.sound={};"
         "cfg.sound.time_key=document.getElementById('sys-sound-time-key').checked;"
         "cfg.sound.mijia_on_off=document.getElementById('sys-sound-mijia').checked;"
+        "let v=+document.getElementById('sys-sound-volume').value;if(isNaN(v))v=25;"
+        "if(v<0)v=0;if(v>100)v=100;cfg.sound.volume=v;"
         "if(!cfg.time)cfg.time={};"
         "cfg.time.default=document.getElementById('sys-time-default').value||'up';"
         "delete cfg.infrared;"
@@ -602,7 +663,7 @@ static void handleFormRoot() {
         "p.classList.toggle('active',p.id==='panel-'+id);});}"
         "function init(){try{cfg=JSON.parse(document.getElementById('cfg-data').textContent);}"
         "catch(e){cfg={wifi:{ssid:'',password:''},devices:[],device_groups:[],cursor:{token:''},"
-        "timezone:'CST-8',brightness:30,sound:{time_key:true,mijia_on_off:true},"
+        "timezone:'CST-8',brightness:30,sound:{time_key:true,mijia_on_off:true,volume:25},"
         "time:{default:'up'},Infrared:{default:'tv',tv_brand:'samsung',ac_brand:'midea'}};} "
         "if(!cfg.wifi)cfg.wifi={ssid:'',password:''};"
         "if(!cfg.devices)cfg.devices=[];"
@@ -615,6 +676,8 @@ static void handleFormRoot() {
         "if(!cfg.sound)cfg.sound={};"
         "if(cfg.sound.time_key==null)cfg.sound.time_key=true;"
         "if(cfg.sound.mijia_on_off==null)cfg.sound.mijia_on_off=true;"
+        "let svol=cfg.sound.volume;if(svol==null||isNaN(+svol))svol=25;"
+        "svol=+svol;if(svol<0)svol=0;if(svol>100)svol=100;cfg.sound.volume=svol;"
         "if(!cfg.time)cfg.time={};"
         "if(!cfg.time.default)cfg.time.default='up';"
         "if(!cfg.Infrared&&cfg.infrared){cfg.Infrared=cfg.infrared;delete cfg.infrared;}"
@@ -630,12 +693,16 @@ static void handleFormRoot() {
         "document.getElementById('sys-brightness-val').textContent=String(cfg.brightness);"
         "document.getElementById('sys-sound-time-key').checked=!!cfg.sound.time_key;"
         "document.getElementById('sys-sound-mijia').checked=!!cfg.sound.mijia_on_off;"
+        "document.getElementById('sys-sound-volume').value=String(cfg.sound.volume);"
+        "document.getElementById('sys-sound-volume-val').textContent=String(cfg.sound.volume);"
         "document.getElementById('sys-time-default').value=cfg.time.default||'up';"
         "document.getElementById('sys-ir-default').value=cfg.Infrared.default||'tv';"
         "document.getElementById('sys-ir-tv-brand').value=cfg.Infrared.tv_brand||'samsung';"
         "document.getElementById('sys-ir-ac-brand').value=cfg.Infrared.ac_brand||'midea';"
         "document.getElementById('sys-brightness').oninput=e=>{"
         "document.getElementById('sys-brightness-val').textContent=e.target.value;};"
+        "document.getElementById('sys-sound-volume').oninput=e=>{"
+        "document.getElementById('sys-sound-volume-val').textContent=e.target.value;};"
         "render();"
         "document.querySelectorAll('.tab').forEach(t=>{"
         "t.onclick=()=>switchTab(t.dataset.tab);});"
@@ -686,6 +753,7 @@ static void handleAdvancedRoot() {
               "<div class='brand-text'><h1>Cardputer Config</h1>"
               "<p class='nav'><a href='/'>← 返回主页</a> · "
               "<a href='/shots'>截图</a> · "
+              "<a href='/files'>TF 文件</a> · "
               "<a href='/example'>示例格式</a></p></div></div></div>"
               "<h2>高级 JSON 编辑</h2>"
               "<form method='POST' action='/save'>"
@@ -781,27 +849,111 @@ static String formatBytesHuman(const size_t n) {
     return String(buf);
 }
 
-// 截图列表页：预览 + Flash 空间；Fn+s 存到 /shot
+// 文件时间格式化（调用方需已设置 TZ）；无效则 —
+static String formatFileTime(const time_t t) {
+    if (t <= 0) {
+        return String("—");
+    }
+    struct tm local_tm;
+    if (localtime_r(&t, &local_tm) == nullptr) {
+        return String("—");
+    }
+    char buf[24];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &local_tm);
+    return String(buf);
+}
+
+// 通过 VFS stat 取修改/创建时间（挂载点 /sd）
+static void fmReadTimes(const String& sd_path, time_t& mtime, time_t& ctime_out) {
+    mtime = 0;
+    ctime_out = 0;
+    String vfs = "/sd";
+    if (sd_path == "/") {
+        vfs += "/";
+    } else {
+        vfs += sd_path;
+    }
+    struct stat st;
+    if (stat(vfs.c_str(), &st) != 0) {
+        return;
+    }
+    mtime = st.st_mtime;
+    ctime_out = st.st_ctime;
+}
+
+// enumScreenshots 回调：往 HTML 网格追加一张
+static void appendShotCard(const char* storage, const char* basename, const size_t size, void* user) {
+    String* body = static_cast<String*>(user);
+    *body += F("<div class='shot-card'>"
+               "<a class='thumb' href='/shot/");
+    *body += basename;
+    *body += F("' target='_blank' rel='noopener'>"
+               "<img src='/shot/");
+    *body += basename;
+    *body += F("' alt='");
+    *body += basename;
+    *body += F("' loading='lazy'></a>"
+               "<div class='meta'><a href='/shot/");
+    *body += basename;
+    *body += F("?dl=1' download='");
+    *body += basename;
+    *body += F("'>");
+    *body += basename;
+    *body += F("</a><div class='size'>");
+    *body += storage;
+    *body += F(" · ");
+    *body += formatBytesHuman(size);
+    *body += F("</div></div></div>");
+}
+
+// 截图列表页：预览；Fn+s 优先 TF，否则 Flash
 static void handleShotsList() {
     size_t fs_total = 0;
     size_t fs_used = 0;
     size_t fs_free = 0;
     getFlashDataSpace(&fs_total, &fs_used, &fs_free);
+    size_t sd_total = 0;
+    size_t sd_used = 0;
+    size_t sd_free = 0;
+    getSdDataSpace(&sd_total, &sd_used, &sd_free);
+    const bool sd_ok = isScreenshotSdReady();
     const int shot_count = countScreenshots();
     const size_t shot_bytes = screenshotsUsedBytes();
     const int used_pct =
         (fs_total > 0) ? static_cast<int>((fs_used * 100u) / fs_total) : 0;
+    const int sd_pct =
+        (sd_total > 0) ? static_cast<int>((sd_used * 100u) / sd_total) : 0;
 
     String body;
     body.reserve(4096);
     body += F("<div class='topbar'><div class='brand'>"
               "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
               "<div class='brand-text'><h1>截图</h1>"
-              "<p class='nav'><a href='/'>← 返回主页</a></p></div></div></div>"
-              "<p class='hint'>任意界面按 <code>Fn+s</code> 截图到 Flash；"
+              "<p class='nav'><a href='/'>← 返回主页</a> · "
+              "<a href='/files'>TF 文件</a></p></div></div></div>"
+              "<p class='hint'>任意界面按 <code>Fn+s</code> 截图："
+              "有 TF 卡优先存卡，否则存 Flash；"
               "文件名 <code>app_&lt;界面&gt;_001.bmp</code> 序号递增。"
               "本页仅在 Config 联网时可预览/下载。</p>"
-              "<div class='shot-space'>"
+              "<p class='hint'>新截图将存到：<strong>");
+    body += sd_ok ? F("TF 卡") : F("Flash（LittleFS）");
+    body += F("</strong></p>");
+
+    if (sd_ok) {
+        body += F("<div class='shot-space'>"
+                  "<div><strong>TF 卡（SD）</strong></div>"
+                  "<div>总容量：");
+        body += formatBytesHuman(sd_total);
+        body += F(" · 已占用：");
+        body += formatBytesHuman(sd_used);
+        body += F(" · 剩余：");
+        body += formatBytesHuman(sd_free);
+        body += F("</div><div class='bar'><i style='width:");
+        body += String(sd_pct);
+        body += F("%'></i></div></div>");
+    }
+
+    body += F("<div class='shot-space'>"
               "<div><strong>Flash Data（LittleFS）</strong></div>"
               "<div>总容量：");
     body += formatBytesHuman(fs_total);
@@ -809,7 +961,7 @@ static void handleShotsList() {
     body += formatBytesHuman(fs_used);
     body += F(" · 剩余：");
     body += formatBytesHuman(fs_free);
-    body += F("</div><div>截图：");
+    body += F("</div><div>截图合计：");
     body += String(shot_count);
     body += F(" 张 · 占用 ");
     body += formatBytesHuman(shot_bytes);
@@ -825,39 +977,7 @@ static void handleShotsList() {
                   "<span class='count'>共 ");
         body += String(shot_count);
         body += F(" 张</span></div><div class='shot-grid'>");
-
-        File dir = LittleFS.open(SHOT_DIR);
-        if (dir && dir.isDirectory()) {
-            File f = dir.openNextFile();
-            while (f) {
-                const char* name = f.name();
-                const char* slash = strrchr(name, '/');
-                const char* base = slash != nullptr ? slash + 1 : name;
-                if (strncmp(base, "app_", 4) == 0 && strstr(base, ".bmp") != nullptr) {
-                    const size_t sz = static_cast<size_t>(f.size());
-                    body += F("<div class='shot-card'>"
-                              "<a class='thumb' href='/shot/");
-                    body += base;
-                    body += F("' target='_blank' rel='noopener'>"
-                              "<img src='/shot/");
-                    body += base;
-                    body += F("' alt='");
-                    body += base;
-                    body += F("' loading='lazy'></a>"
-                              "<div class='meta'><a href='/shot/");
-                    body += base;
-                    body += F("?dl=1' download='");
-                    body += base;
-                    body += F("'>");
-                    body += base;
-                    body += F("</a><div class='size'>");
-                    body += formatBytesHuman(sz);
-                    body += F("</div></div></div>");
-                }
-                f = dir.openNextFile();
-            }
-            dir.close();
-        }
+        enumScreenshots(appendShotCard, &body);
         body += F("</div>");
     } else {
         body += F("<p class='hint'>暂无截图。到任意界面按 Fn+s 后再刷新本页。</p>");
@@ -875,14 +995,619 @@ static void handleShotsClear() {
     sendHtmlPage(body);
 }
 
-// 提供 /shot/app_*.bmp：默认内联预览；?dl=1 强制下载
-static bool tryServeShotFile() {
-    const String uri = g_server.uri();
-    if (!isSafeShotPath(uri)) {
+// ===== TF 卡文件管理（仅 Config Web）=====
+static constexpr int FM_MAX_ENTRIES = 150;
+static constexpr size_t FM_PATH_MAX = 180;
+
+struct FmEntry {
+    char name[64];
+    bool is_dir;
+    size_t size;
+    time_t mtime; // 修改时间
+    time_t ctime; // 创建/状态变更时间（FAT 上常与 mtime 相同）
+};
+
+// HTML 文本转义（属性/正文）
+static String escapeHtmlText(const String& text) {
+    String out;
+    out.reserve(text.length() + 8);
+    for (size_t i = 0; i < text.length(); i++) {
+        const char c = text[i];
+        if (c == '&') {
+            out += F("&amp;");
+        } else if (c == '<') {
+            out += F("&lt;");
+        } else if (c == '>') {
+            out += F("&gt;");
+        } else if (c == '"') {
+            out += F("&quot;");
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
+// 路径 query 编码（保留 /）
+static String urlEncodePath(const String& path) {
+    String out;
+    out.reserve(path.length() * 2);
+    for (size_t i = 0; i < path.length(); i++) {
+        const unsigned char c = static_cast<unsigned char>(path[i]);
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '/' || c == '.' || c == '_' || c == '-' || c == '~') {
+            out += static_cast<char>(c);
+        } else {
+            char hex[8];
+            snprintf(hex, sizeof(hex), "%%%02X", c);
+            out += hex;
+        }
+    }
+    return out;
+}
+
+// 规范化 SD 绝对路径：禁止 ..、空段过多、超长
+static bool sanitizeSdPath(const String& in, String& out) {
+    String raw = in;
+    raw.trim();
+    if (raw.isEmpty()) {
+        raw = "/";
+    }
+    if (raw[0] != '/') {
+        raw = String("/") + raw;
+    }
+    // 注意：String::indexOf('\0') 会命中结尾 NUL，不能用来检测内嵌空字符
+    if (raw.indexOf('\\') >= 0) {
         return false;
     }
-    File file = LittleFS.open(uri, "r");
-    if (!file) {
+    // 折叠 //，拒绝 .
+    String norm = "/";
+    int start = 1;
+    while (start <= static_cast<int>(raw.length())) {
+        int slash = raw.indexOf('/', start);
+        if (slash < 0) {
+            slash = static_cast<int>(raw.length());
+        }
+        const String seg = raw.substring(start, slash);
+        if (seg.length() > 0) {
+            if (seg == ".." || seg == ".") {
+                return false;
+            }
+            if (norm.length() > 1) {
+                norm += "/";
+            }
+            norm += seg;
+        }
+        start = slash + 1;
+        if (slash >= static_cast<int>(raw.length())) {
+            break;
+        }
+    }
+    if (norm.length() > FM_PATH_MAX) {
+        return false;
+    }
+    out = norm;
+    return true;
+}
+
+static const char* fmBaseName(const char* name) {
+    const char* slash = strrchr(name, '/');
+    return slash != nullptr ? slash + 1 : name;
+}
+
+static const char* mimeForFileName(const char* name) {
+    if (name == nullptr) {
+        return "application/octet-stream";
+    }
+    const char* dot = strrchr(name, '.');
+    if (dot == nullptr) {
+        return "application/octet-stream";
+    }
+    char ext[8];
+    size_t n = 0;
+    for (const char* p = dot + 1; *p != '\0' && n + 1 < sizeof(ext); ++p) {
+        ext[n++] = static_cast<char>(tolower(static_cast<unsigned char>(*p)));
+    }
+    ext[n] = '\0';
+    if (strcmp(ext, "bmp") == 0) {
+        return "image/bmp";
+    }
+    if (strcmp(ext, "png") == 0) {
+        return "image/png";
+    }
+    if (strcmp(ext, "jpg") == 0 || strcmp(ext, "jpeg") == 0) {
+        return "image/jpeg";
+    }
+    if (strcmp(ext, "gif") == 0) {
+        return "image/gif";
+    }
+    if (strcmp(ext, "webp") == 0) {
+        return "image/webp";
+    }
+    if (strcmp(ext, "txt") == 0 || strcmp(ext, "log") == 0 || strcmp(ext, "json") == 0 ||
+        strcmp(ext, "csv") == 0 || strcmp(ext, "md") == 0) {
+        return "text/plain; charset=utf-8";
+    }
+    if (strcmp(ext, "wav") == 0) {
+        return "audio/wav";
+    }
+    if (strcmp(ext, "mp3") == 0) {
+        return "audio/mpeg";
+    }
+    return "application/octet-stream";
+}
+
+// 拼父目录；根目录仍为 /
+static String fmParentPath(const String& path) {
+    if (path.length() <= 1) {
+        return "/";
+    }
+    const int slash = path.lastIndexOf('/');
+    if (slash <= 0) {
+        return "/";
+    }
+    return path.substring(0, slash);
+}
+
+// 拼接子路径
+static String fmJoinPath(const String& dir, const char* name) {
+    if (dir == "/") {
+        return String("/") + name;
+    }
+    return dir + "/" + name;
+}
+
+// 目录项比较：目录优先，再按名
+static int fmEntryCmp(const void* a, const void* b) {
+    const FmEntry* ea = static_cast<const FmEntry*>(a);
+    const FmEntry* eb = static_cast<const FmEntry*>(b);
+    if (ea->is_dir != eb->is_dir) {
+        return ea->is_dir ? -1 : 1;
+    }
+    return strcasecmp(ea->name, eb->name);
+}
+
+// 合法单层文件/文件夹名（禁止路径分隔与控制字符）
+static bool fmValidEntryName(const String& name) {
+    if (name.isEmpty() || name.length() > 48) {
+        return false;
+    }
+    if (name == "." || name == "..") {
+        return false;
+    }
+    for (size_t i = 0; i < name.length(); i++) {
+        const unsigned char c = static_cast<unsigned char>(name[i]);
+        if (c < 32 || c == '/' || c == '\\' || c == '"' || c == '\'' || c == '<' || c == '>') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 递归删除目录（先清子项再 rmdir；深度上限防爆栈）
+static bool fmRemoveTree(const String& path, const int depth = 0) {
+    if (depth > 16 || path == "/") {
+        return false;
+    }
+    File probe = SD.open(path);
+    if (!probe) {
+        return false;
+    }
+    const bool is_dir = probe.isDirectory();
+    probe.close();
+    if (!is_dir) {
+        return SD.remove(path);
+    }
+
+    // 每次删一个子项后重开目录，避免迭代器失效
+    for (;;) {
+        File dir = SD.open(path);
+        if (!dir || !dir.isDirectory()) {
+            if (dir) {
+                dir.close();
+            }
+            return false;
+        }
+        File f = dir.openNextFile();
+        while (f) {
+            const char* base = fmBaseName(f.name());
+            if (base[0] == '\0' || (base[0] == '.' && (base[1] == '\0' || base[1] == '.'))) {
+                f = dir.openNextFile();
+                continue;
+            }
+            break;
+        }
+        if (!f) {
+            dir.close();
+            break;
+        }
+        const char* base = fmBaseName(f.name());
+        const String child = fmJoinPath(path, base);
+        const bool child_dir = f.isDirectory();
+        f.close();
+        dir.close();
+        if (child_dir) {
+            if (!fmRemoveTree(child, depth + 1)) {
+                return false;
+            }
+        } else if (!SD.remove(child)) {
+            return false;
+        }
+    }
+    return SD.rmdir(path);
+}
+
+// 列表页跳转（带可选提示）
+static void fmRedirect(const String& path, const char* msg, const bool ok) {
+    String loc = "/files?path=";
+    loc += urlEncodePath(path);
+    if (msg != nullptr && msg[0] != '\0') {
+        loc += ok ? "&ok=" : "&err=";
+        loc += urlEncodePath(String(msg));
+    }
+    g_server.sendHeader("Location", loc);
+    g_server.send(303, "text/plain", ok ? "ok" : "fail");
+}
+
+// TF 文件列表页：?path=/foo[&ok=|&err=]
+static void handleFilesList() {
+    if (!isScreenshotSdReady()) {
+        String body = F("<div class='topbar'><div class='brand'>"
+                        "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
+                        "<div class='brand-text'><h1>TF 文件</h1>"
+                        "<p class='nav'><a href='/'>← 返回主页</a> · "
+                        "<a href='/shots'>截图</a></p></div></div></div>"
+                        "<p class='err'>未检测到 TF 卡，或挂载失败。插入 microSD 后刷新本页。</p>");
+        sendHtmlPage(body);
+        return;
+    }
+
+    String path;
+    const String raw_path = g_server.hasArg("path") ? g_server.arg("path") : String("/");
+    if (!sanitizeSdPath(raw_path, path)) {
+        g_server.send(400, "text/plain", "bad path");
+        return;
+    }
+
+    size_t sd_total = 0;
+    size_t sd_used = 0;
+    size_t sd_free = 0;
+    getSdDataSpace(&sd_total, &sd_used, &sd_free);
+    const int sd_pct =
+        (sd_total > 0) ? static_cast<int>((sd_used * 100u) / sd_total) : 0;
+
+    File dir = SD.open(path);
+    if (!dir || !dir.isDirectory()) {
+        if (dir) {
+            dir.close();
+        }
+        String body = F("<div class='topbar'><div class='brand'>"
+                        "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
+                        "<div class='brand-text'><h1>TF 文件</h1>"
+                        "<p class='nav'><a href='/files'>← 根目录</a></p></div></div></div>"
+                        "<p class='err'>目录不存在：");
+        body += escapeHtmlText(path);
+        body += F("</p>");
+        sendHtmlPage(body);
+        return;
+    }
+
+    FmEntry* entries = static_cast<FmEntry*>(malloc(sizeof(FmEntry) * FM_MAX_ENTRIES));
+    int count = 0;
+    bool truncated = false;
+    if (entries != nullptr) {
+        File f = dir.openNextFile();
+        while (f) {
+            const char* base = fmBaseName(f.name());
+            // 跳过隐藏元数据
+            if (base[0] != '\0' && !(base[0] == '.' && (base[1] == '\0' || base[1] == '.'))) {
+                if (count >= FM_MAX_ENTRIES) {
+                    truncated = true;
+                    f.close();
+                    break;
+                }
+                FmEntry& e = entries[count];
+                strncpy(e.name, base, sizeof(e.name) - 1);
+                e.name[sizeof(e.name) - 1] = '\0';
+                e.is_dir = f.isDirectory();
+                e.size = e.is_dir ? 0 : static_cast<size_t>(f.size());
+                // 优先用已打开文件的 mtime；ctime 走 VFS stat
+                e.mtime = f.getLastWrite();
+                e.ctime = 0;
+                const String full = fmJoinPath(path, e.name);
+                time_t st_m = 0;
+                time_t st_c = 0;
+                fmReadTimes(full, st_m, st_c);
+                if (e.mtime <= 0 && st_m > 0) {
+                    e.mtime = st_m;
+                }
+                e.ctime = st_c > 0 ? st_c : e.mtime;
+                count++;
+            }
+            f = dir.openNextFile();
+        }
+        qsort(entries, static_cast<size_t>(count), sizeof(FmEntry), fmEntryCmp);
+    }
+    dir.close();
+
+    String body;
+    body.reserve(5120 + static_cast<size_t>(count) * 320);
+    // 列表时间按配置时区显示
+    setenv("TZ", getAppTimezone(), 1);
+    tzset();
+    body += F("<div class='topbar'><div class='brand'>"
+              "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
+              "<div class='brand-text'><h1>TF 文件</h1>"
+              "<p class='nav'><a href='/'>← 返回主页</a> · "
+              "<a href='/shots'>截图</a></p></div></div></div>"
+              "<div class='shot-space'>"
+              "<div><strong>TF 卡（SD）</strong></div>"
+              "<div>总容量：");
+    body += formatBytesHuman(sd_total);
+    body += F(" · 已占用：");
+    body += formatBytesHuman(sd_used);
+    body += F(" · 剩余：");
+    body += formatBytesHuman(sd_free);
+    body += F("</div><div class='bar'><i style='width:");
+    body += String(sd_pct);
+    body += F("%'></i></div></div>");
+
+    // 操作结果提示
+    if (g_server.hasArg("ok")) {
+        body += F("<div class='fm-flash ok'>");
+        body += escapeHtmlText(g_server.arg("ok"));
+        body += F("</div>");
+    } else if (g_server.hasArg("err")) {
+        body += F("<div class='fm-flash err'>");
+        body += escapeHtmlText(g_server.arg("err"));
+        body += F("</div>");
+    }
+
+    // 面包屑
+    body += F("<nav class='fm-crumb'><a href='/files?path=%2F'>根目录</a>");
+    if (path != "/") {
+        String acc = "";
+        int start = 1;
+        while (start <= static_cast<int>(path.length())) {
+            int slash = path.indexOf('/', start);
+            if (slash < 0) {
+                slash = static_cast<int>(path.length());
+            }
+            const String seg = path.substring(start, slash);
+            if (seg.length() > 0) {
+                acc += "/";
+                acc += seg;
+                body += F("<span class='sep'>/</span>");
+                if (slash >= static_cast<int>(path.length())) {
+                    body += F("<span class='cur'>");
+                    body += escapeHtmlText(seg);
+                    body += F("</span>");
+                } else {
+                    body += F("<a href='/files?path=");
+                    body += urlEncodePath(acc);
+                    body += F("'>");
+                    body += escapeHtmlText(seg);
+                    body += F("</a>");
+                }
+            }
+            start = slash + 1;
+            if (slash >= static_cast<int>(path.length())) {
+                break;
+            }
+        }
+    }
+    body += F("</nav>");
+
+    // 新建文件夹 + 计数
+    body += F("<div class='fm-toolbar'>"
+              "<form class='fm-mkdir' method='POST' action='/files/mkdir'>"
+              "<input type='hidden' name='path' value='");
+    body += escapeHtmlText(path);
+    body += F("'>"
+              "<label for='fm-new-dir'>新建文件夹</label>"
+              "<input id='fm-new-dir' type='text' name='name' maxlength='48' "
+              "placeholder='文件夹名' required autocomplete='off'>"
+              "<button type='submit' class='primary'>创建</button>"
+              "</form><span class='fm-count'>");
+    body += String(count);
+    body += F(" 项");
+    if (truncated) {
+        body += F("（已截断，仅显示前 ");
+        body += String(FM_MAX_ENTRIES);
+        body += F(" 项）");
+    }
+    body += F("</span></div>");
+
+    if (entries == nullptr) {
+        body += F("<p class='err'>内存不足，无法列出目录。</p>");
+        sendHtmlPage(body);
+        return;
+    }
+
+    if (count == 0) {
+        body += F("<div class='fm-empty'><strong>此目录为空</strong>"
+                  "可在上方创建文件夹，或用电脑往 TF 卡拷入文件后刷新。</div>");
+        free(entries);
+        sendHtmlPage(body);
+        return;
+    }
+
+    body += F("<div class='table-wrap'><table class='fm-table'>"
+              "<thead><tr>"
+              "<th class='col-name'>名称</th>"
+              "<th class='col-size'>大小</th>"
+              "<th class='col-time'>修改时间</th>"
+              "<th class='col-time'>创建时间</th>"
+              "<th class='col-act'>操作</th>"
+              "</tr></thead><tbody>");
+    for (int i = 0; i < count; i++) {
+        const FmEntry& e = entries[i];
+        const String full = fmJoinPath(path, e.name);
+        const String enc = urlEncodePath(full);
+        const String safe_name = escapeHtmlText(String(e.name));
+
+        body += F("<tr><td class='col-name'>");
+        if (e.is_dir) {
+            body += F("<span class='tag dir'>DIR</span>"
+                      "<a class='name' href='/files?path=");
+            body += enc;
+            body += F("'>");
+            body += safe_name;
+            body += F("/</a>");
+        } else {
+            body += F("<a class='name' href='/sd?path=");
+            body += enc;
+            body += F("' target='_blank' rel='noopener'>");
+            body += safe_name;
+            body += F("</a>");
+        }
+        body += F("</td><td class='col-size'>");
+        if (e.is_dir) {
+            body += F("—");
+        } else {
+            body += formatBytesHuman(e.size);
+        }
+        body += F("</td><td class='col-time'>");
+        body += formatFileTime(e.mtime);
+        body += F("</td><td class='col-time'>");
+        body += formatFileTime(e.ctime);
+        body += F("</td><td class='col-act'><div class='acts'>");
+        if (e.is_dir) {
+            body += F("<a class='btn' href='/files?path=");
+            body += enc;
+            body += F("'>打开</a>");
+        } else {
+            body += F("<a class='btn' href='/sd?path=");
+            body += enc;
+            body += F("&dl=1'>下载</a>");
+        }
+        body += F("<form method='POST' action='/files/delete'>"
+                  "<input type='hidden' name='path' value='");
+        body += escapeHtmlText(full);
+        body += F("'>"
+                  "<button type='submit' class='danger' data-msg=\"");
+        if (e.is_dir) {
+            body += F("删除文件夹 ");
+            body += safe_name;
+            body += F(" 及其全部内容？此操作不可恢复。");
+        } else {
+            body += F("删除文件 ");
+            body += safe_name;
+            body += F("？");
+        }
+        body += F("\" onclick=\"return confirm(this.getAttribute('data-msg'))\">"
+                  "删除</button></form></div></td></tr>");
+    }
+    body += F("</tbody></table></div>");
+    free(entries);
+    sendHtmlPage(body);
+}
+
+// 新建文件夹 POST path=父目录&name=名称
+static void handleFilesMkdir() {
+    if (!isScreenshotSdReady()) {
+        g_server.send(503, "text/plain", "no sd");
+        return;
+    }
+    if (!g_server.hasArg("path") || !g_server.hasArg("name")) {
+        g_server.send(400, "text/plain", "missing args");
+        return;
+    }
+    String parent;
+    if (!sanitizeSdPath(g_server.arg("path"), parent)) {
+        g_server.send(400, "text/plain", "bad path");
+        return;
+    }
+    String name = g_server.arg("name");
+    name.trim();
+    if (!fmValidEntryName(name)) {
+        fmRedirect(parent, "文件夹名无效", false);
+        return;
+    }
+    const String full = fmJoinPath(parent, name.c_str());
+    if (full.length() > FM_PATH_MAX) {
+        fmRedirect(parent, "路径过长", false);
+        return;
+    }
+    if (SD.exists(full)) {
+        fmRedirect(parent, "已存在同名项", false);
+        return;
+    }
+    if (!SD.mkdir(full)) {
+        fmRedirect(parent, "创建失败", false);
+        return;
+    }
+    fmRedirect(parent, "已创建文件夹", true);
+}
+
+// 删除 TF 上文件或目录（非空目录递归删）
+static void handleFilesDelete() {
+    if (!isScreenshotSdReady()) {
+        g_server.send(503, "text/plain", "no sd");
+        return;
+    }
+    if (!g_server.hasArg("path")) {
+        g_server.send(400, "text/plain", "missing path");
+        return;
+    }
+    String path;
+    if (!sanitizeSdPath(g_server.arg("path"), path) || path == "/") {
+        g_server.send(400, "text/plain", "bad path");
+        return;
+    }
+
+    const bool ok = fmRemoveTree(path);
+    const String parent = fmParentPath(path);
+    fmRedirect(parent, ok ? "已删除" : "删除失败", ok);
+}
+
+// 提供 /sd?path=... ：图片默认内联；?dl=1 强制下载
+static bool tryServeSdFile() {
+    if (g_server.uri() != "/sd") {
+        return false;
+    }
+    if (!isScreenshotSdReady()) {
+        g_server.send(503, "text/plain", "no sd");
+        return true;
+    }
+    if (!g_server.hasArg("path")) {
+        g_server.send(400, "text/plain", "missing path");
+        return true;
+    }
+    String path;
+    if (!sanitizeSdPath(g_server.arg("path"), path) || path == "/") {
+        g_server.send(400, "text/plain", "bad path");
+        return true;
+    }
+
+    File file = SD.open(path, "r");
+    if (!file || file.isDirectory()) {
+        if (file) {
+            file.close();
+        }
+        g_server.send(404, "text/plain", "not found");
+        return true;
+    }
+
+    const char* base = fmBaseName(path.c_str());
+    const char* mime = mimeForFileName(base);
+    char disposition[128];
+    if (g_server.hasArg("dl")) {
+        snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"", base);
+    } else {
+        snprintf(disposition, sizeof(disposition), "inline; filename=\"%s\"", base);
+    }
+    g_server.sendHeader("Content-Disposition", disposition);
+    g_server.streamFile(file, mime);
+    file.close();
+    return true;
+}
+
+// 提供 /shot/app_*.bmp：默认内联预览；?dl=1 强制下载（SD 优先）
+static bool tryServeShotFile() {
+    const String uri = g_server.uri();
+    File file;
+    if (!openScreenshotFile(uri, file)) {
         return false;
     }
     const char* base = uri.c_str() + strlen("/shot/");
@@ -1004,8 +1729,12 @@ static void registerWebRoutes() {
     g_server.on("/cursor-err", HTTP_GET, handleCursorErr);
     g_server.on("/shots", HTTP_GET, handleShotsList);
     g_server.on("/shots/clear", HTTP_POST, handleShotsClear);
+    g_server.on("/files", HTTP_GET, handleFilesList);
+    g_server.on("/files/delete", HTTP_POST, handleFilesDelete);
+    g_server.on("/files/mkdir", HTTP_POST, handleFilesMkdir);
+    g_server.on("/sd", HTTP_GET, []() { tryServeSdFile(); });
     g_server.onNotFound([]() {
-        if (tryServeFavicon() || tryServeDeviceIcon() || tryServeShotFile()) {
+        if (tryServeFavicon() || tryServeDeviceIcon() || tryServeShotFile() || tryServeSdFile()) {
             return;
         }
         g_server.send(404, "text/plain", "not found");

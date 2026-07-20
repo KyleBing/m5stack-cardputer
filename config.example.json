@@ -72,7 +72,8 @@
   "brightness": 30,
   "sound": {
     "time_key": true,
-    "mijia_on_off": true
+    "mijia_on_off": true,
+    "volume": 25
   },
   "time": {
     "default": "up",

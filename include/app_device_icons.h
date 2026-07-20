@@ -30,6 +30,9 @@ bool drawAppLogo60(const int x, const int y, const float scale = 1.0f);
 // 按路径 1:1 原始尺寸绘制（左上角对齐）
 bool drawDevicePngNative(const char* path, int x, int y);
 
+// LittleFS 任意 PNG，按 scale 绘制（1.0 = 像素 1:1）
+bool drawLittleFsPng(const char* path, int x, int y, float scale = 1.0f);
+
 // 绘制设备图标：按 model 匹配 PNG，active 为开关态；失败返回 false
 bool drawDeviceIconFor(const MijiaDevice* dev, int x, int y, bool active);
 

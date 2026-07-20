@@ -1196,7 +1196,7 @@ static int settingsPanelRowCount(const SettingsModule mod) {
         case SettingsModule::Screen:
             return 2; // bright / invert
         case SettingsModule::Sound:
-            return 2; // time key / mijia pwr
+            return 3; // volume / time key / mijia pwr
         case SettingsModule::Time:
             return 3; // default / timezone / pure
         case SettingsModule::Infrared:
@@ -1418,18 +1418,23 @@ static void drawSettingsScreenPanel(const int x, const int y, const int w) {
 }
 
 static void drawSettingsSoundPanel(const int x, const int y, const int w) {
+    const int vol = getAppSpeakerVolumePercent();
+    char vol_buf[8];
+    snprintf(vol_buf, sizeof(vol_buf), "%d", vol);
+    drawSettingsRowLabel(x, y, w, "volume", vol_buf, INFO_VALUE_COLOR, g_settings_row == 0);
+    constexpr int bar_h = 6;
+    const int bar_y = y + INFO_LINE_H + 1;
+    drawSettingsBrightBar(x, bar_y, w, bar_h, vol);
+
     const bool time_on = isTimeKeySoundEnabled();
-    drawSettingsRowLabel(x, y, w, "time key", time_on ? "ON" : "OFF",
-                         time_on ? APP_COLOR_OK : APP_COLOR_HINT, g_settings_row == 0);
+    const int time_y = bar_y + bar_h + 4;
+    drawSettingsRowLabel(x, time_y, w, "time key", time_on ? "ON" : "OFF",
+                         time_on ? APP_COLOR_OK : APP_COLOR_HINT, g_settings_row == 1);
 
     const bool mijia_on = isMijiaOnOffSoundEnabled();
-    const int mijia_y = y + INFO_LINE_H + 2;
+    const int mijia_y = time_y + INFO_LINE_H + 2;
     drawSettingsRowLabel(x, mijia_y, w, "mijia pwr", mijia_on ? "ON" : "OFF",
-                         mijia_on ? APP_COLOR_OK : APP_COLOR_HINT, g_settings_row == 1);
-
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(x, mijia_y + INFO_LINE_H + 4);
-    M5Cardputer.Display.print("countdown alarm always");
+                         mijia_on ? APP_COLOR_OK : APP_COLOR_HINT, g_settings_row == 2);
 }
 
 static void drawSettingsTimePanel(const int x, const int y, const int w) {
@@ -1568,8 +1573,10 @@ static void applySettingsValueDelta(const int val_delta) {
             break;
         case SettingsModule::Sound:
             if (g_settings_row == 0) {
-                saveAppConfigTimeKeySound(!isTimeKeySoundEnabled());
+                adjustAppSpeakerVolume(val_delta * 5);
             } else if (g_settings_row == 1) {
+                saveAppConfigTimeKeySound(!isTimeKeySoundEnabled());
+            } else if (g_settings_row == 2) {
                 saveAppConfigMijiaOnOffSound(!isMijiaOnOffSoundEnabled());
             }
             break;
@@ -1621,6 +1628,7 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
         }
         drawSettingsApp();
         flushBrightnessSave();
+        flushSpeakerVolumeSave();
         return;
     }
 
@@ -1678,6 +1686,7 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
         applySettingsValueDelta(val_delta);
         drawSettingsApp();
         flushBrightnessSave(); // 先刷新 UI，再写盘
+        flushSpeakerVolumeSave();
         return;
     }
 
@@ -1690,6 +1699,7 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
         }
         drawSettingsApp();
         flushBrightnessSave();
+        flushSpeakerVolumeSave();
         return;
     }
 
@@ -2593,6 +2603,8 @@ void enterApp(const AppState state) {
 void setup() {
     const auto cfg = M5.config();
     M5Cardputer.begin(cfg);
+    // 开机拉低喇叭 I2S 脚，避免 NS4168 悬空嗡嗡；需要出声时再 begin
+    releaseSpeakerQuiet();
     Serial.begin(115200);
     if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
         Serial.println("wake: BtnA from deep sleep");
@@ -2628,6 +2640,8 @@ void setup() {
 
 void loop() {
     M5Cardputer.update();
+    // 提示音播完后关功放+拉低脚
+    pollSpeakerQuietRelease();
 
     // 休眠提示倒计时
     if (sleepPhase == SleepPhase::PROMPT_LIGHT || sleepPhase == SleepPhase::PROMPT_DEEP) {
@@ -2686,11 +2700,8 @@ void loop() {
         }
     } else if (currentState == AppState::MIC) {
         pollMicBtnA();
-        static uint32_t lastMicUpdateMs = 0;
-        if (now - lastMicUpdateMs >= 40) {
-            lastMicUpdateMs = now;
-            updateMicApp();
-        }
+        // 每帧拉取：Mic.record 异步双槽，40ms 节流会造成断流破音
+        updateMicApp();
     } else if (currentState == AppState::BATTERY) {
         static uint32_t lastBatUpdateMs = 0;
         // 后台 NTP 时 250ms 轮询；平时 1s 刷新电量
@@ -2756,7 +2767,7 @@ void loop() {
     }
 
     if (M5Cardputer.Keyboard.isChange()) {
-        // 任意界面 Fn+s：截图存 Flash（进 Config → /shots 下载）
+        // 任意界面 Fn+s：优先 TF，否则 Flash（进 Config → /shots 下载）
         if (tryHandleScreenshotHotkey()) {
             return;
         }
@@ -2801,7 +2812,7 @@ void loop() {
                 break;
             case AppState::MIC:
                 if (M5Cardputer.Keyboard.isPressed()) {
-                    handleMicApp(getPressedKey());
+                    handleMicApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             case AppState::WIFI:

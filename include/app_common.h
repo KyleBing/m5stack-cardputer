@@ -95,7 +95,21 @@ int getMenuNavDelta(const Keyboard_Class::KeysState& status);
 
 // I2S/功放冷启动预热（短提示音前调用）
 void warmUpSpeakerIfNeeded();
-// 播放短 UI 提示音（内部会按需预热）
+// 关喇叭并拉低 I2S 脚，避免 NS4168 悬空嗡嗡（Mic 占用 WS 时不碰 WS）
+void releaseSpeakerQuiet();
+// 出声/开麦前解除 gpio_hold，否则 begin 抢不到脚
+void releaseAudioPinHolds();
+// 主循环：提示音播完后自动 releaseSpeakerQuiet
+void pollSpeakerQuietRelease();
+void cancelSpeakerQuietRelease();
+// 按配置音量应用到已启用的 Speaker
+void applyAppSpeakerVolume();
+// 当前有效音量 0~100（含未写盘的调节）
+uint8_t getAppSpeakerVolumePercent();
+// 调节音量（先改 Speaker，写盘延后到 flushSpeakerVolumeSave）
+void adjustAppSpeakerVolume(int delta_percent);
+void flushSpeakerVolumeSave();
+// 播放短 UI 提示音（内部会按需预热；播完由 poll 静音释放）
 void playUiTone(float freq_hz, uint32_t duration_ms);
 // Time 按键声：受 settings/sound.time_key 控制（countdown 闹钟请用 playUiTone）
 void playTimeKeyTone(float freq_hz, uint32_t duration_ms);

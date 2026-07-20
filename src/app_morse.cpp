@@ -192,12 +192,14 @@ void updateMorseApp() {
     if (g_play_pattern[g_play_idx] == '\0') {
         g_playing = false;
         g_play_pattern = nullptr;
+        releaseSpeakerQuiet(); // 播完关功放，避免空转嗡嗡
         drawMorseApp(false);
         return;
     }
 
     const char sym = g_play_pattern[g_play_idx];
     const uint32_t tone_ms = (sym == '-') ? MORSE_UNIT_MS * 3 : MORSE_UNIT_MS;
+    warmUpSpeakerIfNeeded();
     M5Cardputer.Speaker.tone(g_tone_hz, tone_ms + 50);
     g_play_tone_on = true;
     g_play_until_ms = now + tone_ms;

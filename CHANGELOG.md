@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-07-21
+
+### 新增
+
+- **喇叭音量**：`sound.volume`（0~100，默认 25）；Options → Sound → `volume`；Config Web 可调；Mic 列表播放时 `-=` 实时调节
+- **Mic 录音列表**（`l`）：扫描 TF `/audioRecord`；选中播放 / 停止 / Backspace 删除；播放中只刷进度行
+- **Infrared AC 模式图标**：制冷 / 制热 / 除湿 / 送风 PNG（含 active）
+
+### 改进
+
+- **喇叭嗡嗡声**：开机与空闲时 `releaseSpeakerQuiet`（卸 I2S + `gpio_reset` 拉低并 hold）；提示音播完自动静音；列表播过后不再 `Mic.begin`（避免 PDM 时钟灌进功放 LRCLK）；退出列表整页重绘 Record
+- **Mic**：列表模式关麦；播完保持喇叭脚拉低；回示波器若本会话播过音则显示 `mic paused`，按 `R` 再开麦
+- **截图 / Config Web**：截图与文件相关页面体验继续完善
+- **M5Burner 打包**：`version` / `author` / 描述中的版本信息统一取自 `include/app_version.h`，发版只改该头文件
+
+---
+
 ## 2026-07-20
 
 ### 新增

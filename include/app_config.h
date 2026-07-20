@@ -55,6 +55,7 @@ struct AppConfig {
     char cursor_token[CURSOR_TOKEN_MAX];
     char timezone[48]; // POSIX TZ，如 CST-8；缺省东八区
     uint8_t brightness;      // 配置存 0~100；setBrightness 时再转 0~255
+    uint8_t speaker_volume;  // 喇叭音量 0~100；setVolume 时再转 0~255
     bool time_key_sound;     // Time 内按键声（countdown 到点闹钟不受影响）
     bool mijia_on_off_sound; // 米家开/关提示音
     TimeDefaultMode time_default_mode; // 按 T 进入 Time 时的默认模块
@@ -83,6 +84,9 @@ bool saveAppConfigWifi(const char* ssid, const char* password);
 
 // 更新屏幕亮度并写回（percent：0~100）
 bool saveAppConfigBrightness(uint8_t brightness_percent);
+
+// 更新喇叭音量并写回（percent：0~100）
+bool saveAppConfigSpeakerVolume(uint8_t volume_percent);
 
 // 更新 Time 按键声开关并写回
 bool saveAppConfigTimeKeySound(bool enabled);
@@ -125,6 +129,10 @@ const char* cycleAppTimezonePreset(const char* current, int delta);
 // 亮度：配置 0~100 ↔ 硬件 0~255
 uint8_t brightnessPercentToHw(uint8_t percent);
 uint8_t brightnessHwToPercent(uint8_t hw);
+
+// 喇叭音量 0~100 ↔ Speaker.setVolume 0~255
+uint8_t speakerVolumePercentToHw(uint8_t percent);
+uint8_t speakerVolumeHwToPercent(uint8_t hw);
 
 // 读取原始 config.json 文本（用于 Web 展示）
 bool readAppConfigRaw(String& out);

@@ -113,6 +113,10 @@ bool drawDevicePngNative(const char* path, const int x, const int y) {
     return drawDevicePngNativeScaled(path, x, y, 1.0f);
 }
 
+bool drawLittleFsPng(const char* path, const int x, const int y, const float scale) {
+    return drawDevicePngNativeScaled(path, x, y, scale);
+}
+
 bool drawAppLogo60(const int x, const int y, const float scale) {
     if (!LittleFS.exists(APP_LOGO_60_PATH)) {
         return false;

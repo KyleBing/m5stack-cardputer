@@ -514,7 +514,7 @@ static void cdStart() {
 static void cdStopAlarm() {
     cdAlarmActive = false;
     cdAlarmStep = 0;
-    M5Cardputer.Speaker.stop();
+    releaseSpeakerQuiet();
 }
 
 // 开始电子闹钟：哔-哔-歇，最长 30s

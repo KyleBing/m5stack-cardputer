@@ -53,6 +53,7 @@ bool loadAppConfig() {
     g_config = {};
     g_config.loaded = false;
     g_config.brightness = 30; // 默认 30%
+    g_config.speaker_volume = 25; // 默认 25% ≈ setVolume(64)
     g_config.time_key_sound = true; // 默认开
     g_config.mijia_on_off_sound = true;
     g_config.time_default_mode = TimeDefaultMode::Up;
@@ -103,10 +104,19 @@ bool loadAppConfig() {
     // 默认开；缺字段时保持开启
     g_config.time_key_sound = true;
     g_config.mijia_on_off_sound = true;
+    g_config.speaker_volume = 25;
     JsonObject sound = doc["sound"];
     if (!sound.isNull()) {
         g_config.time_key_sound = sound["time_key"] | true;
         g_config.mijia_on_off_sound = sound["mijia_on_off"] | true;
+        int vol = sound["volume"] | 25;
+        if (vol < 0) {
+            vol = 0;
+        }
+        if (vol > 100) {
+            vol = 100;
+        }
+        g_config.speaker_volume = static_cast<uint8_t>(vol);
     }
 
     // 时区：缺字段时保持默认 CST-8
@@ -476,6 +486,36 @@ static JsonObject ensureSoundObject(JsonDocument& doc) {
     return doc["sound"].as<JsonObject>();
 }
 
+bool saveAppConfigSpeakerVolume(const uint8_t volume_percent) {
+    JsonDocument doc;
+    if (LittleFS.exists(CONFIG_PATH)) {
+        File in = LittleFS.open(CONFIG_PATH, "r");
+        if (in) {
+            const DeserializationError err = deserializeJson(doc, in);
+            in.close();
+            if (err) {
+                doc.clear();
+            }
+        }
+    }
+
+    JsonObject sound = ensureSoundObject(doc);
+    const uint8_t pct = volume_percent > 100 ? 100 : volume_percent;
+    sound["volume"] = pct;
+
+    if (doc["devices"].isNull()) {
+        doc["devices"].to<JsonArray>();
+    }
+
+    File out = LittleFS.open(CONFIG_PATH, "w");
+    if (!out) {
+        return false;
+    }
+    serializeJsonPretty(doc, out);
+    out.close();
+    return loadAppConfig();
+}
+
 bool saveAppConfigTimeKeySound(const bool enabled) {
     JsonDocument doc;
     if (LittleFS.exists(CONFIG_PATH)) {
@@ -814,6 +854,15 @@ uint8_t brightnessPercentToHw(const uint8_t percent) {
 }
 
 uint8_t brightnessHwToPercent(const uint8_t hw) {
+    return static_cast<uint8_t>((static_cast<uint16_t>(hw) * 100 + 127) / 255);
+}
+
+uint8_t speakerVolumePercentToHw(const uint8_t percent) {
+    const uint8_t pct = percent > 100 ? 100 : percent;
+    return static_cast<uint8_t>((static_cast<uint16_t>(pct) * 255 + 50) / 100);
+}
+
+uint8_t speakerVolumeHwToPercent(const uint8_t hw) {
     return static_cast<uint8_t>((static_cast<uint16_t>(hw) * 100 + 127) / 255);
 }
 

@@ -19,6 +19,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_NAME="m5stack-cardputer"
 BUILD_DIR="${ROOT}/.pio/build/${ENV_NAME}"
 META_SRC="${ROOT}/m5burner/m5burner.json"
+VERSION_H="${ROOT}/include/app_version.h"
 DIST="${ROOT}/dist"
 OUT_DIR="${DIST}/m5burner"
 FW_DIR="${OUT_DIR}/firmware"
@@ -51,9 +52,42 @@ if [[ ! -f "$META_SRC" ]]; then
   echo "缺少 $META_SRC" >&2
   exit 1
 fi
+if [[ ! -f "$VERSION_H" ]]; then
+  echo "缺少 $VERSION_H" >&2
+  exit 1
+fi
 
-VERSION="$(python3 -c "import json; print(json.load(open('$META_SRC'))['version'])")"
+# 版本/作者等以 include/app_version.h 为准，打包时写入 m5burner.json
+# 用多行 read（兼容 macOS bash 3.2，不用 mapfile）
+{
+  read -r VERSION
+  read -r UPDATE_TIME
+  read -r AUTHOR
+  read -r EMAIL
+  read -r WEBSITE
+} < <(python3 - "$VERSION_H" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+
+def grab(name: str) -> str:
+    m = re.search(rf'static constexpr const char\*\s+{name}\s*=\s*"([^"]*)"', text)
+    if not m:
+        raise SystemExit(f"app_version.h 缺少 {name}")
+    return m.group(1)
+
+print(grab("APP_VERSION"))
+print(grab("APP_UPDATE_TIME"))
+print(grab("APP_AUTHOR"))
+print(grab("APP_EMAIL"))
+print(grab("APP_WEBSITE"))
+PY
+)
+if [[ -z "$VERSION" || -z "$AUTHOR" ]]; then
+  echo "从 $VERSION_H 解析版本失败" >&2
+  exit 1
+fi
 ZIP_NAME="CardputerApps-${VERSION}.zip"
+echo "==> 版本来自 app_version.h: ${VERSION} (${UPDATE_TIME}) by ${AUTHOR}"
 
 # 发布包用 example，绝不带入本地测试 config.json
 CFG_DATA="${ROOT}/data/config.json"
@@ -113,7 +147,20 @@ fi
 echo "==> 组装 M5Burner 目录"
 rm -rf "$OUT_DIR"
 mkdir -p "$FW_DIR"
-cp "$META_SRC" "${OUT_DIR}/m5burner.json"
+# 模板 + app_version.h 字段 → 发布用 m5burner.json
+python3 - "$META_SRC" "${OUT_DIR}/m5burner.json" \
+  "$VERSION" "$UPDATE_TIME" "$AUTHOR" "$EMAIL" "$WEBSITE" <<'PY'
+import json, sys
+src, dst, ver, updated, author, email, website = sys.argv[1:8]
+meta = json.load(open(src, encoding="utf-8"))
+meta["version"] = ver
+meta["author"] = author
+# description 附带更新日期与联系方式，便于 M5Burner 展示
+base = meta.get("description") or "M5Stack Cardputer multi-app firmware."
+meta["description"] = f"{base} v{ver} ({updated}) · {author} · {email} · {website}"
+json.dump(meta, open(dst, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+open(dst, "a", encoding="utf-8").write("\n")
+PY
 cp "${BUILD_DIR}/bootloader.bin"  "${FW_DIR}/bootloader_${ADDR_BOOTLOADER}.bin"
 cp "${BUILD_DIR}/partitions.bin"  "${FW_DIR}/partitions_${ADDR_PARTITIONS}.bin"
 cp "$BOOT_APP0"                   "${FW_DIR}/boot_app0_${ADDR_BOOT_APP0}.bin"
@@ -164,4 +211,4 @@ if [[ -f "$MERGED" ]]; then
   echo "  他人刷机:      esptool.py --chip esp32s3 -p PORT write_flash 0x0 ${MERGED}"
 fi
 echo
-echo "发布前请检查/更新: m5burner/m5burner.json 的 version、description"
+echo "版本信息来源: include/app_version.h（发版只改该头文件即可）"

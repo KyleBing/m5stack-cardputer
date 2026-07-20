@@ -2,16 +2,26 @@
 #include "app_colors.h"
 #include "app_common.h"
 #include "app_config.h"
+#include "app_device_icons.h"
 #include "app_header.h"
 
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
 #include <IRac.h>
 
+#include <cstdio>
 #include <cstring>
 
 // Cardputer / Adv 板载红外发射管
 static constexpr uint16_t IR_TX_PIN = 44;
+// data/icon/ir 下空调模式图（30x30），绘制 scale=1 即 1:1
+static constexpr const char* AC_ICON_DIR = "/icon/ir";
+static constexpr int AC_MODE_ICON_PX = 30;
+static constexpr int AC_MODE_ICON_GAP = 2;
+// 与 drawAcRemotePad 布局一致：品牌行下方模式图标起点
+static constexpr int AC_MODE_ICON_X = APP_CONTENT_X + 52;
+static constexpr int AC_MODE_ROW_GAP = 3;
+static constexpr int AC_MODE_ICON_Y_LIFT = 6;
 
 static IRsend g_irsend(IR_TX_PIN);
 static IRac g_irac(IR_TX_PIN);
@@ -139,6 +149,93 @@ static const char* acModeName(const stdAc::opmode_t mode) {
             return "Auto";
         default:
             return "?";
+    }
+}
+
+// 有图标的四种模式（Auto 暂无文字）
+static const char* acModeIconStem(const stdAc::opmode_t mode) {
+    switch (mode) {
+        case stdAc::opmode_t::kCool:
+            return "ac_cool";
+        case stdAc::opmode_t::kHeat:
+            return "ac_heat";
+        case stdAc::opmode_t::kDry:
+            return "ac_dry";
+        case stdAc::opmode_t::kFan:
+            return "ac_fan";
+        default:
+            return nullptr;
+    }
+}
+
+// 1:1 绘制单个模式图标；失败返回 false
+static bool drawAcModeIconAt(const char* stem, const int x, const int y, const bool active) {
+    if (stem == nullptr) {
+        return false;
+    }
+    char path[48];
+    if (active) {
+        snprintf(path, sizeof(path), "%s/%s_active.png", AC_ICON_DIR, stem);
+    } else {
+        snprintf(path, sizeof(path), "%s/%s.png", AC_ICON_DIR, stem);
+    }
+    if (drawLittleFsPng(path, x, y, 1.0f)) {
+        return true;
+    }
+    // active 图缺失时回退普通图
+    if (active) {
+        snprintf(path, sizeof(path), "%s/%s.png", AC_ICON_DIR, stem);
+        return drawLittleFsPng(path, x, y, 1.0f);
+    }
+    return false;
+}
+
+// 横排四个模式图标；当前模式用 _active，Auto 时全部普通态
+static void drawAcModeIcons(const int x, const int y) {
+    static const stdAc::opmode_t kModes[] = {
+        stdAc::opmode_t::kCool,
+        stdAc::opmode_t::kHeat,
+        stdAc::opmode_t::kDry,
+        stdAc::opmode_t::kFan,
+    };
+    int cx = x;
+    for (size_t i = 0; i < sizeof(kModes) / sizeof(kModes[0]); i++) {
+        const char* stem = acModeIconStem(kModes[i]);
+        const bool active = (g_ac_mode == kModes[i]);
+        if (!drawAcModeIconAt(stem, cx, y, active)) {
+            // 缺图时退回文字缩写
+            M5Cardputer.Display.setTextSize(1);
+            M5Cardputer.Display.setTextColor(active ? APP_COLOR_OK : APP_COLOR_HINT, BLACK);
+            M5Cardputer.Display.setCursor(cx, y + 10);
+            M5Cardputer.Display.print(acModeName(kModes[i])[0]);
+        }
+        cx += AC_MODE_ICON_PX + AC_MODE_ICON_GAP;
+    }
+}
+
+static int acModeIconY() {
+    return APP_CONTENT_Y + INFO_LINE_H_2X + AC_MODE_ROW_GAP - AC_MODE_ICON_Y_LIFT;
+}
+
+static int acModeSideX() {
+    return AC_MODE_ICON_X + 4 * (AC_MODE_ICON_PX + AC_MODE_ICON_GAP) - AC_MODE_ICON_GAP + 4;
+}
+
+// 仅刷新模式图标与 Auto 标记（切模式时不整页重绘）
+static void redrawAcModeIconsOnly() {
+    const int icon_y = acModeIconY();
+    const int mode_x = AC_MODE_ICON_X;
+    const int side_x = acModeSideX();
+    const int icons_w = 4 * (AC_MODE_ICON_PX + AC_MODE_ICON_GAP) - AC_MODE_ICON_GAP;
+    M5Cardputer.Display.fillRect(mode_x, icon_y, icons_w, AC_MODE_ICON_PX, BLACK);
+    // 清 Auto 文字，避开下方风速行
+    M5Cardputer.Display.fillRect(side_x, icon_y + 4, 32, 10, BLACK);
+    drawAcModeIcons(mode_x, icon_y);
+    if (g_ac_mode == stdAc::opmode_t::kAuto) {
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
+        M5Cardputer.Display.setCursor(side_x, icon_y + 4);
+        M5Cardputer.Display.print("Auto");
     }
 }
 
@@ -599,7 +696,7 @@ static void drawAcRemotePad(const int content_y) {
         M5Cardputer.Display.setCursor(cx, y);
         M5Cardputer.Display.print(g_tx_status);
     }
-    y += INFO_LINE_H_2X + 3; // 与下方内容间隔
+    y += INFO_LINE_H_2X + AC_MODE_ROW_GAP; // 与下方内容间隔
 
     // 紧凑温度区（为 tab 腾高度）
     char tbuf[8];
@@ -613,12 +710,21 @@ static void drawAcRemotePad(const int content_y) {
     M5Cardputer.Display.setCursor(x0 + temp_w + 2, y + 4);
     M5Cardputer.Display.print("C");
 
+    // 模式图标 30x30 1:1；风速/Auto 画在图标右侧以省高度
+    const int mode_x = AC_MODE_ICON_X;
+    const int icon_y = acModeIconY();
+    drawAcModeIcons(mode_x, icon_y);
+    const int side_x = acModeSideX();
+    M5Cardputer.Display.setTextSize(1);
+    if (g_ac_mode == stdAc::opmode_t::kAuto) {
+        M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
+        M5Cardputer.Display.setCursor(side_x, icon_y + 4);
+        M5Cardputer.Display.print("Auto");
+    }
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(x0 + 56, y);
-    M5Cardputer.Display.print(acModeName(g_ac_mode));
-    M5Cardputer.Display.setCursor(x0 + 56, y + 10);
+    M5Cardputer.Display.setCursor(side_x, icon_y + 16);
     M5Cardputer.Display.print(acFanName(g_ac_fan));
-    y += 22;
+    y += AC_MODE_ICON_PX + 2;
 
     constexpr int btn_w = 72;
     constexpr int btn_h = 16;
@@ -880,8 +986,8 @@ void handleIrApp(const Keyboard_Class::KeysState& status) {
             if (c == 'm' || c == 'M') {
                 g_ac_field = static_cast<int>(IrAcField::Mode);
                 cycleAcMode(1);
-                flashAcBtn(IrAcBtn::Mode);
-                drawIrMain();
+                // 只刷新模式图标，避免整页闪烁
+                redrawAcModeIconsOnly();
                 return;
             }
             if (c == 'f' || c == 'F') {
