@@ -1,5 +1,6 @@
 #include "M5Cardputer.h"
 #include "app_config.h"
+#include "app_version.h"
 #include "app_icons.h"
 #include "app_device_icons.h"
 #include "app_header.h"
@@ -338,14 +339,14 @@ void handleMenuKey(const String& key) {
 
 // ===== VERSION =====
 
-// 返回固件版本信息
+// 返回固件版本信息（常量见 app_version.h）
 VersionInfo getVersionInfo() {
     return VersionInfo{
-        "0.0.1",
-        "2026.07.06",
-        "KyleBing",
-        "kylebing@163.com",
-        "kylebing.cn"
+        APP_VERSION,
+        APP_UPDATE_TIME,
+        APP_AUTHOR,
+        APP_EMAIL,
+        APP_WEBSITE,
     };
 }
 
