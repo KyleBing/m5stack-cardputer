@@ -10,6 +10,8 @@
 
 ### 新增
 
+- **Info App**（主菜单 `i`）：从 `main` 拆到 `app_info`；Memory 进度条（Heap / PSRAM / Sketch / LittleFS）与 Chip / Fw / Net / Run 翻页
+- **Config Web `/wifi` / `/about`**：WiFi 独立页；关于页展示固件版本等信息
 - **喇叭音量**：`sound.volume`（0~100，默认 25）；Options → Sound → `volume`；Config Web 可调；Mic 列表播放时 `-=` 实时调节
 - **Mic 录音列表**（`l`）：扫描 TF `/audioRecord`；选中播放 / 停止 / Backspace 删除；播放中只刷进度行
 - **Infrared AC 模式图标**：制冷 / 制热 / 除湿 / 送风（含 active）
@@ -17,9 +19,11 @@
 
 ### 改进
 
+- **Config `/shots`**：TF 与 Flash 分区展示；分别「清空 TF 截图」/「清空 Flash 截图」（`/shots/clear-tf`、`/shots/clear-flash`），不再混清
+- **Config Web**：顶栏 Tab 高亮；内容卡片布局；导航拆出 WiFi / 关于等入口
+- **Infrared**：AC/TV 按键统一为上下叠排样式；屏高紧时 Auto+Fan 同行；右栏贴边距
 - **喇叭嗡嗡声**：开机与空闲时 `releaseSpeakerQuiet`（卸 I2S + `gpio_reset` 拉低并 hold）；提示音播完自动静音；列表播过后不再 `Mic.begin`（避免 PDM 时钟灌进功放 LRCLK）；退出列表整页重绘 Record
-- **Mic**：列表模式关麦；播完保持喇叭脚拉低；回示波器若本会话播过音则显示 `mic paused`，按 `R` 再开麦
-- **截图 / Config Web**：截图与文件相关页面体验继续完善
+- **Mic**：列表与 header 留白；选中条对齐字形；列表模式关麦；播完保持喇叭脚拉低；回示波器若本会话播过音则显示 `mic paused`，按 `R` 再开麦
 - **M5Burner 打包**：`version` / `author` / 描述中的版本信息统一取自 `include/app_version.h`，发版只改该头文件
 - **IR 模式图标**：进入 App 时预缓存全部 `.rgb565`；切模式直接 `pushImage` 覆盖，去掉先清黑底造成的闪烁
 

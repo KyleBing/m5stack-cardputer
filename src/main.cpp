@@ -21,13 +21,13 @@
 #include "app_mic.h"
 #include "app_battery.h"
 #include "app_log.h"
+#include "app_info.h"
 #include "app_hid_kb.h"
 #include "app_screenshot.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
 #include <driver/rtc_io.h>
-#include <esp_chip_info.h>
 #include <esp_system.h>
 #include <cmath>
 
@@ -68,7 +68,8 @@ enum class AppState {
     LED,
     BATTERY,
     HID_KB,
-    LOG, // 诊断日志查看（主菜单 Fn+i，不占字母菜单位）
+    INFO, // 系统信息 / 内存（字母 i）
+    LOG,  // 诊断日志查看（主菜单 Fn+i，不占字母菜单位）
 };
 
 struct MenuItem {
@@ -88,6 +89,7 @@ static const MenuItem MENU_ITEMS[] = {
     {'t', "Time", "Time", AppState::RTC},
     {'s', "Slp", "Sleep", AppState::SLEEP},
     {'o', "Opt", "Options", AppState::SETTINGS},
+    {'i', "Inf", "Info", AppState::INFO},
     {'p', "Bat", "Battery", AppState::BATTERY},
     {'c', "Cur", "Cursor", AppState::CURSOR},
     {'v', "Ver", "Version", AppState::VERSION},
@@ -192,6 +194,8 @@ const char* getCurrentAppShotSlug() {
             return "battery";
         case AppState::HID_KB:
             return "hidkb";
+        case AppState::INFO:
+            return "info";
         case AppState::LOG:
             return "log";
         default:
@@ -839,320 +843,6 @@ void drawBmiApp() {
     updateBmiZPanel(panelW, panelW, contentTop, contentH, az);
 }
 
-// ===== INFO =====
-
-static constexpr int INFO_BODY_SIZE = 1;
-static constexpr int INFO_TITLE_GAP = 2;
-static constexpr int INFO_MAX_LINES = 8;
-static constexpr int INFO_MAX_PAGES = 5; // Chip Mem Fw Net Run
-
-static int infoPage = 0;
-
-struct InfoLine {
-    const char* label;
-    const char* value;
-};
-
-struct InfoSection {
-    const char* title;
-    InfoLine lines[INFO_MAX_LINES];
-    int line_count;
-};
-
-// 复位原因文案
-static const char* infoResetReasonText() {
-    switch (esp_reset_reason()) {
-        case ESP_RST_POWERON:
-            return "poweron";
-        case ESP_RST_EXT:
-            return "ext";
-        case ESP_RST_SW:
-            return "sw";
-        case ESP_RST_PANIC:
-            return "panic";
-        case ESP_RST_INT_WDT:
-            return "int_wdt";
-        case ESP_RST_TASK_WDT:
-            return "task_wdt";
-        case ESP_RST_WDT:
-            return "wdt";
-        case ESP_RST_DEEPSLEEP:
-            return "deepsleep";
-        case ESP_RST_BROWNOUT:
-            return "brownout";
-        case ESP_RST_SDIO:
-            return "sdio";
-        default:
-            return "unknown";
-    }
-}
-
-// Flash 模式文案
-static const char* infoFlashModeText() {
-    switch (ESP.getFlashChipMode()) {
-        case FM_QIO:
-            return "QIO";
-        case FM_QOUT:
-            return "QOUT";
-        case FM_DIO:
-            return "DIO";
-        case FM_DOUT:
-            return "DOUT";
-        default:
-            return "N/A";
-    }
-}
-
-// 芯片特性摘要（WiFi/BT/BLE）
-static void formatInfoFeatures(char* out, const size_t out_size, const uint32_t features) {
-    out[0] = '\0';
-    auto append = [&](const char* token) {
-        if (out[0] != '\0') {
-            strncat(out, "/", out_size - strlen(out) - 1);
-        }
-        strncat(out, token, out_size - strlen(out) - 1);
-    };
-    if (features & CHIP_FEATURE_WIFI_BGN) {
-        append("WiFi");
-    }
-    if (features & CHIP_FEATURE_BT) {
-        append("BT");
-    }
-    if (features & CHIP_FEATURE_BLE) {
-        append("BLE");
-    }
-    if (out[0] == '\0') {
-        strncpy(out, "none", out_size - 1);
-        out[out_size - 1] = '\0';
-    }
-}
-
-// 运行时长（上电起算；light sleep 期间 esp_timer 不停）
-static void formatInfoUptime(char* out, const size_t out_size) {
-    const uint64_t sec = static_cast<uint64_t>(esp_timer_get_time() / 1000000LL);
-    const uint64_t h = sec / 3600ULL;
-    const uint64_t m = (sec % 3600ULL) / 60ULL;
-    const uint64_t s = sec % 60ULL;
-    if (h > 0) {
-        snprintf(out, out_size, "%lluh %llum %llus", static_cast<unsigned long long>(h),
-                 static_cast<unsigned long long>(m), static_cast<unsigned long long>(s));
-    } else if (m > 0) {
-        snprintf(out, out_size, "%llum %llus", static_cast<unsigned long long>(m),
-                 static_cast<unsigned long long>(s));
-    } else {
-        snprintf(out, out_size, "%llus", static_cast<unsigned long long>(s));
-    }
-}
-
-// MAC（efuse，不依赖 WiFi 已连接）
-static void formatInfoMac(char* out, const size_t out_size) {
-    const uint64_t mac = ESP.getEfuseMac();
-    snprintf(out, out_size, "%02X:%02X:%02X:%02X:%02X:%02X",
-             static_cast<unsigned>((mac >> 0) & 0xFF), static_cast<unsigned>((mac >> 8) & 0xFF),
-             static_cast<unsigned>((mac >> 16) & 0xFF), static_cast<unsigned>((mac >> 24) & 0xFF),
-             static_cast<unsigned>((mac >> 32) & 0xFF), static_cast<unsigned>((mac >> 40) & 0xFF));
-}
-
-static void infoAddLine(InfoSection& sec, const char* label, const char* value) {
-    if (sec.line_count >= INFO_MAX_LINES) {
-        return;
-    }
-    sec.lines[sec.line_count++] = {label, value};
-}
-
-// 组装各分区（一区一页）
-static int buildInfoSections(InfoSection* sections, const int max_sections) {
-    if (sections == nullptr || max_sections <= 0) {
-        return 0;
-    }
-
-    esp_chip_info_t chipInfo{};
-    esp_chip_info(&chipInfo);
-
-    static char buf_model[24];
-    static char buf_rev[8];
-    static char buf_cores[8];
-    static char buf_freq[16];
-    static char buf_feat[20];
-    static char buf_flash[16];
-    static char buf_fspd[16];
-    static char buf_fmode[8];
-    static char buf_heap[16];
-    static char buf_htot[16];
-    static char buf_hmin[16];
-    static char buf_psram[16];
-    static char buf_sdk[24];
-    static char buf_sketch[16];
-    static char buf_free_sk[16];
-    static char buf_mac[20];
-    static char buf_ssid[20];
-    static char buf_ip[20];
-    static char buf_rssi[12];
-    static char buf_net[16];
-    static char buf_uptime[24];
-    static char buf_reset[16];
-
-    snprintf(buf_model, sizeof(buf_model), "%s", ESP.getChipModel());
-    snprintf(buf_rev, sizeof(buf_rev), "%d", ESP.getChipRevision());
-    snprintf(buf_cores, sizeof(buf_cores), "%d", chipInfo.cores);
-    snprintf(buf_freq, sizeof(buf_freq), "%d MHz", ESP.getCpuFreqMHz());
-    formatInfoFeatures(buf_feat, sizeof(buf_feat), chipInfo.features);
-
-    snprintf(buf_flash, sizeof(buf_flash), "%d MB", ESP.getFlashChipSize() / (1024 * 1024));
-    snprintf(buf_fspd, sizeof(buf_fspd), "%d MHz", ESP.getFlashChipSpeed() / 1000000);
-    strncpy(buf_fmode, infoFlashModeText(), sizeof(buf_fmode));
-    buf_fmode[sizeof(buf_fmode) - 1] = '\0';
-    snprintf(buf_heap, sizeof(buf_heap), "%d KB", ESP.getFreeHeap() / 1024);
-    snprintf(buf_htot, sizeof(buf_htot), "%d KB", ESP.getHeapSize() / 1024);
-    snprintf(buf_hmin, sizeof(buf_hmin), "%d KB", ESP.getMinFreeHeap() / 1024);
-    if (ESP.getPsramSize() > 0) {
-        snprintf(buf_psram, sizeof(buf_psram), "%d/%d KB", ESP.getFreePsram() / 1024,
-                 ESP.getPsramSize() / 1024);
-    } else {
-        strncpy(buf_psram, "none", sizeof(buf_psram));
-        buf_psram[sizeof(buf_psram) - 1] = '\0';
-    }
-
-    snprintf(buf_sdk, sizeof(buf_sdk), "%s", ESP.getSdkVersion());
-    snprintf(buf_sketch, sizeof(buf_sketch), "%d KB", ESP.getSketchSize() / 1024);
-    snprintf(buf_free_sk, sizeof(buf_free_sk), "%d KB", ESP.getFreeSketchSpace() / 1024);
-
-    formatInfoMac(buf_mac, sizeof(buf_mac));
-    if (WiFi.status() == WL_CONNECTED) {
-        strncpy(buf_net, "up", sizeof(buf_net));
-        buf_net[sizeof(buf_net) - 1] = '\0';
-        strncpy(buf_ssid, WiFi.SSID().c_str(), sizeof(buf_ssid) - 1);
-        buf_ssid[sizeof(buf_ssid) - 1] = '\0';
-        strncpy(buf_ip, WiFi.localIP().toString().c_str(), sizeof(buf_ip) - 1);
-        buf_ip[sizeof(buf_ip) - 1] = '\0';
-        snprintf(buf_rssi, sizeof(buf_rssi), "%d dBm", WiFi.RSSI());
-    } else {
-        strncpy(buf_net, "down", sizeof(buf_net));
-        buf_net[sizeof(buf_net) - 1] = '\0';
-        strncpy(buf_ssid, "-", sizeof(buf_ssid));
-        buf_ssid[sizeof(buf_ssid) - 1] = '\0';
-        strncpy(buf_ip, "-", sizeof(buf_ip));
-        buf_ip[sizeof(buf_ip) - 1] = '\0';
-        strncpy(buf_rssi, "-", sizeof(buf_rssi));
-        buf_rssi[sizeof(buf_rssi) - 1] = '\0';
-    }
-
-    formatInfoUptime(buf_uptime, sizeof(buf_uptime));
-    strncpy(buf_reset, infoResetReasonText(), sizeof(buf_reset));
-    buf_reset[sizeof(buf_reset) - 1] = '\0';
-
-    int count = 0;
-
-    // Chip
-    if (count < max_sections) {
-        InfoSection& sec = sections[count++];
-        sec = {};
-        sec.title = "Chip";
-        infoAddLine(sec, "model", buf_model);
-        infoAddLine(sec, "rev", buf_rev);
-        infoAddLine(sec, "cores", buf_cores);
-        infoAddLine(sec, "freq", buf_freq);
-        infoAddLine(sec, "feat", buf_feat);
-    }
-
-    // Mem
-    if (count < max_sections) {
-        InfoSection& sec = sections[count++];
-        sec = {};
-        sec.title = "Mem";
-        infoAddLine(sec, "flash", buf_flash);
-        infoAddLine(sec, "fspd", buf_fspd);
-        infoAddLine(sec, "fmode", buf_fmode);
-        infoAddLine(sec, "heap", buf_heap);
-        infoAddLine(sec, "htot", buf_htot);
-        infoAddLine(sec, "hmin", buf_hmin);
-        infoAddLine(sec, "psram", buf_psram);
-    }
-
-    // Fw
-    if (count < max_sections) {
-        InfoSection& sec = sections[count++];
-        sec = {};
-        sec.title = "Fw";
-        infoAddLine(sec, "sdk", buf_sdk);
-        infoAddLine(sec, "sketch", buf_sketch);
-        infoAddLine(sec, "free", buf_free_sk);
-    }
-
-    // Net
-    if (count < max_sections) {
-        InfoSection& sec = sections[count++];
-        sec = {};
-        sec.title = "Net";
-        infoAddLine(sec, "mac", buf_mac);
-        infoAddLine(sec, "link", buf_net);
-        infoAddLine(sec, "ssid", buf_ssid);
-        infoAddLine(sec, "ip", buf_ip);
-        infoAddLine(sec, "rssi", buf_rssi);
-    }
-
-    // Run
-    if (count < max_sections) {
-        InfoSection& sec = sections[count++];
-        sec = {};
-        sec.title = "Run";
-        infoAddLine(sec, "up", buf_uptime);
-        infoAddLine(sec, "reset", buf_reset);
-    }
-
-    return count;
-}
-
-// 绘制一区：标题 + 正文（Settings 右侧面板用 1x 标题以省高度）
-static int drawInfoSectionAt(const InfoSection& sec, const int x, const int y,
-                             const int title_size) {
-    M5Cardputer.Display.setTextSize(title_size);
-    M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
-    M5Cardputer.Display.setCursor(x, y);
-    M5Cardputer.Display.print(sec.title);
-
-    const int title_h = (title_size == 2) ? INFO_LINE_H_2X : INFO_LINE_H;
-    int cy = y + title_h + INFO_TITLE_GAP;
-    for (int i = 0; i < sec.line_count; i++) {
-        drawInfoLineAt(x, cy, sec.lines[i].label, sec.lines[i].value, INFO_BODY_SIZE);
-        cy += INFO_LINE_H;
-    }
-    return y + title_h + INFO_TITLE_GAP;
-}
-
-// 绘制 Info 内容到指定区域（一页一区）；返回正文起始 y
-static int drawInfoContentAt(const int x, const int y, const int title_size) {
-    InfoSection sections[INFO_MAX_PAGES];
-    const int page_count = buildInfoSections(sections, INFO_MAX_PAGES);
-    if (page_count <= 0) {
-        return y;
-    }
-    if (infoPage >= page_count) {
-        infoPage = page_count - 1;
-    }
-    if (infoPage < 0) {
-        infoPage = 0;
-    }
-
-    const int body_y = drawInfoSectionAt(sections[infoPage], x, y, title_size);
-    return body_y;
-}
-
-static int infoPageCount() {
-    InfoSection sections[INFO_MAX_PAGES];
-    return buildInfoSections(sections, INFO_MAX_PAGES);
-}
-
-// Info 翻页（循环）；redraw=false 时只改页码
-static bool advanceInfoPage(const int delta) {
-    const int page_count = infoPageCount();
-    if (page_count <= 1 || delta == 0) {
-        return false;
-    }
-    infoPage = (infoPage + delta + page_count) % page_count;
-    return true;
-}
-
 // ===== SETTINGS =====
 
 enum class SettingsModule : uint8_t {
@@ -1160,8 +850,7 @@ enum class SettingsModule : uint8_t {
     Sound = 1,
     Time = 2,
     Infrared = 3,
-    Info = 4,
-    Count = 5,
+    Count = 4,
 };
 
 enum class SettingsFocus : uint8_t { List = 0, Panel = 1 };
@@ -1184,8 +873,6 @@ static const char* settingsModuleName(const SettingsModule mod) {
             return "clock";
         case SettingsModule::Infrared:
             return "infrared";
-        case SettingsModule::Info:
-            return "info";
         default:
             return "?";
     }
@@ -1201,8 +888,6 @@ static int settingsPanelRowCount(const SettingsModule mod) {
             return 3; // default / timezone / pure
         case SettingsModule::Infrared:
             return 3; // category / tv brand / ac brand
-        case SettingsModule::Info:
-            return 0; // 翻页不靠行
         default:
             return 0;
     }
@@ -1266,7 +951,7 @@ static int getSettingsUpDownDelta(const Keyboard_Class::KeysState& status) {
     return 0;
 }
 
-// 左右键：焦点切换 / Info 翻页
+// 左右键：焦点切换
 static int getSettingsLeftRightDelta(const Keyboard_Class::KeysState& status) {
     for (const uint8_t hid : status.hid_keys) {
         if (hid == 0x50 || hid == 0x36) {
@@ -1294,19 +979,6 @@ static int getSettingsValueDelta(const Keyboard_Class::KeysState& status) {
             return -1;
         }
         if (c == '=' || c == '+') {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-// [] 键：Info 翻页（返回 -1 / +1 / 0）
-static int getSettingsBracketDelta(const Keyboard_Class::KeysState& status) {
-    for (const char c : status.word) {
-        if (c == '[') {
-            return -1;
-        }
-        if (c == ']') {
             return 1;
         }
     }
@@ -1458,10 +1130,6 @@ static void drawSettingsInfraredPanel(const int x, const int y, const int w) {
                          g_settings_row == 2);
 }
 
-static void drawSettingsInfoPanel(const int x, const int y) {
-    drawInfoContentAt(x, y, 1);
-}
-
 static void drawSettingsHints() {
     const int hint_y = M5Cardputer.Display.height() - SETTINGS_HINT_H;
     const int screen_w = M5Cardputer.Display.width();
@@ -1486,24 +1154,12 @@ static void drawSettingsHints() {
     M5Cardputer.Display.print("focus ");
     cx += M5Cardputer.Display.textWidth("focus ");
 
-    cx += drawTextBadge(cx, hint_y,
-                        g_settings_module == SettingsModule::Info ? "[]" : "-=", 1);
+    cx += drawTextBadge(cx, hint_y, "-=", 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, hint_y);
-    if (g_settings_module == SettingsModule::Info) {
-        M5Cardputer.Display.print("page");
-        cx += M5Cardputer.Display.textWidth("page");
-        char pager[12];
-        snprintf(pager, sizeof(pager), " %d/%d", infoPage + 1, infoPageCount());
-        M5Cardputer.Display.print(pager);
-        cx += M5Cardputer.Display.textWidth(pager);
-    } else {
-        M5Cardputer.Display.print("val");
-        cx += M5Cardputer.Display.textWidth("val");
-    }
-    M5Cardputer.Display.print(" ");
-    cx += M5Cardputer.Display.textWidth(" ");
+    M5Cardputer.Display.print("val ");
+    cx += M5Cardputer.Display.textWidth("val ");
     cx += drawTextBadge(cx, hint_y, "Tab", 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
@@ -1542,9 +1198,6 @@ void drawSettingsApp() {
         case SettingsModule::Infrared:
             drawSettingsInfraredPanel(panel_content_x, panel_content_y, panel_content_w);
             break;
-        case SettingsModule::Info:
-            drawSettingsInfoPanel(panel_content_x, panel_content_y);
-            break;
         default:
             break;
     }
@@ -1555,7 +1208,6 @@ void enterSettingsApp() {
     g_settings_module = SettingsModule::Screen;
     g_settings_focus = SettingsFocus::List;
     g_settings_row = 0;
-    infoPage = 0;
     drawSettingsApp();
 }
 
@@ -1609,9 +1261,6 @@ static void applySettingsValueDelta(const int val_delta) {
             saveAppConfigInfrared(cat, tv, ac);
             break;
         }
-        case SettingsModule::Info:
-            // Info 翻页改用 []，见 handleSettingsApp
-            break;
         default:
             break;
     }
@@ -1634,7 +1283,7 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
 
     const int lr = getSettingsLeftRightDelta(status);
     if (lr != 0) {
-        // 左右只切 List / Panel 焦点，不用于 Info 翻页
+        // 左右只切 List / Panel 焦点
         if (lr > 0) {
             g_settings_focus = SettingsFocus::Panel;
             clampSettingsRow();
@@ -1657,11 +1306,8 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
             }
             g_settings_module = static_cast<SettingsModule>(next);
             g_settings_row = 0;
-            if (g_settings_module == SettingsModule::Info) {
-                infoPage = 0;
-            }
         } else {
-            // Panel 焦点：有行则切行；Info 无行（翻页用 []）
+            // Panel 焦点：切行
             const int n = settingsPanelRowCount(g_settings_module);
             if (n > 0) {
                 g_settings_row = (g_settings_row + ud + n) % n;
@@ -1669,16 +1315,6 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
         }
         drawSettingsApp();
         return;
-    }
-
-    // Info：[] 翻页
-    if (g_settings_module == SettingsModule::Info) {
-        const int bracket = getSettingsBracketDelta(status);
-        if (bracket != 0) {
-            advanceInfoPage(bracket);
-            drawSettingsApp();
-            return;
-        }
     }
 
     const int val_delta = getSettingsValueDelta(status);
@@ -2592,6 +2228,9 @@ void enterApp(const AppState state) {
         case AppState::HID_KB:
             enterHidKbApp();
             break;
+        case AppState::INFO:
+            enterInfoApp();
+            break;
         case AppState::LOG:
             enterLogApp();
             break;
@@ -2710,6 +2349,8 @@ void loop() {
             lastBatUpdateMs = now;
             updateBatteryApp();
         }
+    } else if (currentState == AppState::INFO) {
+        updateInfoApp();
     } else if (currentState == AppState::WIFI) {
         updateWifiApp();
     } else if (currentState == AppState::BLE) {
@@ -2902,6 +2543,11 @@ void loop() {
             case AppState::HID_KB:
                 // 按下与松开都要处理，避免主机卡键
                 handleHidKbApp(M5Cardputer.Keyboard.keysState());
+                break;
+            case AppState::INFO:
+                if (M5Cardputer.Keyboard.isPressed()) {
+                    handleInfoApp(M5Cardputer.Keyboard.keysState());
+                }
                 break;
             case AppState::LOG:
                 if (M5Cardputer.Keyboard.isPressed()) {

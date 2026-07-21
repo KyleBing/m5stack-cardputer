@@ -564,26 +564,28 @@ bool tryHandleScreenshotHotkey() {
     return true;
 }
 
+int countTfScreenshots() {
+    return shotEnsureSd() ? countOn(SD) : 0;
+}
+
+int countFlashScreenshots() {
+    return LittleFS.begin(false) ? countOn(LittleFS) : 0;
+}
+
 int countScreenshots() {
-    int n = 0;
-    if (shotEnsureSd()) {
-        n += countOn(SD);
-    }
-    if (LittleFS.begin(false)) {
-        n += countOn(LittleFS);
-    }
-    return n;
+    return countTfScreenshots() + countFlashScreenshots();
+}
+
+size_t screenshotsUsedBytesTf() {
+    return shotEnsureSd() ? usedBytesOn(SD) : 0;
+}
+
+size_t screenshotsUsedBytesFlash() {
+    return LittleFS.begin(false) ? usedBytesOn(LittleFS) : 0;
 }
 
 size_t screenshotsUsedBytes() {
-    size_t sum = 0;
-    if (shotEnsureSd()) {
-        sum += usedBytesOn(SD);
-    }
-    if (LittleFS.begin(false)) {
-        sum += usedBytesOn(LittleFS);
-    }
-    return sum;
+    return screenshotsUsedBytesTf() + screenshotsUsedBytesFlash();
 }
 
 void getFlashDataSpace(size_t* total, size_t* used, size_t* free_bytes) {
@@ -640,16 +642,23 @@ void getSdDataSpace(size_t* total, size_t* used, size_t* free_bytes) {
     }
 }
 
-void enumScreenshots(ShotEnumCallback cb, void* user) {
-    if (cb == nullptr) {
+void enumTfScreenshots(ShotEnumCallback cb, void* user) {
+    if (cb == nullptr || !shotEnsureSd()) {
         return;
     }
-    if (shotEnsureSd()) {
-        enumOn(SD, "TF", cb, user);
+    enumOn(SD, "TF", cb, user);
+}
+
+void enumFlashScreenshots(ShotEnumCallback cb, void* user) {
+    if (cb == nullptr || !LittleFS.begin(false)) {
+        return;
     }
-    if (LittleFS.begin(false)) {
-        enumOn(LittleFS, "Flash", cb, user);
-    }
+    enumOn(LittleFS, "Flash", cb, user);
+}
+
+void enumScreenshots(ShotEnumCallback cb, void* user) {
+    enumTfScreenshots(cb, user);
+    enumFlashScreenshots(cb, user);
 }
 
 bool openScreenshotFile(const String& uri, File& out) {
@@ -671,16 +680,24 @@ bool openScreenshotFile(const String& uri, File& out) {
     return false;
 }
 
-int clearAllScreenshots() {
-    int n = 0;
-    if (shotEnsureSd()) {
-        n += clearAllOn(SD);
+int clearTfScreenshots() {
+    if (!shotEnsureSd()) {
+        return 0;
     }
-    if (LittleFS.begin(false)) {
-        n += clearAllOn(LittleFS);
-        LittleFS.remove(SHOT_BOOT_PENDING);
+    return clearAllOn(SD);
+}
+
+int clearFlashScreenshots() {
+    if (!LittleFS.begin(false)) {
+        return 0;
     }
+    const int n = clearAllOn(LittleFS);
+    LittleFS.remove(SHOT_BOOT_PENDING);
     return n;
+}
+
+int clearAllScreenshots() {
+    return clearTfScreenshots() + clearFlashScreenshots();
 }
 
 bool isSafeShotPath(const String& uri) {

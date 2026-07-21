@@ -823,7 +823,8 @@ static void drawMicListHints() {
 
 // 仅刷新列表顶部进度/状态行（播放中用，避免整页闪烁）
 static void drawMicListProgress() {
-    const int y = APP_CONTENT_Y_NO_TAP_TO_HEADER;
+    // 与 header 留出 APP_CONTENT_Y 间距，避免贴顶
+    const int y = APP_CONTENT_Y;
     const int w = M5Cardputer.Display.width() - APP_CONTENT_X;
     M5Cardputer.Display.fillRect(APP_CONTENT_X, y, w, 10, BLACK);
     M5Cardputer.Display.setTextSize(1);
@@ -853,7 +854,7 @@ static void drawMicListScreen() {
     micHeaderReady = false;
     M5Cardputer.Display.setTextSize(1);
 
-    int y = APP_CONTENT_Y_NO_TAP_TO_HEADER;
+    int y = APP_CONTENT_Y;
     if (!micSdReady && micSdChecked) {
         M5Cardputer.Display.setTextColor(APP_COLOR_ERROR, BLACK);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
@@ -885,7 +886,8 @@ static void drawMicListScreen() {
         const bool sel = (i == micListSel);
         const int row_y = y + (i - micListScroll) * MIC_LIST_LINE_H;
         if (sel) {
-            M5Cardputer.Display.fillRect(0, row_y - 1, screen_w, MIC_LIST_LINE_H, 0x2104);
+            // 选中条相对文字上移 3px，与字形基线对齐
+            M5Cardputer.Display.fillRect(0, row_y - 3, screen_w, MIC_LIST_LINE_H, 0x2104);
         }
 
         char size_buf[10];

@@ -5,6 +5,7 @@
 #include "app_device_icons.h"
 #include "app_header.h"
 #include "app_screenshot.h"
+#include "app_version.h"
 #include <FS.h>
 #include <LittleFS.h>
 #include <SD.h>
@@ -186,17 +187,25 @@ static void sendHtmlPage(const String& body, const uint8_t css_flags = HTML_CSS_
         "--th-bg:#222;--td-bg:#1a1a1a;--td-alt:#161616;--td-hover:#1e2a3a;"
         "--link:#8ab4f8;--code-bg:#2a2a2a;--pre-bg:#0d0d0d;--pre-bd:#333;"
         "--save-bd:#333;--hint:#999;--icon-bg:#000}}"
-        "body{font-family:system-ui,sans-serif;margin:0;padding:10px 12px;line-height:1.4;"
+        "body{font-family:system-ui,sans-serif;margin:0;padding:12px 14px 20px;line-height:1.4;"
         "width:100%;max-width:100%;background:var(--bg);color:var(--fg)}"
-        ".topbar{margin-bottom:8px}"
-        ".brand{display:flex;align-items:center;gap:10px}"
+        ".topbar{margin-bottom:12px}"
+        ".brand{display:flex;align-items:center;gap:10px;margin-bottom:10px}"
         ".site-logo{width:36px;height:36px;object-fit:contain;flex-shrink:0}"
         ".brand-text{min-width:0}"
-        ".brand-text h1{font-size:1.2rem;margin:0 0 2px;color:var(--fg-h)}"
-        ".nav{font-size:13px;margin:2px 0 0}"
-        ".nav a{color:var(--link)}"
+        ".brand-text h1{font-size:1.2rem;margin:0;color:var(--fg-h)}"
+        ".nav{display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:0}"
+        ".nav a{display:inline-block;padding:5px 10px;border-radius:6px;font-size:13px;"
+        "color:var(--tab-fg);text-decoration:none;border:1px solid transparent;"
+        "background:transparent}"
+        ".nav a:hover{background:var(--td-hover);color:var(--fg)}"
+        ".nav a.active{background:var(--tab-act);color:#fff;border-color:var(--tab-act);"
+        "font-weight:600}"
+        "@media(prefers-color-scheme:dark){.nav a.active{color:#121212}}"
+        ".card{background:var(--td-bg);border:1px solid var(--tab-bd);border-radius:10px;"
+        "padding:14px 16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}"
         "h1{font-size:1.2rem;margin:0 0 8px;color:var(--fg-h)}"
-        "h2{font-size:1.05rem;margin:12px 0 8px;color:var(--fg-h)}"
+        "h2{font-size:1.05rem;margin:0 0 8px;color:var(--fg-h)}"
         "input,textarea,select{width:100%;padding:6px 8px;font-size:13px;border:1px solid var(--input-bd);"
         "border-radius:4px;font-family:inherit;background:var(--input-bg);color:var(--fg)}"
         "textarea{resize:vertical;min-height:28px;font-family:ui-monospace,monospace;"
@@ -213,9 +222,18 @@ static void sendHtmlPage(const String& body, const uint8_t css_flags = HTML_CSS_
         "text-decoration:none}"
         "a.btn.primary{background:#1a73e8;color:#fff;border-color:#1a73e8}"
         ".hint{font-size:12px;color:var(--hint);margin:0 0 10px}"
-        ".toolbar{margin:10px 0;display:flex;flex-wrap:wrap;align-items:center;gap:6px}"
+        ".hint a{color:var(--link)}"
+        ".toolbar{margin:0 0 10px;display:flex;flex-wrap:wrap;align-items:center;gap:6px}"
         ".toolbar .count{font-size:13px;color:var(--hint);margin-left:auto}"
         ".table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}"
+        // 列表底添加行：与表格同宽，仅显示 +
+        ".btn-add-row{display:block;width:100%;margin:8px 0 0;padding:12px;font-size:22px;"
+        "font-weight:600;line-height:1;text-align:center}"
+        ".wifi-grid{max-width:480px}"
+        ".about-dl{margin:0;max-width:520px}"
+        ".about-dl dt{font-size:12px;color:var(--hint);margin:12px 0 2px}"
+        ".about-dl dd{margin:0;font-size:14px;color:var(--fg-h);word-break:break-all}"
+        ".about-dl a{color:var(--link)}"
         ".save-bar{margin-top:14px;padding-top:12px;border-top:1px solid var(--save-bd)}"
         ".result-actions{margin-top:16px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}"
         ".ok{color:#81c784}.err{color:#ff8a80}"
@@ -254,7 +272,6 @@ static void sendHtmlPage(const String& body, const uint8_t css_flags = HTML_CSS_
             ".model-cell textarea{flex:1;min-width:0}"
             ".dev-icon{width:32px;height:32px;object-fit:contain;flex-shrink:0;margin-top:2px;"
             "background:var(--icon-bg);border-radius:4px}"
-            ".wifi-grid{max-width:480px}"
         ));
     }
     if (css_flags & HTML_CSS_GROUPS) {
@@ -378,23 +395,58 @@ static void sendHtmlPage(const String& body, const uint8_t css_flags = HTML_CSS_
     g_server.sendContent(""); // 结束 chunked 传输
 }
 
-// 各页共用顶栏导航
-static void appendTopBar(String& body, const char* title) {
+// 顶栏当前 Tab（用于高亮）
+enum class WebNavTab : uint8_t {
+    None = 0,
+    Wifi,
+    Devices,
+    Groups,
+    Cursor,
+    System,
+    Shots,
+    Files,
+    Advanced,
+    Example,
+    About,
+};
+
+// nav 链接：当前页加 active
+static void appendNavLink(String& body, const WebNavTab tab, const WebNavTab active, const char* href,
+                          const char* label) {
+    body += F("<a href='");
+    body += href;
+    body += '\'';
+    if (tab == active) {
+        body += F(" class='active'");
+    }
+    body += '>';
+    body += label;
+    body += F("</a>");
+}
+
+// 各页共用顶栏导航；并打开内容卡片
+static void appendTopBar(String& body, const char* title, const WebNavTab active = WebNavTab::None) {
     body += F("<div class='topbar'><div class='brand'>"
               "<img class='site-logo' src='/favicon.svg' alt='' width='36' height='36'>"
               "<div class='brand-text'><h1>");
     body += title;
-    body += F("</h1>"
-              "<p class='nav'>"
-              "<a href='/'>主页</a> · "
-              "<a href='/groups'>编组</a> · "
-              "<a href='/cursor'>Cursor</a> · "
-              "<a href='/system'>系统</a> · "
-              "<a href='/shots'>截图</a> · "
-              "<a href='/files'>TF文件</a> · "
-              "<a href='/advanced'>高级JSON</a> · "
-              "<a href='/example'>示例</a>"
-              "</p></div></div></div>");
+    body += F("</h1></div></div><nav class='nav'>");
+    appendNavLink(body, WebNavTab::Wifi, active, "/wifi", "WiFi");
+    appendNavLink(body, WebNavTab::Devices, active, "/", "米家设备");
+    appendNavLink(body, WebNavTab::Groups, active, "/groups", "米家设备编组");
+    appendNavLink(body, WebNavTab::Cursor, active, "/cursor", "Cursor");
+    appendNavLink(body, WebNavTab::System, active, "/system", "系统");
+    appendNavLink(body, WebNavTab::Shots, active, "/shots", "截图");
+    appendNavLink(body, WebNavTab::Files, active, "/files", "TF文件");
+    appendNavLink(body, WebNavTab::Advanced, active, "/advanced", "高级JSON");
+    appendNavLink(body, WebNavTab::Example, active, "/example", "示例");
+    appendNavLink(body, WebNavTab::About, active, "/about", "关于");
+    body += F("</nav></div><div class='card'>");
+}
+
+// 关闭内容卡片（脚本放在卡片外）
+static void appendCardEnd(String& body) {
+    body += F("</div>");
 }
 
 // 嵌入 cfg JSON 供页面 JS 读取
@@ -441,23 +493,16 @@ static void appendJsLoadCfg(String& body) {
               "if(!cfg.Infrared.ac_brand)cfg.Infrared.ac_brand='midea';}");
 }
 
-// 主页：WiFi + 米家设备
+// 米家设备页（原主页设备表）
 static void handleFormRoot() {
     const String cfg = sanitizeJsonForHtml(loadConfigText());
 
     String body;
     body.reserve(cfg.length() + 6144);
-    appendTopBar(body, "Cardputer Config");
+    appendTopBar(body, "米家设备", WebNavTab::Devices);
     body += F("<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
-              "<h2>WiFi</h2>"
-              "<div class='wifi-grid'>"
-              "<label>SSID<input id='wifi-ssid' autocomplete='off'></label>"
-              "<label>密码<input id='wifi-pass' autocomplete='off'></label>"
-              "</div>"
-              "<h2>米家设备</h2>"
               "<div class='toolbar'>"
-              "<button type='button' id='btn-add'>+ 添加设备</button>"
               "<span class='count' id='dev-count'></span>"
               "</div>"
               "<div class='table-wrap'><table class='dev-table'>"
@@ -476,9 +521,12 @@ static void handleFormRoot() {
               "</tr></thead>"
               "<tbody id='dev-tbody'></tbody>"
               "</table></div>"
+              // 列表最下方全宽添加按钮
+              "<button type='button' id='btn-add' class='btn-add-row' title='添加设备'>+</button>"
               "<div class='save-bar'>"
               "<button type='submit' class='primary' id='btn-save'>保存到设备</button>"
               "</div></form>");
+    appendCardEnd(body);
     appendCfgDataScript(body, cfg);
     body += F("<script>");
     body += F("const DEV_MAX=");
@@ -519,10 +567,8 @@ static void handleFormRoot() {
         "(cfg.devices||[]).forEach(d=>{if(!d||!d.hotkey)return;"
         "const h=String(d.hotkey).toLowerCase()[0];"
         "if(!h||seen.has(h)){delete d.hotkey;return;}seen.add(h);d.hotkey=h;});}"
-        // 仅写回本页字段，其余 cfg 原样提交
-        "function collect(){cfg.wifi.ssid=document.getElementById('wifi-ssid').value;"
-        "cfg.wifi.password=document.getElementById('wifi-pass').value;"
-        "collectDevices();dedupeDeviceHotkeys();}"
+        // 仅写回本页设备字段，其余 cfg 原样提交
+        "function collect(){collectDevices();dedupeDeviceHotkeys();}"
         "function renderDevices(){const tb=document.getElementById('dev-tbody');tb.innerHTML='';"
         "cfg.devices.forEach((d,i)=>{const tr=document.createElement('tr');tr.dataset.i=i;"
         "tr.innerHTML=`<td class='col-idx'>${i+1}</td>"
@@ -549,10 +595,7 @@ static void handleFormRoot() {
         "const item=cfg.devices.splice(i,1)[0];cfg.devices.unshift(item);renderDevices();}"
         "function moveBottom(i){collect();if(i>=cfg.devices.length-1)return;"
         "const item=cfg.devices.splice(i,1)[0];cfg.devices.push(item);renderDevices();}"
-        "function init(){loadCfg();"
-        "document.getElementById('wifi-ssid').value=cfg.wifi.ssid||'';"
-        "document.getElementById('wifi-pass').value=cfg.wifi.password||'';"
-        "renderDevices();"
+        "function init(){loadCfg();renderDevices();"
         "document.getElementById('btn-add').onclick=()=>{collect();"
         "if(cfg.devices.length>=DEV_MAX){alert('最多 '+DEV_MAX+' 台设备');return;}"
         "cfg.devices.push({name:'',name_zh:'',id:'',mac:'',ip:'',token:'',model:'',hotkey:'',ble:{key:''}});"
@@ -578,19 +621,55 @@ static void handleFormRoot() {
     sendHtmlPage(body, HTML_CSS_DEVICES);
 }
 
+// WiFi 配置页（从主页拆出）
+static void handleWifiPage() {
+    const String cfg = sanitizeJsonForHtml(loadConfigText());
+
+    String body;
+    body.reserve(cfg.length() + 2048);
+    appendTopBar(body, "WiFi", WebNavTab::Wifi);
+    body += F("<form id='save-form' method='POST' action='/save'>"
+              "<input type='hidden' name='config' id='config-payload'>"
+              "<h2>WiFi</h2>"
+              "<p class='hint'>用于设备联网与 Config STA 模式；SSID / 密码写入 "
+              "<code>wifi</code>。</p>"
+              "<div class='wifi-grid'>"
+              "<label>SSID<input id='wifi-ssid' autocomplete='off'></label>"
+              "<label>密码<input id='wifi-pass' autocomplete='off'></label>"
+              "</div>"
+              "<div class='save-bar'>"
+              "<button type='submit' class='primary' id='btn-save'>保存到设备</button>"
+              "</div></form>");
+    appendCardEnd(body);
+    appendCfgDataScript(body, cfg);
+    body += F("<script>");
+    appendJsLoadCfg(body);
+    body += F(
+        "function collect(){cfg.wifi.ssid=document.getElementById('wifi-ssid').value;"
+        "cfg.wifi.password=document.getElementById('wifi-pass').value;}"
+        "function init(){loadCfg();"
+        "document.getElementById('wifi-ssid').value=cfg.wifi.ssid||'';"
+        "document.getElementById('wifi-pass').value=cfg.wifi.password||'';"
+        "document.getElementById('save-form').onsubmit=()=>{collect();"
+        "document.getElementById('config-payload').value=JSON.stringify(cfg,null,2);};}"
+        "init();");
+    body += F("</script>");
+    sendHtmlPage(body);
+}
+
 // 编组页
 static void handleGroupsPage() {
     const String cfg = sanitizeJsonForHtml(loadConfigText());
 
     String body;
     body.reserve(cfg.length() + 4096);
-    appendTopBar(body, "米家设备编组");
+    appendTopBar(body, "米家设备编组", WebNavTab::Groups);
     body += F("<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
               "<p class='hint'>用设备 <code>id</code> 组成米家设备编组；改名不影响成员。"
               "成员里的 name / name_zh 仅方便阅读，保存时会从设备表同步。"
               "BLE 只读设备可勾选但设备端开/关会跳过。"
-              "请先在 <a href='/'>主页</a> 填写设备 id。</p>"
+              "请先在 <a href='/'>米家设备</a> 填写设备 id。</p>"
               "<div class='toolbar'>"
               "<button type='button' id='btn-add-group'>+ 添加米家设备编组</button>"
               "<span class='count' id='group-count'></span>"
@@ -599,6 +678,7 @@ static void handleGroupsPage() {
               "<div class='save-bar'>"
               "<button type='submit' class='primary'>保存到设备</button>"
               "</div></form>");
+    appendCardEnd(body);
     appendCfgDataScript(body, cfg);
     body += F("<script>");
     body += F("const GROUP_MAX=");
@@ -652,7 +732,7 @@ static void handleGroupsPage() {
         "data-namezh='${esc(zh)}' ${selected.has(d.id)?'checked':''}>"
         "<span class='member-meta'><span>${label}${ble?' · BLE':''}</span>"
         "<div class='member-id'>id: ${esc(d.id)}</div></span></label>`;});"
-        "if(!membersHtml)membersHtml='<p class=\"hint\">请先在「主页」里填写设备 id</p>';"
+        "if(!membersHtml)membersHtml='<p class=\"hint\">请先在「米家设备」里填写设备 id</p>';"
         "card.innerHTML=`<div class='group-head'>"
         "<label>名称<input data-gf='name' value='${esc(g.name||'')}'></label>"
         "<label>中文名<input data-gf='name_zh' value='${esc(g.name_zh||g.name_cn||'')}'></label>"
@@ -691,7 +771,7 @@ static void handleCursorPage() {
 
     String body;
     body.reserve(cfg.length() + 2048);
-    appendTopBar(body, "Cursor");
+    appendTopBar(body, "Cursor", WebNavTab::Cursor);
     body += F("<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
               "<h2>Cursor Session Token</h2>"
@@ -726,11 +806,12 @@ static void handleCursorPage() {
               "<p class='hint'>失败/低内存会写入 <code>/cursor.err</code>（重启后仍在）；"
               "完整轨迹在 <code>/cursor.log</code>。"
               "设备上也可主菜单 <code>Fn+i</code> 查看，无需开 Config。</p>"
-              "<p class='nav'><a href='/cursor-err' target='_blank'>查看错误轨</a> · "
+              "<p class='hint'><a href='/cursor-err' target='_blank'>查看错误轨</a> · "
               "<a href='/cursor-log' target='_blank'>查看完整日志</a></p>"
               "<div class='save-bar'>"
               "<button type='submit' class='primary'>保存到设备</button>"
               "</div></form>");
+    appendCardEnd(body);
     appendCfgDataScript(body, cfg);
     body += F("<script>");
     appendJsLoadCfg(body);
@@ -753,7 +834,7 @@ static void handleSystemPage() {
 
     String body;
     body.reserve(cfg.length() + 2048);
-    appendTopBar(body, "系统设置");
+    appendTopBar(body, "系统设置", WebNavTab::System);
     body += F("<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
               "<p class='hint'>时区、亮度、提示音与红外默认。亮度配置为 0~100，"
@@ -810,6 +891,7 @@ static void handleSystemPage() {
               "<div class='save-bar'>"
               "<button type='submit' class='primary'>保存到设备</button>"
               "</div></form>");
+    appendCardEnd(body);
     appendCfgDataScript(body, cfg);
     body += F("<script>");
     appendJsLoadCfg(body);
@@ -859,12 +941,13 @@ static void handleAdvancedRoot() {
 
     String body;
     body.reserve(cfg.length() + 512);
-    appendTopBar(body, "Cardputer Config");
+    appendTopBar(body, "高级 JSON", WebNavTab::Advanced);
     body += F("<h2>高级 JSON 编辑</h2>"
               "<form method='POST' action='/save'>"
               "<textarea class='json-editor' name='config'>");
     body += escapeForTextarea(cfg);
     body += F("</textarea><br><button type='submit' class='primary'>保存到设备</button></form>");
+    appendCardEnd(body);
     sendHtmlPage(body);
 }
 
@@ -888,9 +971,11 @@ static void handleSave() {
                   "<p>设备数: ");
         body += getAppConfig().device_count;
         body += F("</p><div class='result-actions'>"
-                  "<a href='/' class='btn primary'>返回主页</a>"
-                  "<a href='/groups' class='btn'>编组</a>"
+                  "<a href='/' class='btn primary'>返回米家设备</a>"
+                  "<a href='/wifi' class='btn'>WiFi</a>"
+                  "<a href='/groups' class='btn'>米家设备编组</a>"
                   "<a href='/advanced' class='btn'>高级 JSON</a></div>");
+        appendCardEnd(body);
         sendHtmlPage(body);
     } else {
         strncpy(g_web_status, "json error", sizeof(g_web_status));
@@ -898,15 +983,16 @@ static void handleSave() {
         appendTopBar(body, "保存失败");
         body += F("<p class='err'>JSON 格式无效，请检查后重试。</p>"
                   "<div class='result-actions'>"
-                  "<a href='/' class='btn primary'>返回主页</a>"
+                  "<a href='/' class='btn primary'>返回米家设备</a>"
                   "<a href='/advanced' class='btn'>高级 JSON</a></div>");
+        appendCardEnd(body);
         sendHtmlPage(body);
     }
 }
 
 static void handleExample() {
     String body;
-    appendTopBar(body, "示例 config.json");
+    appendTopBar(body, "示例 config.json", WebNavTab::Example);
     body += F("<p>WiFi 米家用 <code>ip</code> + <code>token</code>；"
               "BLE 传感器用 <code>mac</code> + <code>ble.key</code>，可加 <code>name_zh</code>。"
               "可选 <code>hotkey</code>（a-z/0-9，勿用 q）供设备端 Q 快速选择；重复时保留靠前第一个。"
@@ -915,6 +1001,35 @@ static void handleExample() {
               "Cursor 用量见 <a href='/cursor'>Cursor</a> 页。</p><pre>");
     body += DEFAULT_CONFIG;
     body += F("</pre>");
+    appendCardEnd(body);
+    sendHtmlPage(body);
+}
+
+// 关于页：固件与仓库信息
+static void handleAboutPage() {
+    String body;
+    body.reserve(1024);
+    appendTopBar(body, "关于", WebNavTab::About);
+    body += F("<h2>Sparks</h2>"
+              "<p class='hint'>M5Stack Cardputer 多应用固件：字母键启动器，覆盖米家控制、"
+              "红外遥控、配网、时间工具、Cursor 用量与硬件调试等。</p>"
+              "<dl class='about-dl'>"
+              "<dt>版本</dt><dd>");
+    body += APP_VERSION;
+    body += F("</dd><dt>更新日期</dt><dd>");
+    body += APP_UPDATE_TIME;
+    body += F("</dd><dt>作者</dt><dd>");
+    body += APP_AUTHOR;
+    body += F("</dd><dt>邮箱</dt><dd><a href='mailto:");
+    body += APP_EMAIL;
+    body += F("'>");
+    body += APP_EMAIL;
+    body += F("</a></dd><dt>GitHub</dt><dd>"
+              "<a href='https://github.com/KyleBing/m5stack-cardputer-sparks' "
+              "target='_blank' rel='noopener'>"
+              "github.com/KyleBing/m5stack-cardputer-sparks</a></dd>"
+              "</dl>");
+    appendCardEnd(body);
     sendHtmlPage(body);
 }
 
@@ -1017,7 +1132,7 @@ static void appendShotCard(const char* storage, const char* basename, const size
     *body += F("</div></div></div>");
 }
 
-// 截图列表页：预览；Fn+s 优先 TF，否则 Flash
+// 截图列表页：TF / Flash 分区；Fn+s 优先 TF，否则 Flash
 static void handleShotsList() {
     size_t fs_total = 0;
     size_t fs_used = 0;
@@ -1028,8 +1143,10 @@ static void handleShotsList() {
     size_t sd_free = 0;
     getSdDataSpace(&sd_total, &sd_used, &sd_free);
     const bool sd_ok = isScreenshotSdReady();
-    const int shot_count = countScreenshots();
-    const size_t shot_bytes = screenshotsUsedBytes();
+    const int tf_count = countTfScreenshots();
+    const int flash_count = countFlashScreenshots();
+    const size_t tf_bytes = screenshotsUsedBytesTf();
+    const size_t flash_bytes = screenshotsUsedBytesFlash();
     const int used_pct =
         (fs_total > 0) ? static_cast<int>((fs_used * 100u) / fs_total) : 0;
     const int sd_pct =
@@ -1037,7 +1154,7 @@ static void handleShotsList() {
 
     String body;
     body.reserve(4096);
-    appendTopBar(body, "截图");
+    appendTopBar(body, "截图", WebNavTab::Shots);
     body += F("<p class='hint'>任意界面按 <code>Fn+s</code> 截图："
               "有 TF 卡优先存卡，否则存 Flash；"
               "文件名 <code>app_&lt;界面&gt;_001.bmp</code> 序号递增。"
@@ -1046,62 +1163,104 @@ static void handleShotsList() {
     body += sd_ok ? F("TF 卡") : F("Flash（LittleFS）");
     body += F("</strong></p>");
 
+    // —— TF 卡截图 ——
     if (sd_ok) {
         body += F("<div class='shot-space'>"
-                  "<div><strong>TF 卡（SD）</strong></div>"
+                  "<div><strong>TF 卡（SD）截图</strong></div>"
                   "<div>总容量：");
         body += formatBytesHuman(sd_total);
         body += F(" · 已占用：");
         body += formatBytesHuman(sd_used);
         body += F(" · 剩余：");
         body += formatBytesHuman(sd_free);
+        body += F("</div><div>截图：");
+        body += String(tf_count);
+        body += F(" 张 · 占用 ");
+        body += formatBytesHuman(tf_bytes);
         body += F("</div><div class='bar'><i style='width:");
         body += String(sd_pct);
         body += F("%'></i></div></div>");
+
+        if (tf_count > 0) {
+            body += F("<div class='toolbar'>"
+                      "<form method='POST' action='/shots/clear-tf' style='margin:0'>"
+                      "<button type='submit' class='danger' "
+                      "onclick=\"return confirm('删除 TF 卡上的全部截图？')\">"
+                      "清空 TF 截图</button></form>"
+                      "<span class='count'>TF ");
+            body += String(tf_count);
+            body += F(" 张</span></div><div class='shot-grid'>");
+            enumTfScreenshots(appendShotCard, &body);
+            body += F("</div>");
+        } else {
+            body += F("<p class='hint'>TF 卡上暂无截图。</p>");
+        }
+    } else {
+        body += F("<p class='hint'>未检测到 TF 卡；插入后新截图会优先存卡。</p>");
     }
 
-    body += F("<div class='shot-space'>"
-              "<div><strong>Flash Data（LittleFS）</strong></div>"
+    // —— Flash 截图 ——
+    body += F("<div class='shot-space' style='margin-top:16px'>"
+              "<div><strong>Flash（LittleFS）截图</strong></div>"
               "<div>总容量：");
     body += formatBytesHuman(fs_total);
     body += F(" · 已占用：");
     body += formatBytesHuman(fs_used);
     body += F(" · 剩余：");
     body += formatBytesHuman(fs_free);
-    body += F("</div><div>截图合计：");
-    body += String(shot_count);
+    body += F("</div><div>截图：");
+    body += String(flash_count);
     body += F(" 张 · 占用 ");
-    body += formatBytesHuman(shot_bytes);
+    body += formatBytesHuman(flash_bytes);
     body += F("</div><div class='bar'><i style='width:");
     body += String(used_pct);
     body += F("%'></i></div></div>");
 
-    if (shot_count > 0) {
+    if (flash_count > 0) {
         body += F("<div class='toolbar'>"
-                  "<form method='POST' action='/shots/clear' style='margin:0'>"
+                  "<form method='POST' action='/shots/clear-flash' style='margin:0'>"
                   "<button type='submit' class='danger' "
-                  "onclick=\"return confirm('删除全部截图？')\">清空全部</button></form>"
-                  "<span class='count'>共 ");
-        body += String(shot_count);
+                  "onclick=\"return confirm('删除 Flash 上的全部截图？')\">"
+                  "清空 Flash 截图</button></form>"
+                  "<span class='count'>Flash ");
+        body += String(flash_count);
         body += F(" 张</span></div><div class='shot-grid'>");
-        enumScreenshots(appendShotCard, &body);
+        enumFlashScreenshots(appendShotCard, &body);
         body += F("</div>");
     } else {
-        body += F("<p class='hint'>暂无截图。到任意界面按 Fn+s 后再刷新本页。</p>");
+        body += F("<p class='hint'>Flash 上暂无截图。</p>");
     }
 
+    if (tf_count == 0 && flash_count == 0) {
+        body += F("<p class='hint'>到任意界面按 Fn+s 后再刷新本页。</p>");
+    }
+
+    appendCardEnd(body);
     sendHtmlPage(body, HTML_CSS_SHOTS);
 }
 
-// 清空全部截图
-static void handleShotsClear() {
-    const int n = clearAllScreenshots();
+// 清空结果页
+static void sendShotsClearResult(const char* title, const int n, const char* where) {
     String body;
-    appendTopBar(body, "已清空");
-    body += F("<p>删除 ");
+    appendTopBar(body, title);
+    body += F("<p>已从 ");
+    body += where;
+    body += F(" 删除 ");
     body += String(n);
-    body += F(" 张截图。</p>");
+    body += F(" 张截图。</p>"
+              "<p><a href='/shots'>返回截图</a></p>");
+    appendCardEnd(body);
     sendHtmlPage(body);
+}
+
+// 清空 TF 卡截图
+static void handleShotsClearTf() {
+    sendShotsClearResult("已清空 TF", clearTfScreenshots(), "TF 卡");
+}
+
+// 清空 Flash 截图
+static void handleShotsClearFlash() {
+    sendShotsClearResult("已清空 Flash", clearFlashScreenshots(), "Flash");
 }
 
 // ===== TF 卡文件管理（仅 Config Web）=====
@@ -1362,8 +1521,9 @@ static void fmRedirect(const String& path, const char* msg, const bool ok) {
 static void handleFilesList() {
     if (!isScreenshotSdReady()) {
         String body;
-        appendTopBar(body, "TF 文件");
+        appendTopBar(body, "TF 文件", WebNavTab::Files);
         body += F("<p class='err'>未检测到 TF 卡，或挂载失败。插入 microSD 后刷新本页。</p>");
+        appendCardEnd(body);
         sendHtmlPage(body, HTML_CSS_FILES | HTML_CSS_SHOTS);
         return;
     }
@@ -1388,10 +1548,11 @@ static void handleFilesList() {
             dir.close();
         }
         String body;
-        appendTopBar(body, "TF 文件");
+        appendTopBar(body, "TF 文件", WebNavTab::Files);
         body += F("<p class='err'>目录不存在：");
         body += escapeHtmlText(path);
         body += F("</p>");
+        appendCardEnd(body);
         sendHtmlPage(body, HTML_CSS_FILES | HTML_CSS_SHOTS);
         return;
     }
@@ -1439,7 +1600,7 @@ static void handleFilesList() {
     // 列表时间按配置时区显示
     setenv("TZ", getAppTimezone(), 1);
     tzset();
-    appendTopBar(body, "TF 文件");
+    appendTopBar(body, "TF 文件", WebNavTab::Files);
     body += F("<div class='shot-space'>"
               "<div><strong>TF 卡（SD）</strong></div>"
               "<div>总容量：");
@@ -1520,6 +1681,7 @@ static void handleFilesList() {
 
     if (entries == nullptr) {
         body += F("<p class='err'>内存不足，无法列出目录。</p>");
+        appendCardEnd(body);
         sendHtmlPage(body, HTML_CSS_FILES | HTML_CSS_SHOTS);
         return;
     }
@@ -1528,6 +1690,7 @@ static void handleFilesList() {
         body += F("<div class='fm-empty'><strong>此目录为空</strong>"
                   "可在上方创建文件夹，或用电脑往 TF 卡拷入文件后刷新。</div>");
         free(entries);
+        appendCardEnd(body);
         sendHtmlPage(body, HTML_CSS_FILES | HTML_CSS_SHOTS);
         return;
     }
@@ -1600,6 +1763,7 @@ static void handleFilesList() {
     }
     body += F("</tbody></table></div>");
     free(entries);
+    appendCardEnd(body);
     sendHtmlPage(body, HTML_CSS_FILES | HTML_CSS_SHOTS);
 }
 
@@ -1841,16 +2005,19 @@ static void registerWebRoutes() {
     }
     g_routes_registered = true;
     g_server.on("/", HTTP_GET, handleFormRoot);
+    g_server.on("/wifi", HTTP_GET, handleWifiPage);
     g_server.on("/groups", HTTP_GET, handleGroupsPage);
     g_server.on("/cursor", HTTP_GET, handleCursorPage);
     g_server.on("/system", HTTP_GET, handleSystemPage);
     g_server.on("/advanced", HTTP_GET, handleAdvancedRoot);
     g_server.on("/save", HTTP_POST, handleSave);
     g_server.on("/example", HTTP_GET, handleExample);
+    g_server.on("/about", HTTP_GET, handleAboutPage);
     g_server.on("/cursor-log", HTTP_GET, handleCursorLog);
     g_server.on("/cursor-err", HTTP_GET, handleCursorErr);
     g_server.on("/shots", HTTP_GET, handleShotsList);
-    g_server.on("/shots/clear", HTTP_POST, handleShotsClear);
+    g_server.on("/shots/clear-tf", HTTP_POST, handleShotsClearTf);
+    g_server.on("/shots/clear-flash", HTTP_POST, handleShotsClearFlash);
     g_server.on("/files", HTTP_GET, handleFilesList);
     g_server.on("/files/delete", HTTP_POST, handleFilesDelete);
     g_server.on("/files/mkdir", HTTP_POST, handleFilesMkdir);

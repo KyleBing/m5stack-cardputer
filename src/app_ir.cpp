@@ -25,14 +25,14 @@ static constexpr int AC_MODE_ICON_GAP = 2;
 static constexpr int AC_MODE_COLS = 2; // 左栏 2x2 模式图标
 static constexpr int AC_MODE_ICON_X = APP_CONTENT_X;
 // 模式/按键相对顶栏（品牌行）下方间距
-static constexpr int AC_MODE_ROW_GAP = 10;
+static constexpr int AC_MODE_ROW_GAP = 6;
+// 右栏按键贴右边距
+static constexpr int AC_PAD_RIGHT = 8;
 // 左栏模式区宽度（含间距）
 static constexpr int AC_MODE_GRID_W =
     AC_MODE_COLS * AC_MODE_ICON_PX + (AC_MODE_COLS - 1) * AC_MODE_ICON_GAP;
 static constexpr int AC_MODE_GRID_H =
     2 * AC_MODE_ICON_PX + AC_MODE_ICON_GAP;
-// 右栏按键起点
-static constexpr int AC_PAD_X = AC_MODE_ICON_X + AC_MODE_GRID_W + 4;
 
 // 首次从 LittleFS 读入 .rgb565，之后 pushImage（避免每次切模式重读 Flash）
 static constexpr int AC_ICON_CACHE_SLOTS = 8; // 4 模式 × normal/active
@@ -332,16 +332,20 @@ static void redrawAcModeIconsOnly() {
     // 565 不透明，直接覆盖，避免先 fillRect 黑底闪一下
     drawAcModeIcons(mode_x, icon_y);
 
+    // 屏高紧：Auto + Fan 同一行，避免第二行被裁切
     const int meta_y = acModeMetaY();
-    M5Cardputer.Display.fillRect(mode_x, meta_y, AC_MODE_GRID_W, 20, BLACK);
+    M5Cardputer.Display.fillRect(mode_x, meta_y, AC_MODE_GRID_W + 40, 10, BLACK);
     M5Cardputer.Display.setTextSize(1);
+    int mx = mode_x;
     if (g_ac_mode == stdAc::opmode_t::kAuto) {
         M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(mode_x, meta_y);
-        M5Cardputer.Display.print("Auto");
+        M5Cardputer.Display.setCursor(mx, meta_y);
+        M5Cardputer.Display.print("Auto ");
+        mx += M5Cardputer.Display.textWidth("Auto ");
     }
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(mode_x, meta_y + 10);
+    M5Cardputer.Display.setCursor(mx, meta_y);
+    M5Cardputer.Display.print("Fan ");
     M5Cardputer.Display.print(acFanName(g_ac_fan));
 }
 
@@ -752,30 +756,9 @@ static void drawIrHelpPage() {
     updateAppHeaderStatus();
 }
 
-// 遥控器垫按钮：黄框/灰底，按下反色（横排：徽章 + 说明，TV 用）
-static void drawIrPadBtn(const int x, const int y, const int w, const int h, const bool pressed,
-                         const char key, const char* label, const bool selected) {
-    const uint16_t fill = pressed ? APP_COLOR_MENU_KEY : (selected ? 0x4208 : BLACK);
-    const uint16_t border = selected || pressed ? APP_COLOR_MENU_KEY : APP_COLOR_MUTED;
-    M5Cardputer.Display.fillRoundRect(x, y, w, h, 3, fill);
-    M5Cardputer.Display.drawRoundRect(x, y, w, h, 3, border);
-
-    const int badge_y = y + (h - 10) / 2;
-    int cx = x + 4;
-    if (key == ' ') {
-        cx += drawTextBadge(cx, badge_y, "SP", 1);
-    } else {
-        cx += drawKeyBadge(cx, badge_y, key, 1);
-    }
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(pressed ? APP_COLOR_KEY_TEXT : APP_COLOR_HINT, fill);
-    M5Cardputer.Display.setCursor(cx, badge_y + 1);
-    M5Cardputer.Display.print(label);
-}
-
-// 空调垫按钮：2x 键名在上、小字说明在下，整体在圆角框内居中
-static void drawAcPadBtn(const int x, const int y, const int w, const int h, const bool pressed,
-                         const char key, const char* label) {
+// 遥控器垫按钮：2x 键名在上、小字说明在下（AC / TV 共用）
+static void drawIrStackPadBtn(const int x, const int y, const int w, const int h,
+                              const bool pressed, const char key, const char* label) {
     const uint16_t fill = pressed ? APP_COLOR_MENU_KEY : BLACK;
     const uint16_t border = pressed ? APP_COLOR_MENU_KEY : APP_COLOR_MUTED;
     M5Cardputer.Display.fillRoundRect(x, y, w, h, 3, fill);
@@ -783,27 +766,33 @@ static void drawAcPadBtn(const int x, const int y, const int w, const int h, con
 
     constexpr int badge_size = 2;
     constexpr int pad_x = 2;
-    constexpr int pad_y = 1;
-    constexpr int stack_gap = 1;
+    // 高按钮多留白；矮按钮略收，避免裁切
+    const int pad_y = (h >= 34) ? 2 : 1;
+    const int stack_gap = (h >= 34) ? 2 : 1;
     const int badge_h = 8 * badge_size + pad_y * 2;
     constexpr int label_h = 8;
     const int stack_h = badge_h + stack_gap + label_h;
+    // 徽章+说明在外框内垂直居中
     const int sy = y + (h - stack_h) / 2;
 
+    M5Cardputer.Display.setTextSize(badge_size);
     int badge_w = 0;
+    const char* badge_text = nullptr;
+    char letter_buf[2] = {0, 0};
     if (key == ' ') {
-        M5Cardputer.Display.setTextSize(badge_size);
-        badge_w = M5Cardputer.Display.textWidth("SP") + pad_x * 2;
-        const int bx = x + (w - badge_w) / 2;
-        drawTextBadge(bx, sy, "SP", badge_size);
+        badge_text = "SP";
+        badge_w = M5Cardputer.Display.textWidth(badge_text) + pad_x * 2;
     } else {
-        const char letter = static_cast<char>(toupper(static_cast<unsigned char>(key)));
-        const char str[2] = {letter, '\0'};
-        M5Cardputer.Display.setTextSize(badge_size);
-        badge_w = M5Cardputer.Display.textWidth(str) + pad_x * 2;
-        const int bx = x + (w - badge_w) / 2;
-        drawKeyBadge(bx, sy, key, badge_size);
+        letter_buf[0] = static_cast<char>(toupper(static_cast<unsigned char>(key)));
+        badge_text = letter_buf;
+        badge_w = M5Cardputer.Display.textWidth(badge_text) + pad_x * 2;
     }
+    const int bx = x + (w - badge_w) / 2;
+    // 自绘徽章，pad_y 比通用 drawKeyBadge 更大，字不贴顶
+    M5Cardputer.Display.fillRoundRect(bx, sy, badge_w, badge_h, 2, APP_COLOR_MENU_KEY);
+    M5Cardputer.Display.setTextColor(APP_COLOR_KEY_TEXT, APP_COLOR_MENU_KEY);
+    M5Cardputer.Display.setCursor(bx + pad_x, sy + pad_y);
+    M5Cardputer.Display.print(badge_text);
 
     M5Cardputer.Display.setTextSize(1);
     const int label_w = M5Cardputer.Display.textWidth(label);
@@ -861,40 +850,42 @@ static void drawAcRemotePad(const int content_y) {
     M5Cardputer.Display.setCursor(temp_x + temp_w + 2, y0 + 4);
     M5Cardputer.Display.print("C");
 
-    // 左：2x2 模式；右：按键垫
+    // 左：2x2 模式；右：按键垫贴右边 8px
     const int icon_y = acModeIconY();
     drawAcModeIcons(AC_MODE_ICON_X, icon_y);
     const int meta_y = acModeMetaY();
+    // Fan 状态：与 Auto 同一行（屏高不足时第二行会裁掉）
     M5Cardputer.Display.setTextSize(1);
+    int mx = AC_MODE_ICON_X;
     if (g_ac_mode == stdAc::opmode_t::kAuto) {
         M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(AC_MODE_ICON_X, meta_y);
-        M5Cardputer.Display.print("Auto");
+        M5Cardputer.Display.setCursor(mx, meta_y);
+        M5Cardputer.Display.print("Auto ");
+        mx += M5Cardputer.Display.textWidth("Auto ");
     }
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(AC_MODE_ICON_X, meta_y + 10);
+    M5Cardputer.Display.setCursor(mx, meta_y);
+    M5Cardputer.Display.print("Fan ");
     M5Cardputer.Display.print(acFanName(g_ac_fan));
 
+    constexpr int gap = 3;
+    constexpr int btn_w = 42;
+    constexpr int btn_h = 36;
     constexpr int cols = 3;
-    constexpr int rows = 2;
-    constexpr int gap = 2;
-    const int pad_right = screen_w - APP_CONTENT_X;
-    const int pad_w = pad_right - AC_PAD_X;
-    const int btn_w = (pad_w - (cols - 1) * gap) / cols;
-    // 按键区高度对齐模式网格
-    const int btn_h = (AC_MODE_GRID_H - (rows - 1) * gap) / rows;
+    const int pad_w = cols * btn_w + (cols - 1) * gap;
+    const int pad_x = screen_w - AC_PAD_RIGHT - pad_w;
     const int row1 = icon_y;
     const int row2 = icon_y + btn_h + gap;
-    drawAcPadBtn(AC_PAD_X, row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Power), 'p', "pwr");
-    drawAcPadBtn(AC_PAD_X + btn_w + gap, row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Mode), 'm',
-                 "mode");
-    drawAcPadBtn(AC_PAD_X + 2 * (btn_w + gap), row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Fan), 'f',
-                 "fan");
-    drawAcPadBtn(AC_PAD_X, row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::TempDown), '-', "temp");
-    drawAcPadBtn(AC_PAD_X + btn_w + gap, row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::TempUp), '=',
-                 "temp");
-    drawAcPadBtn(AC_PAD_X + 2 * (btn_w + gap), row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Send), ' ',
-                 "send");
+    drawIrStackPadBtn(pad_x, row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Power), 'p', "pwr");
+    drawIrStackPadBtn(pad_x + btn_w + gap, row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Mode), 'm',
+                      "mode");
+    drawIrStackPadBtn(pad_x + 2 * (btn_w + gap), row1, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Fan),
+                      'f', "fan");
+    drawIrStackPadBtn(pad_x, row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::TempDown), '-', "temp");
+    drawIrStackPadBtn(pad_x + btn_w + gap, row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::TempUp),
+                      '=', "temp");
+    drawIrStackPadBtn(pad_x + 2 * (btn_w + gap), row2, btn_w, btn_h, isAcBtnPressed(IrAcBtn::Send),
+                      ' ', "send");
 }
 
 static IrTvBtn tvActionToBtn(const int action) {
@@ -920,6 +911,7 @@ static IrTvBtn tvActionToBtn(const int action) {
 
 static void drawTvRemotePad(const int content_y) {
     const int x0 = APP_CONTENT_X;
+    const int screen_w = M5Cardputer.Display.width();
     int y = content_y;
 
     // 第一排：品牌 / 当前动作（二倍字体）
@@ -939,31 +931,33 @@ static void drawTvRemotePad(const int content_y) {
         M5Cardputer.Display.setCursor(cx, y);
         M5Cardputer.Display.print(g_tx_status);
     }
-    y += INFO_LINE_H_2X + 5; // 与下方按键间隔
+    y += 16 + 6; // 2x 字高 + 与按键间距 6px
 
-    constexpr int btn_w = 72;
-    constexpr int btn_h = 16;
+    // 4x2：音量成组后电源，频道/输入/发送
+    constexpr int cols = 4;
     constexpr int gap = 3;
+    constexpr int btn_h = 36; // 外框再高 2px，内容居中
+    const int pad_w = screen_w - x0 - 8; // 右边留 8px
+    const int btn_w = (pad_w - (cols - 1) * gap) / cols;
     const int row1 = y;
     const int row2 = y + btn_h + gap;
-    const int row3 = y + 2 * (btn_h + gap);
 
-    // 无上下导航选中；音量/频道按 -/+ 左到右排列
-    drawIrPadBtn(x0, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Power), 'p', "pwr", false);
-    drawIrPadBtn(x0 + btn_w + gap, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolDown), '-',
-                 "vol-", false);
-    drawIrPadBtn(x0 + 2 * (btn_w + gap), row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolUp), '=',
-                 "vol+", false);
+    // 第一排：-= 后接 P
+    drawIrStackPadBtn(x0, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolDown), '-', "vol-");
+    drawIrStackPadBtn(x0 + btn_w + gap, row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::VolUp), '=',
+                      "vol+");
+    drawIrStackPadBtn(x0 + 2 * (btn_w + gap), row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Power),
+                      'p', "pwr");
+    drawIrStackPadBtn(x0 + 3 * (btn_w + gap), row1, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Mute),
+                      'm', "mute");
 
-    drawIrPadBtn(x0, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Mute), 'm', "mute", false);
-    drawIrPadBtn(x0 + btn_w + gap, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChDown), '[', "ch-",
-                 false);
-    drawIrPadBtn(x0 + 2 * (btn_w + gap), row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChUp), ']',
-                 "ch+", false);
-
-    drawIrPadBtn(x0, row3, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Input), 'i', "in", false);
-    drawIrPadBtn(x0 + btn_w + gap, row3, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Send), ' ', "send",
-                 false);
+    drawIrStackPadBtn(x0, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChDown), '[', "ch-");
+    drawIrStackPadBtn(x0 + btn_w + gap, row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::ChUp), ']',
+                      "ch+");
+    drawIrStackPadBtn(x0 + 2 * (btn_w + gap), row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Input),
+                      'i', "in");
+    drawIrStackPadBtn(x0 + 3 * (btn_w + gap), row2, btn_w, btn_h, isTvBtnPressed(IrTvBtn::Send),
+                      ' ', "send");
 }
 
 static void drawIrMain() {

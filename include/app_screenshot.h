@@ -21,9 +21,14 @@ bool isScreenshotSdReady();
 
 // 统计截图数量（SD + LittleFS）
 int countScreenshots();
+// 仅 TF / 仅 Flash
+int countTfScreenshots();
+int countFlashScreenshots();
 
 // 统计截图占用字节数（SD + LittleFS）
 size_t screenshotsUsedBytes();
+size_t screenshotsUsedBytesTf();
+size_t screenshotsUsedBytesFlash();
 
 // LittleFS 总容量 / 已用 / 剩余（失败时写 0）
 void getFlashDataSpace(size_t* total, size_t* used, size_t* free_bytes);
@@ -34,12 +39,17 @@ void getSdDataSpace(size_t* total, size_t* used, size_t* free_bytes);
 // 枚举全部截图（先 SD 再 LittleFS）；storage 为 "TF" 或 "Flash"
 typedef void (*ShotEnumCallback)(const char* storage, const char* basename, size_t size, void* user);
 void enumScreenshots(ShotEnumCallback cb, void* user);
+void enumTfScreenshots(ShotEnumCallback cb, void* user);
+void enumFlashScreenshots(ShotEnumCallback cb, void* user);
 
 // 打开截图文件供读取：SD 优先，再 LittleFS
 bool openScreenshotFile(const String& uri, File& out);
 
 // 删除全部截图（两边都清），返回删除个数
 int clearAllScreenshots();
+// 仅清 TF / 仅清 Flash
+int clearTfScreenshots();
+int clearFlashScreenshots();
 
 // 删除 LittleFS 上最后一张截图（开机腾 Flash 用），成功返回 true
 bool deleteLastScreenshot();
