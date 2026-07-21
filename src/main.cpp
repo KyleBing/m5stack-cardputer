@@ -20,13 +20,13 @@
 #include "app_font_demo.h"
 #include "app_mic.h"
 #include "app_battery.h"
-#include "app_log.h"
 #include "app_info.h"
 #include "app_hid_kb.h"
 #include "app_screenshot.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
+#include <esp_rom_sys.h>
 #include <driver/rtc_io.h>
 #include <esp_system.h>
 #include <cmath>
@@ -69,7 +69,6 @@ enum class AppState {
     BATTERY,
     HID_KB,
     INFO, // 系统信息 / 内存（字母 i）
-    LOG,  // 诊断日志查看（主菜单 Fn+i，不占字母菜单位）
 };
 
 struct MenuItem {
@@ -196,8 +195,6 @@ const char* getCurrentAppShotSlug() {
             return "hidkb";
         case AppState::INFO:
             return "info";
-        case AppState::LOG:
-            return "log";
         default:
             return "unknown";
     }
@@ -285,10 +282,12 @@ static void leaveLedApp();
 
 // 绘制主菜单（header + 可翻页菜单区）
 void showMenu() {
+    flushSpeakerVolumeSave(); // 离开 Options 等界面时落盘未写完的音量
     menuNoAppPrompt = false;
     leaveCursorApp();
     leaveLedApp();
     leaveHidKbApp();
+    leaveIrApp(); // 释放红外图标 RAM 缓存
     // leaveCountdownApp 不再停后台计时；到期由 poll 弹窗
     leaveMijiaApp();
     stopConfigWebServer();
@@ -912,6 +911,8 @@ static uint8_t g_brightness_to_save = 0;
 static bool g_brightness_dirty = false;
 
 static void flushBrightnessSave() {
+    // 亮度 RMW 会 loadAppConfig：先落盘音量，避免把未写入的 volume 打回旧值
+    flushSpeakerVolumeSave();
     if (!g_brightness_dirty) {
         return;
     }
@@ -1227,8 +1228,10 @@ static void applySettingsValueDelta(const int val_delta) {
             if (g_settings_row == 0) {
                 adjustAppSpeakerVolume(val_delta * 5);
             } else if (g_settings_row == 1) {
+                flushSpeakerVolumeSave(); // RMW 前先落盘音量
                 saveAppConfigTimeKeySound(!isTimeKeySoundEnabled());
             } else if (g_settings_row == 2) {
+                flushSpeakerVolumeSave();
                 saveAppConfigMijiaOnOffSound(!isMijiaOnOffSoundEnabled());
             }
             break;
@@ -1277,7 +1280,7 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
         }
         drawSettingsApp();
         flushBrightnessSave();
-        flushSpeakerVolumeSave();
+        // volume 写盘由 pollSpeakerVolumeSave 防抖，避免挡 UI
         return;
     }
 
@@ -1320,9 +1323,9 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
     const int val_delta = getSettingsValueDelta(status);
     if (val_delta != 0) {
         applySettingsValueDelta(val_delta);
-        drawSettingsApp();
-        flushBrightnessSave(); // 先刷新 UI，再写盘
-        flushSpeakerVolumeSave();
+        drawSettingsApp(); // 先刷新 UI
+        flushBrightnessSave();
+        // volume：内存已更新，LittleFS 写盘防抖到 poll，避免连续加减卡顿
         return;
     }
 
@@ -1335,7 +1338,6 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
         }
         drawSettingsApp();
         flushBrightnessSave();
-        flushSpeakerVolumeSave();
         return;
     }
 
@@ -2231,39 +2233,50 @@ void enterApp(const AppState state) {
         case AppState::INFO:
             enterInfoApp();
             break;
-        case AppState::LOG:
-            enterLogApp();
-            break;
         default:
             break;
     }
 }
 
 void setup() {
+    const uint32_t t0 = millis();
     const auto cfg = M5.config();
     M5Cardputer.begin(cfg);
+    const uint32_t t_begin = millis();
     // 开机拉低喇叭 I2S 脚，避免 NS4168 悬空嗡嗡；需要出声时再 begin
     releaseSpeakerQuiet();
     Serial.begin(115200);
+    // USB-JTAG 控制台用 esp_rom_printf（CDC_ON_BOOT=0 时 Serial 可能不可见）
+    esp_rom_printf("[boot] begin=%lums\n", static_cast<unsigned long>(t_begin - t0));
     if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
         Serial.println("wake: BtnA from deep sleep");
     }
+    const uint32_t t_fs0 = millis();
     if (initAppConfigFs()) {
         // 启动失败/空间不足时删最后一张截图，避免 Flash 撑死起不来
+        const uint32_t t_shot0 = millis();
         recoverScreenshotsOnBoot();
+        esp_rom_printf("[boot] littlefs+shot=%lums (shot=%lums)\n",
+                       static_cast<unsigned long>(millis() - t_fs0),
+                       static_cast<unsigned long>(millis() - t_shot0));
+        const uint32_t t_cfg0 = millis();
         if (loadAppConfig()) {
             Serial.printf("config: %d mijia device(s)\n", getAppConfig().device_count);
+            esp_rom_printf("[boot] config ok devices=%d json=%lums\n",
+                           getAppConfig().device_count,
+                           static_cast<unsigned long>(millis() - t_cfg0));
         } else {
             Serial.println("config: /config.json missing or invalid");
+            esp_rom_printf("[boot] config fail json=%lums\n",
+                           static_cast<unsigned long>(millis() - t_cfg0));
         }
-        // 尽早记下复位原因，崩溃后 Fn+i 看 Err 仍能对照
-        cursorLogBootBreadcrumb();
     } else {
         Serial.println("config: LittleFS mount failed");
+        esp_rom_printf("[boot] littlefs_fail=%lums\n",
+                       static_cast<unsigned long>(millis() - t_fs0));
     }
     // config 加载后再设时区（deep sleep 唤醒后时钟可能已是 UTC）
     applyLocalTimezone();
-    initBatteryLog();
     forceShutdownStaWifi();
     M5Cardputer.Display.setRotation(1);
     uint8_t brightness = 30;
@@ -2271,16 +2284,37 @@ void setup() {
         brightness = getAppConfig().brightness;
     }
     M5Cardputer.Display.setBrightness(brightnessPercentToHw(brightness));
-    flushCardputerInput();
+    const uint32_t t_flush0 = millis();
+    // 冷启动轻量清输入：完整 flush 固定约 230ms（12+6 次 delay）
+    for (int i = 0; i < 3; i++) {
+        M5Cardputer.update();
+        (void)M5Cardputer.Keyboard.isChange();
+        (void)M5Cardputer.BtnA.wasPressed();
+        (void)M5Cardputer.BtnA.wasReleased();
+    }
+    resetBtnGoEdge();
+    esp_rom_printf("[boot] flush_input=%lums\n",
+                   static_cast<unsigned long>(millis() - t_flush0));
+    const uint32_t t_menu0 = millis();
     showMenu();
+    esp_rom_printf("[boot] show_menu=%lums\n",
+                   static_cast<unsigned long>(millis() - t_menu0));
     // 正常进主菜单后清除 boot_pending
     markScreenshotBootOk();
+    // 电池日志放到首屏之后，缩短「黑屏→菜单」等待
+    const uint32_t t_bat0 = millis();
+    initBatteryLog();
+    esp_rom_printf("[boot] battery_log=%lums total=%lums heap=%u\n",
+                   static_cast<unsigned long>(millis() - t_bat0),
+                   static_cast<unsigned long>(millis() - t0),
+                   static_cast<unsigned>(ESP.getFreeHeap()));
 }
 
 void loop() {
     M5Cardputer.update();
-    // 提示音播完后关功放+拉低脚
+    // 提示音播完后关功放+拉低脚；音量防抖写盘
     pollSpeakerQuietRelease();
+    pollSpeakerVolumeSave();
 
     // 休眠提示倒计时
     if (sleepPhase == SleepPhase::PROMPT_LIGHT || sleepPhase == SleepPhase::PROMPT_DEEP) {
@@ -2338,7 +2372,6 @@ void loop() {
             drawBmiApp();
         }
     } else if (currentState == AppState::MIC) {
-        pollMicBtnA();
         // 每帧拉取：Mic.record 异步双槽，40ms 节流会造成断流破音
         updateMicApp();
     } else if (currentState == AppState::BATTERY) {
@@ -2416,20 +2449,8 @@ void loop() {
             case AppState::MENU:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
-                    // Fn+i：打开错误/诊断日志（不走字母菜单）
+                    // Fn 按下时仍允许方向键翻菜单页（不拦截字母菜单）
                     if (status.fn) {
-                        bool opened_log = false;
-                        for (const char c : status.word) {
-                            if (c == 'i' || c == 'I') {
-                                enterApp(AppState::LOG);
-                                opened_log = true;
-                                break;
-                            }
-                        }
-                        if (opened_log) {
-                            break;
-                        }
-                        // Fn 按下时仍允许方向键翻菜单页
                         (void)handleMenuPageNav(status);
                         break;
                     }
@@ -2547,11 +2568,6 @@ void loop() {
             case AppState::INFO:
                 if (M5Cardputer.Keyboard.isPressed()) {
                     handleInfoApp(M5Cardputer.Keyboard.keysState());
-                }
-                break;
-            case AppState::LOG:
-                if (M5Cardputer.Keyboard.isPressed()) {
-                    handleLogApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
             default:

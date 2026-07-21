@@ -6,6 +6,30 @@
 
 ---
 
+## 2026-07-22
+
+### 新增
+
+- **Infrared AC Auto 模式图标**：`ac_auto` / `ac_auto_active`；模式栏改为上 3 下 2
+- **Infrared AC 风速图标**：顶栏显示当前档（`ac_fan_auto` / `min` / `low` / `med` / `high` / `max`），进 App 时预缓存
+
+### 改进
+
+- **Mic 退出嗡嗡**：`Mic.end` 后 `reclaimAndReleaseSpeakerQuiet`（Speaker begin→静音 end 再 hold），把 G43 从 PDM 残余抢回；进 Help 关麦同路径
+- **米家概览缓存**：`mijiaOverviewUi` 按 `device_count` 进 App 时分配、离开释放，不再开机常驻 50 台
+- **设备图标绘制**：RGB565 1:1 按行推屏；缩放临时 `malloc`，去掉静态整图 scratch
+- **开机截图恢复**：不再开机扫 `LittleFS.usedBytes()`（图标多时可达数秒）；腾空间改到真正截图保存时
+- **Icons**：去掉 `b` 现场烘焙；烘焙仅走 Config `POST /bake-rgb565` / `pull_rgb565_from_device.py --bake`
+
+### 移除
+
+- **Mic 录音**：去掉 TF 录音、`/audioRecord` 列表播放/删除、WiFi/NTP 校时文件名；Mic 仅保留实时波形 + VU + 增益
+- **Log App**（`Fn+i`）与 `app_log` 模块
+- **Cursor LittleFS 诊断日志**：`/cursor.log` / `/cursor.err` 写入与 Config 查看入口；开机不再写 err 面包屑
+- **`scripts/png_to_rgb565.py`**：改由设备端 M5GFX 烘焙 + pull 脚本拉取
+
+---
+
 ## 2026-07-21
 
 ### 新增
@@ -15,14 +39,20 @@
 - **喇叭音量**：`sound.volume`（0~100，默认 25）；Options → Sound → `volume`；Config Web 可调；Mic 列表播放时 `-=` 实时调节
 - **Mic 录音列表**（`l`）：扫描 TF `/audioRecord`；选中播放 / 停止 / Backspace 删除；播放中只刷进度行
 - **Infrared AC 模式图标**：制冷 / 制热 / 除湿 / 送风（含 active）
-- **图标 RGB565 烘焙**：设备 / IR / Logo 预生成 `.rgb565`；绘制优先 bake 文件，缺失回退 PNG；Config `POST /bake-rgb565` 与 Icons `b` 可现场烘焙；`scripts/pull_rgb565_from_device.py` 拉取到 `data/`
+- **图标 RGB565 烘焙**：设备 / IR / Logo 预生成 `.rgb565`；绘制优先 bake 文件，缺失回退 PNG；Config `POST /bake-rgb565` 现场烘焙；`scripts/pull_rgb565_from_device.py` 拉取到 `data/`
 
 ### 改进
 
+- **Options 音量**：加减立刻同步内存；写盘防抖且失败保持脏标记；其它配置 RMW 前先落盘，避免音量被打回
+- **取消提示音自动静音**：不再播完 `releaseSpeakerQuiet`，去掉静音预热音，减轻冷启动破音
+- **Mic TF 挂载**：进 App 预挂载；`SD.begin` 失败重试，并兼容已被其它模块挂上的卡，修复首次录音误报 `no SD`
+- **Countdown 闹钟破音**：响铃期间保持功放，避免每声后 `releaseSpeakerQuiet` 再冷启动；排程改用播完后的 `millis()`
+- **开机破音**：`releaseSpeakerQuiet` 仅在 Speaker 已运行时 stop/end，未 begin 只拉低脚
+- **开机变慢**：去掉开机写 `/cursor.err` 面包屑；`initBatteryLog` 挪到首屏菜单之后
 - **Config `/shots`**：TF 与 Flash 分区展示；分别「清空 TF 截图」/「清空 Flash 截图」（`/shots/clear-tf`、`/shots/clear-flash`），不再混清
 - **Config Web**：顶栏 Tab 高亮；内容卡片布局；导航拆出 WiFi / 关于等入口
 - **Infrared**：AC/TV 按键统一为上下叠排样式；屏高紧时 Auto+Fan 同行；右栏贴边距
-- **喇叭嗡嗡声**：开机与空闲时 `releaseSpeakerQuiet`（卸 I2S + `gpio_reset` 拉低并 hold）；提示音播完自动静音；列表播过后不再 `Mic.begin`（避免 PDM 时钟灌进功放 LRCLK）；退出列表整页重绘 Record
+- **喇叭脚拉低**：开机与 Mic 进出时 `releaseSpeakerQuiet`（卸 I2S + hold）；列表播过后不再 `Mic.begin`（避免 PDM 时钟灌进功放 LRCLK）；退出列表整页重绘 Record
 - **Mic**：列表与 header 留白；选中条对齐字形；列表模式关麦；播完保持喇叭脚拉低；回示波器若本会话播过音则显示 `mic paused`，按 `R` 再开麦
 - **M5Burner 打包**：`version` / `author` / 描述中的版本信息统一取自 `include/app_version.h`，发版只改该头文件
 - **IR 模式图标**：进入 App 时预缓存全部 `.rgb565`；切模式直接 `pushImage` 覆盖，去掉先清黑底造成的闪烁

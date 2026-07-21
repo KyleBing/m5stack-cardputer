@@ -87,6 +87,8 @@ bool saveAppConfigBrightness(uint8_t brightness_percent);
 
 // 更新喇叭音量并写回（percent：0~100）
 bool saveAppConfigSpeakerVolume(uint8_t volume_percent);
+// 仅更新内存中的音量（不写盘；供 UI 调节立刻生效）
+void setAppConfigSpeakerVolumeLocal(uint8_t volume_percent);
 
 // 更新 Time 按键声开关并写回
 bool saveAppConfigTimeKeySound(bool enabled);

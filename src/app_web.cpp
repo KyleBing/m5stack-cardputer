@@ -802,12 +802,6 @@ static void handleCursorPage() {
               "（<code>sub::jwt</code> 或 <code>sub%3A%3Ajwt</code>）；"
               "或仅粘贴 JWT。</p>"
               "<label>Session Token<textarea id='cursor-key' rows='4'></textarea></label>"
-              "<h3 class='token-method-title'>诊断日志</h3>"
-              "<p class='hint'>失败/低内存会写入 <code>/cursor.err</code>（重启后仍在）；"
-              "完整轨迹在 <code>/cursor.log</code>。"
-              "设备上也可主菜单 <code>Fn+i</code> 查看，无需开 Config。</p>"
-              "<p class='hint'><a href='/cursor-err' target='_blank'>查看错误轨</a> · "
-              "<a href='/cursor-log' target='_blank'>查看完整日志</a></p>"
               "<div class='save-bar'>"
               "<button type='submit' class='primary'>保存到设备</button>"
               "</div></form>");
@@ -1031,33 +1025,6 @@ static void handleAboutPage() {
               "</dl>");
     appendCardEnd(body);
     sendHtmlPage(body);
-}
-
-// 流式返回 LittleFS 文本日志
-static void handleCursorLogFile(const char* path, const char* empty_msg) {
-    if (!LittleFS.exists(path)) {
-        g_server.send(200, "text/plain; charset=utf-8", empty_msg);
-        return;
-    }
-    File file = LittleFS.open(path, "r");
-    if (!file) {
-        g_server.send(500, "text/plain", "open log failed");
-        return;
-    }
-    g_server.streamFile(file, "text/plain");
-    file.close();
-}
-
-// 完整诊断日志
-static void handleCursorLog() {
-    handleCursorLogFile("/cursor.log",
-                        "(empty) Cursor 尚未写入日志。打开 Cursor App 触发请求后再刷新。\n");
-}
-
-// 错误轨：fail/lowmem/boot reset，崩溃重启后优先看这个
-static void handleCursorErr() {
-    handleCursorLogFile("/cursor.err",
-                        "(empty) 尚无错误记录。出现 auth fail / lowmem / 异常重启后会写入。\n");
 }
 
 // 人类可读字节数（如 1.2 MB）
@@ -2013,8 +1980,6 @@ static void registerWebRoutes() {
     g_server.on("/save", HTTP_POST, handleSave);
     g_server.on("/example", HTTP_GET, handleExample);
     g_server.on("/about", HTTP_GET, handleAboutPage);
-    g_server.on("/cursor-log", HTTP_GET, handleCursorLog);
-    g_server.on("/cursor-err", HTTP_GET, handleCursorErr);
     g_server.on("/shots", HTTP_GET, handleShotsList);
     g_server.on("/shots/clear-tf", HTTP_POST, handleShotsClearTf);
     g_server.on("/shots/clear-flash", HTTP_POST, handleShotsClearFlash);

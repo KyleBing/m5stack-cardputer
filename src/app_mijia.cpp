@@ -12,6 +12,7 @@
 #include "miio_client.h"
 #include <WiFi.h>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -82,7 +83,9 @@ static bool mijiaControlInitialized = false;
 static int mijiaRenderedDeviceIdx = -1;
 static MijiaUiState mijiaRenderedUi{};
 static char mijiaRenderedNetStatus[32] = "";
-static MijiaUiState mijiaOverviewUi[MIJIA_DEVICE_MAX];
+// 概览状态：进米家按 config.device_count 动态分配，离开释放
+static MijiaUiState* mijiaOverviewUi = nullptr;
+static int mijiaOverviewUiCount = 0;
 static int mijiaOverviewRefreshQueue[MIJIA_GRID_PAGE_SIZE];
 static int mijiaOverviewRefreshQueueLen = 0;
 static int mijiaOverviewRefreshQueuePos = 0;
@@ -120,6 +123,40 @@ struct MijiaRefreshJob {
 };
 
 static MijiaRefreshJob* mijiaDeferredJob = nullptr;
+
+// 释放概览 UI 缓存
+static void freeMijiaOverviewUi() {
+    free(mijiaOverviewUi);
+    mijiaOverviewUi = nullptr;
+    mijiaOverviewUiCount = 0;
+}
+
+// 按当前配置设备数分配并清零
+static bool allocMijiaOverviewUi() {
+    freeMijiaOverviewUi();
+    int n = getAppConfig().device_count;
+    if (n <= 0) {
+        return true;
+    }
+    if (n > MIJIA_DEVICE_MAX) {
+        n = MIJIA_DEVICE_MAX;
+    }
+    mijiaOverviewUi =
+        static_cast<MijiaUiState*>(calloc(static_cast<size_t>(n), sizeof(MijiaUiState)));
+    if (mijiaOverviewUi == nullptr) {
+        return false;
+    }
+    mijiaOverviewUiCount = n;
+    for (int i = 0; i < n; i++) {
+        mijiaResetUiState(mijiaOverviewUi[i]);
+    }
+    return true;
+}
+
+// 下标是否落在已分配的概览缓存内
+static bool mijiaOverviewUiOk(const int idx) {
+    return mijiaOverviewUi != nullptr && idx >= 0 && idx < mijiaOverviewUiCount;
+}
 
 static void scheduleMijiaRefresh();
 static void requestMijiaRefresh();
@@ -755,7 +792,7 @@ static void mijiaJobTaskFn(void* arg) {
 
     if (mijiaDeviceUsesBle(device)) {
         // 禁止在后台任务初始化/扫描 BLE（会闪退）；交给主循环
-        if (overview_cache && job_gen == mijiaRefreshGen) {
+        if (overview_cache && job_gen == mijiaRefreshGen && mijiaOverviewUiOk(job_idx)) {
             strncpy(mijiaOverviewUi[job_idx].status, "ble",
                     sizeof(mijiaOverviewUi[job_idx].status));
             if (job_type == MijiaJobType::QUERY) {
@@ -778,7 +815,7 @@ static void mijiaJobTaskFn(void* arg) {
     }
 
     if (!isMijiaConfigWifiConnected()) {
-        if (overview_cache && job_gen == mijiaRefreshGen) {
+        if (overview_cache && job_gen == mijiaRefreshGen && mijiaOverviewUiOk(job_idx)) {
             strncpy(mijiaOverviewUi[job_idx].status, "wifi fail", sizeof(mijiaOverviewUi[job_idx].status));
             if (job_type == MijiaJobType::QUERY) {
                 mijiaOverviewRefreshQueuePos++;
@@ -801,6 +838,11 @@ static void mijiaJobTaskFn(void* arg) {
     MijiaUiState temp{};
     if (job_type == MijiaJobType::SET_POWER || job_type == MijiaJobType::SET_BRIGHT) {
         if (overview_cache) {
+            if (!mijiaOverviewUiOk(job_idx)) {
+                finishMijiaRefreshTask(job_gen);
+                vTaskDelete(nullptr);
+                return;
+            }
             temp = mijiaOverviewUi[job_idx];
         } else if (job_idx == mijiaDeviceIdx) {
             temp = mijiaUi;
@@ -832,7 +874,7 @@ static void mijiaJobTaskFn(void* arg) {
     if (mijiaRefreshTimedOut) {
         // UI 层已先判定超时，丢弃晚到结果
     } else if (job_timed_out && job_type == MijiaJobType::QUERY && job_gen == mijiaRefreshGen &&
-               overview_cache) {
+               overview_cache && mijiaOverviewUiOk(job_idx)) {
         strncpy(temp.status, "timeout", sizeof(temp.status));
         temp.power_known = false;
         mijiaOverviewUi[job_idx] = temp;
@@ -843,7 +885,7 @@ static void mijiaJobTaskFn(void* arg) {
         }
         queueMijiaGridCellRefresh(job_idx);
     } else if (job_timed_out && overview_cache && mijiaGroupMode && mijiaGroupJobQueueLen > 0 &&
-               job_gen == mijiaRefreshGen) {
+               job_gen == mijiaRefreshGen && mijiaOverviewUiOk(job_idx)) {
         // 编组 SET_POWER 超时：记失败并继续下一个
         strncpy(mijiaOverviewUi[job_idx].status, "timeout",
                 sizeof(mijiaOverviewUi[job_idx].status));
@@ -858,7 +900,7 @@ static void mijiaJobTaskFn(void* arg) {
         strncpy(mijiaUi.status, "timeout", sizeof(mijiaUi.status));
         mijiaNeedRedraw = true;
     } else if (!job_timed_out && job_gen == mijiaRefreshGen) {
-        if (overview_cache) {
+        if (overview_cache && mijiaOverviewUiOk(job_idx)) {
             mijiaOverviewUi[job_idx] = temp;
             if (job_type == MijiaJobType::QUERY) {
                 mijiaOverviewRefreshQueuePos++;
@@ -889,7 +931,7 @@ static void mijiaJobTaskFn(void* arg) {
             mijiaRefreshDeadlineMs = 0;
             mijiaNetStatus[0] = '\0';
             mijiaNeedRedraw = true;
-            if (job_idx >= 0 && job_idx < MIJIA_DEVICE_MAX) {
+            if (mijiaOverviewUiOk(job_idx)) {
                 mijiaOverviewUi[job_idx] = temp;
             }
         }
@@ -1132,7 +1174,7 @@ static void requestMijiaOverviewPageRefresh() {
     mijiaOverviewRefreshQueuePos = 0;
     for (int slot = 0; slot < MIJIA_GRID_PAGE_SIZE; slot++) {
         const int idx = mijiaOverviewScrollIdx + slot;
-        if (idx >= cfg.device_count) {
+        if (idx >= cfg.device_count || !mijiaOverviewUiOk(idx)) {
             break;
         }
         // 已有状态的设备不重复查询
@@ -1161,7 +1203,8 @@ static void requestMijiaOverviewPageRefresh() {
 // 宫格异步开关
 static void requestMijiaOverviewPower(const int device_idx, const bool on) {
     const AppConfig& cfg = getAppConfig();
-    if (!cfg.loaded || device_idx < 0 || device_idx >= cfg.device_count) {
+    if (!cfg.loaded || device_idx < 0 || device_idx >= cfg.device_count ||
+        !mijiaOverviewUiOk(device_idx)) {
         return;
     }
     if (!ensureConfigWifi()) {
@@ -1196,6 +1239,9 @@ static void setMijiaOverviewPower(const int device_idx, const bool on) {
 
 // 宫格切换选中设备开关（状态未知时默认开启）
 static void toggleMijiaOverviewPower(const int device_idx) {
+    if (!mijiaOverviewUiOk(device_idx)) {
+        return;
+    }
     const MijiaUiState& state = mijiaOverviewUi[device_idx];
     const bool on = state.power_known ? !state.power_on : true;
     requestMijiaOverviewPower(device_idx, on);
@@ -1236,7 +1282,7 @@ static void scheduleMijiaGroupJob() {
 
     const AppConfig& cfg = getAppConfig();
     const int idx = mijiaGroupJobQueue[mijiaGroupJobQueuePos];
-    if (!cfg.loaded || idx < 0 || idx >= cfg.device_count) {
+    if (!cfg.loaded || idx < 0 || idx >= cfg.device_count || !mijiaOverviewUiOk(idx)) {
         mijiaGroupJobSkip++;
         mijiaGroupJobQueuePos++;
         scheduleMijiaGroupJob();
@@ -1321,7 +1367,7 @@ static void requestMijiaGroupPageRefresh() {
 
     for (int i = 0; i < group->member_count; i++) {
         const int idx = group->member_indices[i];
-        if (idx < 0 || idx >= cfg.device_count) {
+        if (idx < 0 || idx >= cfg.device_count || !mijiaOverviewUiOk(idx)) {
             continue;
         }
         if (!mijiaDeviceIsGroupActuator(cfg.devices[idx])) {
@@ -1392,7 +1438,7 @@ static void requestMijiaGroupPower(const bool on) {
 
     for (int i = 0; i < group->member_count; i++) {
         const int idx = group->member_indices[i];
-        if (idx < 0 || idx >= cfg.device_count) {
+        if (idx < 0 || idx >= cfg.device_count || !mijiaOverviewUiOk(idx)) {
             continue;
         }
         if (!mijiaDeviceIsGroupActuator(cfg.devices[idx])) {
@@ -1448,7 +1494,7 @@ static void requestMijiaGroupBright(const bool absolute, const int value) {
 
     for (int i = 0; i < group->member_count; i++) {
         const int idx = group->member_indices[i];
-        if (idx < 0 || idx >= cfg.device_count) {
+        if (idx < 0 || idx >= cfg.device_count || !mijiaOverviewUiOk(idx)) {
             continue;
         }
         mijiaGroupJobQueue[mijiaGroupJobQueueLen++] = idx;
@@ -1478,7 +1524,8 @@ static void toggleMijiaGroupPower() {
     bool all_on = true;
     for (int i = 0; i < group->member_count; i++) {
         const int idx = group->member_indices[i];
-        if (idx < 0 || idx >= cfg.device_count || !mijiaDeviceIsGroupActuator(cfg.devices[idx])) {
+        if (idx < 0 || idx >= cfg.device_count || !mijiaDeviceIsGroupActuator(cfg.devices[idx]) ||
+            !mijiaOverviewUiOk(idx)) {
             continue;
         }
         const MijiaUiState& st = mijiaOverviewUi[idx];
@@ -1597,7 +1644,7 @@ static void enterMijiaOverview(const bool grid_mode) {
     mijiaOverviewGridMode = grid_mode;
     mijiaOverviewEntryDeviceIdx = mijiaDeviceIdx;
     syncMijiaOverviewScroll();
-    if (mijiaDeviceIdx >= 0 && mijiaDeviceIdx < MIJIA_DEVICE_MAX && mijiaUi.power_known) {
+    if (mijiaDeviceIdx >= 0 && mijiaOverviewUiOk(mijiaDeviceIdx) && mijiaUi.power_known) {
         mijiaOverviewUi[mijiaDeviceIdx] = mijiaUi;
     }
     if (grid_mode) {
@@ -1963,7 +2010,9 @@ static void drawMijiaOverviewGridCell(const MijiaDevice& entry, const int device
     const MijiaDevKind kind = mijiaClassifyModel(entry.model);
     const uint16_t num_color = selected ? APP_COLOR_OK : APP_COLOR_HINT;
     const uint16_t name_color = selected ? APP_COLOR_OK : APP_COLOR_TEXT;
-    const MijiaUiState& ui = mijiaOverviewUi[device_idx];
+    static const MijiaUiState kEmptyOverviewUi{};
+    const MijiaUiState& ui =
+        mijiaOverviewUiOk(device_idx) ? mijiaOverviewUi[device_idx] : kEmptyOverviewUi;
     const bool icon_active = ui.power_known && ui.power_on;
 
     constexpr int pad = 2;
@@ -3274,9 +3323,7 @@ void enterMijiaApp() {
         delete mijiaDeferredJob;
         mijiaDeferredJob = nullptr;
     }
-    for (int i = 0; i < MIJIA_DEVICE_MAX; i++) {
-        mijiaResetUiState(mijiaOverviewUi[i]);
-    }
+    (void)allocMijiaOverviewUi();
     mijiaWifiPhase = MijiaWifiPhase::IDLE;
     mijiaWifiDeadlineMs = 0;
     mijiaRefreshDeadlineMs = 0;
@@ -3305,6 +3352,13 @@ void leaveMijiaApp() {
     mijiaHotkeyEditConflictIdx = -1;
     mijiaBleScanAbort();
     cancelMijiaPendingJobs();
+    // 等后台任务停干净再释放概览缓存，避免写已释放内存
+    const uint32_t wait_deadline = millis() + 3000;
+    while (mijiaRefreshTaskRunning &&
+           static_cast<int32_t>(millis() - wait_deadline) < 0) {
+        delay(10);
+    }
+    freeMijiaOverviewUi();
     // 立刻关射频
     releaseConfigWifi();
 }
@@ -3349,8 +3403,10 @@ void updateMijiaApp() {
             }
             if (device_idx >= 0) {
                 storeBleCache(device_idx, reading);
-                applyBleReadingToUi(mijiaOverviewUi[device_idx], reading, "ok");
-                queueMijiaGridCellRefresh(device_idx);
+                if (mijiaOverviewUiOk(device_idx)) {
+                    applyBleReadingToUi(mijiaOverviewUi[device_idx], reading, "ok");
+                    queueMijiaGridCellRefresh(device_idx);
+                }
                 if (device_idx == mijiaDeviceIdx && !mijiaOverviewMode && !mijiaGroupMode &&
                     !mijiaQuickSelectMode && !mijiaHotkeyEditMode) {
                     applyBleReadingToUi(mijiaUi, reading, "ok");
@@ -3537,7 +3593,7 @@ void handleMijiaApp(const String& key) {
             if (group != nullptr) {
                 for (int i = 0; i < group->member_count; i++) {
                     const int idx = group->member_indices[i];
-                    if (idx >= 0 && idx < MIJIA_DEVICE_MAX) {
+                    if (mijiaOverviewUiOk(idx)) {
                         mijiaOverviewUi[idx].power_known = false;
                     }
                 }

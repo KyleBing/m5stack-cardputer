@@ -517,8 +517,9 @@ static void cdStopAlarm() {
     releaseSpeakerQuiet();
 }
 
-// 开始电子闹钟：哔-哔-歇，最长 30s
+// 开始电子闹钟：哔-哔-歇，最长 30s（响铃期间保持功放，避免每声冷启动破音）
 static void cdStartAlarm() {
+    cancelSpeakerQuietRelease();
     warmUpSpeakerIfNeeded();
     cdAlarmActive = true;
     cdAlarmStartMs = millis();
@@ -542,18 +543,21 @@ static void cdUpdateAlarm() {
 
     switch (cdAlarmStep) {
         case 0: // 第一声
-            playUiTone(CD_ALARM_HZ, CD_ALARM_BEEP_MS);
-            cdAlarmNextMs = now + CD_ALARM_BEEP_MS + CD_ALARM_GAP_MS;
+            cancelSpeakerQuietRelease();
+            playUiTone(CD_ALARM_HZ, CD_ALARM_BEEP_MS, false);
+            // 用播完后的时刻排程，避免 warmUp/调度误差叠掉第二声
+            cdAlarmNextMs = millis() + CD_ALARM_BEEP_MS + CD_ALARM_GAP_MS;
             cdAlarmStep = 1;
             break;
         case 1: // 间隙结束 → 第二声
-            playUiTone(CD_ALARM_HZ, CD_ALARM_BEEP_MS);
-            cdAlarmNextMs = now + CD_ALARM_BEEP_MS + CD_ALARM_REST_MS;
+            cancelSpeakerQuietRelease();
+            playUiTone(CD_ALARM_HZ, CD_ALARM_BEEP_MS, false);
+            cdAlarmNextMs = millis() + CD_ALARM_BEEP_MS + CD_ALARM_REST_MS;
             cdAlarmStep = 2;
             break;
         default: // 长歇结束 → 下一轮
             cdAlarmStep = 0;
-            cdAlarmNextMs = now;
+            cdAlarmNextMs = millis();
             break;
     }
 }

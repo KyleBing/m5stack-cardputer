@@ -360,11 +360,12 @@ int getMenuNavDelta(const Keyboard_Class::KeysState& status) {
     return 0;
 }
 
-// 距上次有效出声超过该间隔则认为功放/I2S 已冷掉
-static constexpr uint32_t SPK_WARM_IDLE_MS = 30000;
+// 音量连续调节时，空闲后再写 LittleFS，避免挡界面刷新
+static constexpr uint32_t SPK_VOL_SAVE_DEBOUNCE_MS = 400;
 static uint32_t g_spk_last_ready_ms = 0;
 static uint8_t g_spk_vol_to_save = 25;
 static bool g_spk_vol_dirty = false;
+static uint32_t g_spk_vol_dirty_ms = 0;
 // 提示音结束后延后关功放（0=无待释放）
 static uint32_t g_spk_quiet_at_ms = 0;
 
@@ -416,6 +417,9 @@ void adjustAppSpeakerVolume(const int delta_percent) {
     const int next = constrain(static_cast<int>(getAppSpeakerVolumePercent()) + delta_percent, 0, 100);
     g_spk_vol_to_save = static_cast<uint8_t>(next);
     g_spk_vol_dirty = true;
+    g_spk_vol_dirty_ms = millis();
+    // 立刻同步内存，避免其它配置 save→loadAppConfig 把 UI 打回旧音量
+    setAppConfigSpeakerVolumeLocal(g_spk_vol_to_save);
     applyAppSpeakerVolume();
 }
 
@@ -423,16 +427,31 @@ void flushSpeakerVolumeSave() {
     if (!g_spk_vol_dirty) {
         return;
     }
-    g_spk_vol_dirty = false;
-    saveAppConfigSpeakerVolume(g_spk_vol_to_save);
+    // 写盘成功才清脏标记；失败则下次 poll 再试
+    if (saveAppConfigSpeakerVolume(g_spk_vol_to_save)) {
+        g_spk_vol_dirty = false;
+    }
+}
+
+void pollSpeakerVolumeSave() {
+    if (!g_spk_vol_dirty) {
+        return;
+    }
+    if (static_cast<int32_t>(millis() - g_spk_vol_dirty_ms) < static_cast<int32_t>(SPK_VOL_SAVE_DEBOUNCE_MS)) {
+        return;
+    }
+    flushSpeakerVolumeSave();
 }
 
 // 关 I2S 并把喇叭脚拉低：Cardputer NS4168 在 BCLK/SDATA/LRCLK 悬空时会嗡嗡
 void releaseSpeakerQuiet() {
     g_spk_quiet_at_ms = 0;
-    // 始终 stop+end：播完后 isRunning 可能已假，但仍需卸 I2S
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.end();
+    // 已在跑：先静音再卸，减轻 end 瞬间破音；未 begin 则只拉脚
+    if (M5Cardputer.Speaker.isRunning()) {
+        M5Cardputer.Speaker.setVolume(0);
+        M5Cardputer.Speaker.stop();
+        M5Cardputer.Speaker.end();
+    }
     const auto cfg = M5Cardputer.Speaker.config();
     const auto mic = M5Cardputer.Mic.config();
     holdSpkPinLow(cfg.pin_data_out);
@@ -445,54 +464,57 @@ void releaseSpeakerQuiet() {
     g_spk_last_ready_ms = 0;
 }
 
+// Mic 卸 PDM 后 G43 常仍挂在矩阵上，仅 gpio hold 压不住 NS4168；
+// 与进 Time 播键音同理：先 Speaker.begin 抢回脚，再静音 end + hold。
+void reclaimAndReleaseSpeakerQuiet() {
+    if (M5Cardputer.Mic.isRunning()) {
+        // 仍在采麦时不要抢 WS
+        releaseSpeakerQuiet();
+        return;
+    }
+    releaseAudioPinHolds();
+    if (!M5Cardputer.Speaker.isRunning()) {
+        M5Cardputer.Speaker.begin();
+    }
+    if (M5Cardputer.Speaker.isRunning()) {
+        M5Cardputer.Speaker.setVolume(0);
+        M5Cardputer.Speaker.stop();
+        delay(10);
+        M5Cardputer.Speaker.end();
+        delay(15); // 等 Speaker I2S 矩阵松开再 hold
+    }
+    releaseSpeakerQuiet();
+}
+
 void pollSpeakerQuietRelease() {
+    // 已取消提示音播完自动静音；保留接口供 cancel 清零
     if (g_spk_quiet_at_ms == 0) {
         return;
     }
-    if (static_cast<int32_t>(millis() - g_spk_quiet_at_ms) < 0) {
-        return;
-    }
-    // 仍在播：再等一帧
-    if (M5Cardputer.Speaker.isPlaying()) {
-        g_spk_quiet_at_ms = millis() + 40;
-        return;
-    }
-    releaseSpeakerQuiet();
+    g_spk_quiet_at_ms = 0;
 }
 
 void cancelSpeakerQuietRelease() {
     g_spk_quiet_at_ms = 0;
 }
 
-// I2S 与功放冷启动时前几十毫秒常丢样，先静音跑一段预热
+// 需要出声时 begin 并套用音量（不再静音预热，避免 end/冷启动破音）
 void warmUpSpeakerIfNeeded() {
-    g_spk_quiet_at_ms = 0; // 即将出声，取消待静音
+    g_spk_quiet_at_ms = 0;
     releaseAudioPinHolds();
-    // end/拉低脚之后 isRunning=false，需重新 begin（tone 也会 begin）
     if (!M5Cardputer.Speaker.isRunning()) {
         M5Cardputer.Speaker.begin();
     }
-    const uint32_t now = millis();
-    if (M5Cardputer.Speaker.isRunning() && (now - g_spk_last_ready_ms) < SPK_WARM_IDLE_MS &&
-        g_spk_last_ready_ms != 0) {
-        applyAppSpeakerVolume();
-        return;
-    }
-    const uint8_t vol = speakerVolumePercentToHw(getAppSpeakerVolumePercent());
-    M5Cardputer.Speaker.setVolume(0);
-    M5Cardputer.Speaker.tone(1000, 80);
-    delay(100); // 等 DMA 起转、功放就绪
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.setVolume(vol);
+    applyAppSpeakerVolume();
     g_spk_last_ready_ms = millis();
 }
 
-void playUiTone(const float freq_hz, const uint32_t duration_ms) {
+void playUiTone(const float freq_hz, const uint32_t duration_ms, const bool auto_quiet) {
+    (void)auto_quiet; // 已取消播完自动静音（冷启动易破音）
     warmUpSpeakerIfNeeded();
     M5Cardputer.Speaker.tone(freq_hz, duration_ms);
     g_spk_last_ready_ms = millis();
-    // 播完后关功放+拉低脚，避免空转/悬空嗡嗡
-    g_spk_quiet_at_ms = millis() + duration_ms + 60;
+    g_spk_quiet_at_ms = 0;
 }
 
 bool isTimeKeySoundEnabled() {

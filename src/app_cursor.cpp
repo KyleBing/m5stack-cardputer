@@ -6,9 +6,7 @@
 #include "app_header.h"
 #include "M5Cardputer.h"
 #include <ArduinoJson.h>
-#include <FS.h>
 #include <HTTPClient.h>
-#include <LittleFS.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <cstdarg>
@@ -23,14 +21,6 @@
 
 static constexpr const char* CURSOR_HOST = "https://cursor.com";
 static constexpr const char* CURSOR_HOST_NAME = "cursor.com";
-static constexpr const char* CURSOR_LOG_PATH = "/cursor.log";
-static constexpr const char* CURSOR_LOG_TMP_PATH = "/cursor.log.tmp";
-static constexpr const char* CURSOR_ERR_PATH = "/cursor.err";
-static constexpr const char* CURSOR_ERR_TMP_PATH = "/cursor.err.tmp";
-static constexpr size_t CURSOR_LOG_MAX_BYTES = 12288; // 约 12KB，超限则保留尾部
-static constexpr size_t CURSOR_LOG_KEEP_BYTES = 8192; // 轮转时保留最近约 8KB
-static constexpr size_t CURSOR_ERR_MAX_BYTES = 4096;  // 错误专用，小文件不易被冲掉
-static constexpr size_t CURSOR_ERR_KEEP_BYTES = 3072;
 static constexpr int CURSOR_HTTP_RETRIES = 3;         // TLS 偶发 -1 时重试
 // TLS/mbedTLS 需要较大连续块；空闲过低时 -1 常被误报为 connection refused
 static constexpr uint32_t CURSOR_HTTPS_MIN_HEAP = 48000;
@@ -415,153 +405,14 @@ static const char* cursorHttpErrTag(const int code) {
     }
 }
 
-// 超限时保留尾部（path / tmp / 上限可配）
-static void cursorLogRotateFile(const char* path, const char* tmp_path, const size_t max_bytes,
-                                const size_t keep_bytes) {
-    if (!LittleFS.exists(path)) {
-        return;
-    }
-    File cur = LittleFS.open(path, "r");
-    if (!cur) {
-        return;
-    }
-    const size_t sz = cur.size();
-    if (sz < max_bytes) {
-        cur.close();
-        return;
-    }
-
-    size_t start = sz > keep_bytes ? sz - keep_bytes : 0;
-    if (!cur.seek(start)) {
-        cur.close();
-        LittleFS.remove(path);
-        return;
-    }
-    // 对齐到下一整行，避免半截
-    if (start > 0) {
-        while (cur.available()) {
-            const int c = cur.read();
-            if (c < 0 || c == '\n') {
-                break;
-            }
-        }
-    }
-
-    File tmp = LittleFS.open(tmp_path, "w");
-    if (!tmp) {
-        cur.close();
-        LittleFS.remove(path);
-        return;
-    }
-    uint8_t buf[256];
-    while (cur.available()) {
-        const size_t n = cur.read(buf, sizeof(buf));
-        if (n == 0) {
-            break;
-        }
-        tmp.write(buf, n);
-    }
-    cur.close();
-    tmp.close();
-    LittleFS.remove(path);
-    LittleFS.rename(tmp_path, path);
-}
-
-// 追加一行到指定文件（close 即 flush，崩溃前已落盘的行可保留）
-static void cursorLogAppendFile(const char* path, const char* tmp_path, const size_t max_bytes,
-                                const size_t keep_bytes, const char* line) {
-    cursorLogRotateFile(path, tmp_path, max_bytes, keep_bytes);
-    File f = LittleFS.open(path, "a");
-    if (!f) {
-        return;
-    }
-    const time_t now = time(nullptr);
-    if (now > 1700000000) {
-        struct tm local_tm;
-        if (localtime_r(&now, &local_tm) != nullptr) {
-            f.printf("%04d-%02d-%02d %02d:%02d:%02d ", local_tm.tm_year + 1900, local_tm.tm_mon + 1,
-                     local_tm.tm_mday, local_tm.tm_hour, local_tm.tm_min, local_tm.tm_sec);
-        }
-    } else {
-        f.printf("ms=%lu ", static_cast<unsigned long>(millis()));
-    }
-    f.printf("%s\n", line);
-    f.close();
-}
-
-// fail / lowmem / 负 HTTP 码等：额外写入 /cursor.err，不被 wifi ok 冲掉
-static bool cursorLogLineIsCritical(const char* line) {
-    if (line == nullptr || line[0] == '\0') {
-        return false;
-    }
-    if (strstr(line, "fail") != nullptr || strstr(line, "lowmem") != nullptr ||
-        strstr(line, "abort") != nullptr) {
-        return true;
-    }
-    // GET ... code=-1(conn)
-    return strstr(line, "code=-") != nullptr;
-}
-
-static const char* cursorResetReasonTag() {
-    switch (esp_reset_reason()) {
-    case ESP_RST_POWERON:
-        return "poweron";
-    case ESP_RST_EXT:
-        return "ext";
-    case ESP_RST_SW:
-        return "sw";
-    case ESP_RST_PANIC:
-        return "panic";
-    case ESP_RST_INT_WDT:
-        return "int_wdt";
-    case ESP_RST_TASK_WDT:
-        return "task_wdt";
-    case ESP_RST_WDT:
-        return "wdt";
-    case ESP_RST_DEEPSLEEP:
-        return "deepsleep";
-    case ESP_RST_BROWNOUT:
-        return "brownout";
-    case ESP_RST_SDIO:
-        return "sdio";
-    default:
-        return "unknown";
-    }
-}
-
-// 写诊断日志：Serial + /cursor.log；关键错误再写 /cursor.err
+// 诊断输出：仅 Serial（已去掉 LittleFS / Log App）
 static void cursorLog(const char* fmt, ...) {
     char line[192];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
-
     Serial.printf("[cursor] %s\n", line);
-
-    if (!LittleFS.begin(false)) {
-        return;
-    }
-
-    cursorLogAppendFile(CURSOR_LOG_PATH, CURSOR_LOG_TMP_PATH, CURSOR_LOG_MAX_BYTES,
-                        CURSOR_LOG_KEEP_BYTES, line);
-    if (cursorLogLineIsCritical(line)) {
-        cursorLogAppendFile(CURSOR_ERR_PATH, CURSOR_ERR_TMP_PATH, CURSOR_ERR_MAX_BYTES,
-                            CURSOR_ERR_KEEP_BYTES, line);
-    }
-}
-
-// 开机面包屑：重启后用 Fn+i 看 Err 可知上次是 panic/wdt 还是软复位
-void cursorLogBootBreadcrumb() {
-    if (!LittleFS.begin(false)) {
-        return;
-    }
-    char line[160];
-    snprintf(line, sizeof(line), "boot reset=%s heap=%u max=%u", cursorResetReasonTag(),
-             ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    Serial.printf("[cursor] %s\n", line);
-    cursorLogAppendFile(CURSOR_ERR_PATH, CURSOR_ERR_TMP_PATH, CURSOR_ERR_MAX_BYTES,
-                        CURSOR_ERR_KEEP_BYTES, line);
 }
 
 // WiFi 连上后预解析 DNS，减轻首包 HTTPS 立刻 -1

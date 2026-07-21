@@ -2,8 +2,9 @@
 """从已运行 Config 网页的设备拉取 M5GFX 烘焙的 .rgb565 到本地 data/。
 
 流程：
-  1. 设备上 Icons 应用按 b，或 POST /bake-rgb565（需 Config 网页在线）
-  2. 本脚本按已知路径下载 .rgb565
+  1. uploadfs 放入 PNG（设备 WiFi / Config 网页需在线）
+  2. 本脚本 --bake：POST /bake-rgb565（设备端 M5GFX 烘焙）
+  3. 再按路径下载 .rgb565 到本地 data/
 
 用法：
   python scripts/pull_rgb565_from_device.py http://192.168.1.20
@@ -40,7 +41,17 @@ DEVICE_NAMES = [
     "sensor_ht",
     "wifispeaker",
 ]
-IR_NAMES = ["ac_cool", "ac_heat", "ac_dry", "ac_fan"]
+# 空调模式（normal + active）
+IR_MODE_NAMES = ["ac_cool", "ac_heat", "ac_dry", "ac_fan", "ac_auto"]
+# 风速档位（仅单态图标）
+IR_FAN_NAMES = [
+    "ac_fan_auto",
+    "ac_fan_min",
+    "ac_fan_low",
+    "ac_fan_med",
+    "ac_fan_high",
+    "ac_fan_max",
+]
 
 
 def rel_paths() -> list[str]:
@@ -50,9 +61,11 @@ def rel_paths() -> list[str]:
         paths.append(f"icon/device/{n}_active.rgb565")
         paths.append(f"icon/device/{n}_25w.rgb565")
         paths.append(f"icon/device/{n}_active_25w.rgb565")
-    for n in IR_NAMES:
+    for n in IR_MODE_NAMES:
         paths.append(f"icon/ir/{n}.rgb565")
         paths.append(f"icon/ir/{n}_active.rgb565")
+    for n in IR_FAN_NAMES:
+        paths.append(f"icon/ir/{n}.rgb565")
     paths.append("logo_60.rgb565")
     paths.append("logo_50.rgb565")
     return paths

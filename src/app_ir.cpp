@@ -12,6 +12,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 // Cardputer / Adv 板载红外发射管
@@ -21,23 +22,63 @@ static constexpr const char* AC_ICON_DIR = "/icon/ir";
 static constexpr int AC_MODE_ICON_PX = 30;
 static constexpr int AC_MODE_ICON_PIXELS = AC_MODE_ICON_PX * AC_MODE_ICON_PX;
 static constexpr int AC_MODE_ICON_BYTES = AC_MODE_ICON_PIXELS * 2; // RGB565
-static constexpr int AC_MODE_ICON_GAP = 2;
-static constexpr int AC_MODE_COLS = 2; // 左栏 2x2 模式图标
+static constexpr int AC_MODE_ICON_GAP = 1; // 3 列时收紧，给右侧按键留缝
+static constexpr int AC_MODE_TOP_COLS = 3; // 上排 Cool/Heat/Dry
 static constexpr int AC_MODE_ICON_X = APP_CONTENT_X;
 // 模式/按键相对顶栏（品牌行）下方间距
 static constexpr int AC_MODE_ROW_GAP = 6;
 // 右栏按键贴右边距
 static constexpr int AC_PAD_RIGHT = 8;
-// 左栏模式区宽度（含间距）
-static constexpr int AC_MODE_GRID_W =
-    AC_MODE_COLS * AC_MODE_ICON_PX + (AC_MODE_COLS - 1) * AC_MODE_ICON_GAP;
-static constexpr int AC_MODE_GRID_H =
-    2 * AC_MODE_ICON_PX + AC_MODE_ICON_GAP;
+// 左栏模式区：上 3 下 2（宽约 92px，右侧按键从 ~100 起）
 
-// 首次从 LittleFS 读入 .rgb565，之后 pushImage（避免每次切模式重读 Flash）
-static constexpr int AC_ICON_CACHE_SLOTS = 8; // 4 模式 × normal/active
-static uint16_t s_ac_icon_px[AC_ICON_CACHE_SLOTS][AC_MODE_ICON_PIXELS];
+// 风速图标（顶栏与温度并排，仅显示当前档）
+static constexpr int AC_FAN_ICON_PX = 24;
+static constexpr int AC_FAN_ICON_PIXELS = AC_FAN_ICON_PX * AC_FAN_ICON_PX;
+static constexpr int AC_FAN_ICON_BYTES = AC_FAN_ICON_PIXELS * 2;
+static constexpr int AC_FAN_COUNT = 6;
+
+// 进入 IR 时 malloc；离开 free（不常驻 BSS）
+static constexpr int AC_MODE_COUNT = 5;
+static constexpr int AC_ICON_CACHE_SLOTS = AC_MODE_COUNT * 2; // 5 模式 × normal/active
+static uint16_t* s_ac_icon_px = nullptr;
 static bool s_ac_icon_ready[AC_ICON_CACHE_SLOTS] = {};
+static uint16_t* s_ac_fan_icon_px = nullptr;
+static bool s_ac_fan_icon_ready[AC_FAN_COUNT] = {};
+
+// 模式槽像素起点
+static uint16_t* acModeIconPx(const int slot) {
+    return s_ac_icon_px + static_cast<size_t>(slot) * AC_MODE_ICON_PIXELS;
+}
+
+// 风速槽像素起点
+static uint16_t* acFanIconPx(const int slot) {
+    return s_ac_fan_icon_px + static_cast<size_t>(slot) * AC_FAN_ICON_PIXELS;
+}
+
+// 进入时分配缓存；失败则保持空指针（绘制走 PNG 回退）
+static bool ensureAcIconCache() {
+    if (s_ac_icon_px == nullptr) {
+        s_ac_icon_px = static_cast<uint16_t*>(
+            malloc(static_cast<size_t>(AC_ICON_CACHE_SLOTS) * AC_MODE_ICON_BYTES));
+        memset(s_ac_icon_ready, 0, sizeof(s_ac_icon_ready));
+    }
+    if (s_ac_fan_icon_px == nullptr) {
+        s_ac_fan_icon_px = static_cast<uint16_t*>(
+            malloc(static_cast<size_t>(AC_FAN_COUNT) * AC_FAN_ICON_BYTES));
+        memset(s_ac_fan_icon_ready, 0, sizeof(s_ac_fan_icon_ready));
+    }
+    return s_ac_icon_px != nullptr && s_ac_fan_icon_px != nullptr;
+}
+
+// 离开 IR 释放缓存
+static void freeAcIconCache() {
+    free(s_ac_icon_px);
+    s_ac_icon_px = nullptr;
+    free(s_ac_fan_icon_px);
+    s_ac_fan_icon_px = nullptr;
+    memset(s_ac_icon_ready, 0, sizeof(s_ac_icon_ready));
+    memset(s_ac_fan_icon_ready, 0, sizeof(s_ac_fan_icon_ready));
+}
 
 static IRsend g_irsend(IR_TX_PIN);
 static IRac g_irac(IR_TX_PIN);
@@ -168,7 +209,7 @@ static const char* acModeName(const stdAc::opmode_t mode) {
     }
 }
 
-// 有图标的四种模式（Auto 暂无文字）
+// 有图标的五种模式
 static const char* acModeIconStem(const stdAc::opmode_t mode) {
     switch (mode) {
         case stdAc::opmode_t::kCool:
@@ -179,25 +220,58 @@ static const char* acModeIconStem(const stdAc::opmode_t mode) {
             return "ac_dry";
         case stdAc::opmode_t::kFan:
             return "ac_fan";
+        case stdAc::opmode_t::kAuto:
+            return "ac_auto";
         default:
             return nullptr;
     }
 }
 
-// cool/heat/dry/fan → 0..3；active 占后 4 槽
+// cool/heat/dry/fan/auto → 0..4；active 占后 5 槽
 static int acModeIconCacheSlot(const char* stem, const bool active) {
-    static const char* kStems[] = {"ac_cool", "ac_heat", "ac_dry", "ac_fan"};
-    for (int i = 0; i < 4; i++) {
+    static const char* kStems[] = {"ac_cool", "ac_heat", "ac_dry", "ac_fan", "ac_auto"};
+    for (int i = 0; i < AC_MODE_COUNT; i++) {
         if (strcmp(stem, kStems[i]) == 0) {
-            return i + (active ? 4 : 0);
+            return i + (active ? AC_MODE_COUNT : 0);
         }
     }
     return -1;
 }
 
-// 从 LittleFS 读入 bake 的 RGB565 到缓存槽
+// 风速档 → 缓存槽 / 文件 stem
+static int acFanIconSlot(const stdAc::fanspeed_t fan) {
+    switch (fan) {
+        case stdAc::fanspeed_t::kAuto:
+            return 0;
+        case stdAc::fanspeed_t::kMin:
+            return 1;
+        case stdAc::fanspeed_t::kLow:
+            return 2;
+        case stdAc::fanspeed_t::kMedium:
+            return 3;
+        case stdAc::fanspeed_t::kHigh:
+            return 4;
+        case stdAc::fanspeed_t::kMax:
+            return 5;
+        default:
+            return -1;
+    }
+}
+
+static const char* acFanIconStem(const stdAc::fanspeed_t fan) {
+    static const char* kStems[] = {
+        "ac_fan_auto", "ac_fan_min", "ac_fan_low", "ac_fan_med", "ac_fan_high", "ac_fan_max",
+    };
+    const int slot = acFanIconSlot(fan);
+    if (slot < 0 || slot >= AC_FAN_COUNT) {
+        return nullptr;
+    }
+    return kStems[slot];
+}
+
+// 从 LittleFS 读入 bake 的 RGB565 到模式缓存槽
 static bool loadAcRgb565ToSlot(const char* path, const int slot) {
-    if (slot < 0 || slot >= AC_ICON_CACHE_SLOTS || path == nullptr) {
+    if (s_ac_icon_px == nullptr || slot < 0 || slot >= AC_ICON_CACHE_SLOTS || path == nullptr) {
         return false;
     }
     if (!LittleFS.exists(path)) {
@@ -208,7 +282,7 @@ static bool loadAcRgb565ToSlot(const char* path, const int slot) {
         return false;
     }
     const size_t n =
-        f.read(reinterpret_cast<uint8_t*>(s_ac_icon_px[slot]), AC_MODE_ICON_BYTES);
+        f.read(reinterpret_cast<uint8_t*>(acModeIconPx(slot)), AC_MODE_ICON_BYTES);
     f.close();
     if (n != static_cast<size_t>(AC_MODE_ICON_BYTES)) {
         return false;
@@ -217,18 +291,40 @@ static bool loadAcRgb565ToSlot(const char* path, const int slot) {
     return true;
 }
 
-// 1:1 绘制；优先 RAM 缓存 → .rgb565 → PNG
+// 从 LittleFS 读入风速 RGB565
+static bool loadAcFanRgb565ToSlot(const char* path, const int slot) {
+    if (s_ac_fan_icon_px == nullptr || slot < 0 || slot >= AC_FAN_COUNT || path == nullptr) {
+        return false;
+    }
+    if (!LittleFS.exists(path)) {
+        return false;
+    }
+    File f = LittleFS.open(path, "r");
+    if (!f) {
+        return false;
+    }
+    const size_t n =
+        f.read(reinterpret_cast<uint8_t*>(acFanIconPx(slot)), AC_FAN_ICON_BYTES);
+    f.close();
+    if (n != static_cast<size_t>(AC_FAN_ICON_BYTES)) {
+        return false;
+    }
+    s_ac_fan_icon_ready[slot] = true;
+    return true;
+}
+
+// 1:1 绘制模式图标；优先 RAM 缓存 → .rgb565 → PNG
 static bool drawAcModeIconAt(const char* stem, const int x, const int y, const bool active) {
     if (stem == nullptr) {
         return false;
     }
     const int slot = acModeIconCacheSlot(stem, active);
-    if (slot >= 0 && s_ac_icon_ready[slot]) {
-        M5Cardputer.Display.pushImage(x, y, AC_MODE_ICON_PX, AC_MODE_ICON_PX, s_ac_icon_px[slot]);
+    if (slot >= 0 && s_ac_icon_px != nullptr && s_ac_icon_ready[slot]) {
+        M5Cardputer.Display.pushImage(x, y, AC_MODE_ICON_PX, AC_MODE_ICON_PX, acModeIconPx(slot));
         return true;
     }
 
-    if (slot >= 0) {
+    if (slot >= 0 && s_ac_icon_px != nullptr) {
         char path[56];
         if (active) {
             snprintf(path, sizeof(path), "%s/%s_active.rgb565", AC_ICON_DIR, stem);
@@ -242,7 +338,7 @@ static bool drawAcModeIconAt(const char* stem, const int x, const int y, const b
         }
         if (ok) {
             M5Cardputer.Display.pushImage(x, y, AC_MODE_ICON_PX, AC_MODE_ICON_PX,
-                                          s_ac_icon_px[slot]);
+                                          acModeIconPx(slot));
             return true;
         }
     }
@@ -264,13 +360,42 @@ static bool drawAcModeIconAt(const char* stem, const int x, const int y, const b
     return false;
 }
 
+// 绘制当前风速图标（顶栏）
+static bool drawAcFanIconAt(const int x, const int y) {
+    const char* stem = acFanIconStem(g_ac_fan);
+    const int slot = acFanIconSlot(g_ac_fan);
+    if (stem == nullptr || slot < 0) {
+        return false;
+    }
+    if (s_ac_fan_icon_px != nullptr && s_ac_fan_icon_ready[slot]) {
+        M5Cardputer.Display.pushImage(x, y, AC_FAN_ICON_PX, AC_FAN_ICON_PX, acFanIconPx(slot));
+        return true;
+    }
+
+    if (s_ac_fan_icon_px != nullptr) {
+        char path[56];
+        snprintf(path, sizeof(path), "%s/%s.rgb565", AC_ICON_DIR, stem);
+        if (loadAcFanRgb565ToSlot(path, slot)) {
+            M5Cardputer.Display.pushImage(x, y, AC_FAN_ICON_PX, AC_FAN_ICON_PX, acFanIconPx(slot));
+            return true;
+        }
+    }
+
+    char png_path[48];
+    snprintf(png_path, sizeof(png_path), "%s/%s.png", AC_ICON_DIR, stem);
+    return drawLittleFsPng(png_path, x, y, 1.0f);
+}
+
 // 进入 IR 时预读全部模式图标（normal + active），切模式时不再触 Flash
 static void preloadAcModeIcons() {
-    static const char* kStems[] = {"ac_cool", "ac_heat", "ac_dry", "ac_fan"};
-    for (int i = 0; i < 4; i++) {
+    if (s_ac_icon_px == nullptr) {
+        return;
+    }
+    static const char* kStems[] = {"ac_cool", "ac_heat", "ac_dry", "ac_fan", "ac_auto"};
+    for (int i = 0; i < AC_MODE_COUNT; i++) {
         const char* stem = kStems[i];
         for (int active = 0; active < 2; active++) {
-            const int slot = i + (active ? 4 : 0);
+            const int slot = i + (active ? AC_MODE_COUNT : 0);
             if (s_ac_icon_ready[slot]) {
                 continue;
             }
@@ -289,17 +414,40 @@ static void preloadAcModeIcons() {
     }
 }
 
-// 左栏 2x2 模式图标；当前模式用 _active，Auto 时全部普通态
+// 预读全部风速图标
+static void preloadAcFanIcons() {
+    if (s_ac_fan_icon_px == nullptr) {
+        return;
+    }
+    static const char* kStems[] = {
+        "ac_fan_auto", "ac_fan_min", "ac_fan_low", "ac_fan_med", "ac_fan_high", "ac_fan_max",
+    };
+    for (int i = 0; i < AC_FAN_COUNT; i++) {
+        if (s_ac_fan_icon_ready[i]) {
+            continue;
+        }
+        char path[56];
+        snprintf(path, sizeof(path), "%s/%s.rgb565", AC_ICON_DIR, kStems[i]);
+        loadAcFanRgb565ToSlot(path, i);
+    }
+}
+
+// 左栏上 3 下 2 模式图标；当前模式用 _active
 static void drawAcModeIcons(const int x, const int y) {
     static const stdAc::opmode_t kModes[] = {
-        stdAc::opmode_t::kCool,
-        stdAc::opmode_t::kHeat,
-        stdAc::opmode_t::kDry,
-        stdAc::opmode_t::kFan,
+        stdAc::opmode_t::kCool, stdAc::opmode_t::kHeat, stdAc::opmode_t::kDry,
+        stdAc::opmode_t::kFan,  stdAc::opmode_t::kAuto,
     };
     for (size_t i = 0; i < sizeof(kModes) / sizeof(kModes[0]); i++) {
-        const int col = static_cast<int>(i % AC_MODE_COLS);
-        const int row = static_cast<int>(i / AC_MODE_COLS);
+        int col;
+        int row;
+        if (i < AC_MODE_TOP_COLS) {
+            col = static_cast<int>(i);
+            row = 0;
+        } else {
+            col = static_cast<int>(i - AC_MODE_TOP_COLS);
+            row = 1;
+        }
         const int ix = x + col * (AC_MODE_ICON_PX + AC_MODE_ICON_GAP);
         const int iy = y + row * (AC_MODE_ICON_PX + AC_MODE_ICON_GAP);
         const char* stem = acModeIconStem(kModes[i]);
@@ -318,35 +466,31 @@ static int acModeIconY() {
     return APP_CONTENT_Y + INFO_LINE_H_2X + AC_MODE_ROW_GAP;
 }
 
-// 模式图标下方：Auto / 风速
-static int acModeMetaY() {
-    return acModeIconY() + AC_MODE_GRID_H + 2;
+// 模式图标下方：当前模式名
+static int acModeNameY() {
+    return acModeIconY() + 2 * AC_MODE_ICON_PX + AC_MODE_ICON_GAP + 2;
 }
 
-static const char* acFanName(stdAc::fanspeed_t fan);
+// 顶栏风速图标 X：紧挨温度左侧
+static int acFanIconX(const int screen_w, const int temp_total_w) {
+    return screen_w - APP_CONTENT_X - temp_total_w - 4 - AC_FAN_ICON_PX;
+}
 
-// 仅刷新模式图标与 Auto/风速（切模式时不整页重绘）
+// 绘制当前模式名（模式图标下方小字）
+static void drawAcModeNameLabel(const int x, const int y) {
+    // 清掉旧名，避免 Cool→Heat 等长度变化残留
+    M5Cardputer.Display.fillRect(x, y, 92, 10, BLACK);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(x, y);
+    M5Cardputer.Display.print(acModeName(g_ac_mode));
+}
+
+// 仅刷新模式图标与模式名（切模式时不整页重绘）
 static void redrawAcModeIconsOnly() {
     const int icon_y = acModeIconY();
-    const int mode_x = AC_MODE_ICON_X;
-    // 565 不透明，直接覆盖，避免先 fillRect 黑底闪一下
-    drawAcModeIcons(mode_x, icon_y);
-
-    // 屏高紧：Auto + Fan 同一行，避免第二行被裁切
-    const int meta_y = acModeMetaY();
-    M5Cardputer.Display.fillRect(mode_x, meta_y, AC_MODE_GRID_W + 40, 10, BLACK);
-    M5Cardputer.Display.setTextSize(1);
-    int mx = mode_x;
-    if (g_ac_mode == stdAc::opmode_t::kAuto) {
-        M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(mx, meta_y);
-        M5Cardputer.Display.print("Auto ");
-        mx += M5Cardputer.Display.textWidth("Auto ");
-    }
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(mx, meta_y);
-    M5Cardputer.Display.print("Fan ");
-    M5Cardputer.Display.print(acFanName(g_ac_fan));
+    drawAcModeIcons(AC_MODE_ICON_X, icon_y);
+    drawAcModeNameLabel(AC_MODE_ICON_X, acModeNameY());
 }
 
 static const char* acFanName(const stdAc::fanspeed_t fan) {
@@ -815,25 +959,30 @@ static void drawAcRemotePad(const int content_y) {
     const int screen_w = M5Cardputer.Display.width();
     const int y0 = content_y;
 
-    // 顶栏左：品牌 / 电源；右：温度
+    // 顶栏以风速图标高度为基准，文字纵向居中对齐
+    const int fan_y = y0 - 2;
+    constexpr int kText2H = 16; // setTextSize(2) 字高
+    const int text_y = fan_y + (AC_FAN_ICON_PX - kText2H) / 2;
+
+    // 顶栏左：品牌 / 电源
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-    M5Cardputer.Display.setCursor(x0, y0);
+    M5Cardputer.Display.setCursor(x0, text_y);
     const char* ac_brand = acBrandName(g_ac_brand);
     M5Cardputer.Display.print(ac_brand);
     int cx = x0 + M5Cardputer.Display.textWidth(ac_brand) + 8;
     const char* ac_pwr = g_ac_power ? "ON" : "OFF";
     M5Cardputer.Display.setTextColor(g_ac_power ? APP_COLOR_OK : APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(cx, y0);
+    M5Cardputer.Display.setCursor(cx, text_y);
     M5Cardputer.Display.print(ac_pwr);
     if (g_tx_status[0] != '\0' && static_cast<int32_t>(millis() - g_tx_status_until_ms) < 0) {
         cx += M5Cardputer.Display.textWidth(ac_pwr) + 8;
         M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(cx, y0);
+        M5Cardputer.Display.setCursor(cx, text_y);
         M5Cardputer.Display.print(g_tx_status);
     }
 
-    // 右上角温度
+    // 右上角：风速图标 + 温度（同纵向居中）
     char tbuf[8];
     snprintf(tbuf, sizeof(tbuf), "%u", static_cast<unsigned>(g_ac_temp));
     M5Cardputer.Display.setTextSize(2);
@@ -842,32 +991,25 @@ static void drawAcRemotePad(const int content_y) {
     const int unit_w = M5Cardputer.Display.textWidth("C");
     const int temp_total_w = temp_w + 2 + unit_w;
     const int temp_x = screen_w - APP_CONTENT_X - temp_total_w;
+    const int fan_x = acFanIconX(screen_w, temp_total_w);
+    if (!drawAcFanIconAt(fan_x, fan_y)) {
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(fan_x, fan_y + 8);
+        M5Cardputer.Display.print(acFanName(g_ac_fan)[0]);
+    }
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_VALUE, BLACK);
-    M5Cardputer.Display.setCursor(temp_x, y0);
+    M5Cardputer.Display.setCursor(temp_x, text_y);
     M5Cardputer.Display.print(tbuf);
     M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setCursor(temp_x + temp_w + 2, y0 + 4);
+    M5Cardputer.Display.setCursor(temp_x + temp_w + 2, text_y + 4);
     M5Cardputer.Display.print("C");
 
-    // 左：2x2 模式；右：按键垫贴右边 8px
+    // 左：上 3 下 2 模式 + 模式名；右：按键垫贴右边 8px
     const int icon_y = acModeIconY();
     drawAcModeIcons(AC_MODE_ICON_X, icon_y);
-    const int meta_y = acModeMetaY();
-    // Fan 状态：与 Auto 同一行（屏高不足时第二行会裁掉）
-    M5Cardputer.Display.setTextSize(1);
-    int mx = AC_MODE_ICON_X;
-    if (g_ac_mode == stdAc::opmode_t::kAuto) {
-        M5Cardputer.Display.setTextColor(APP_COLOR_OK, BLACK);
-        M5Cardputer.Display.setCursor(mx, meta_y);
-        M5Cardputer.Display.print("Auto ");
-        mx += M5Cardputer.Display.textWidth("Auto ");
-    }
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
-    M5Cardputer.Display.setCursor(mx, meta_y);
-    M5Cardputer.Display.print("Fan ");
-    M5Cardputer.Display.print(acFanName(g_ac_fan));
-
+    drawAcModeNameLabel(AC_MODE_ICON_X, acModeNameY());
     constexpr int gap = 3;
     constexpr int btn_w = 42;
     constexpr int btn_h = 36;
@@ -1004,8 +1146,15 @@ void enterIrApp() {
                            static_cast<int>(IrAcBrand::Count) - 1);
 
     ensureIrReady();
-    preloadAcModeIcons(); // 进入时缓存全部模式图标，切模式无闪
+    // 按需分配缓存再预载；OOM 时绘制走 PNG/逐次读
+    (void)ensureAcIconCache();
+    preloadAcModeIcons();
+    preloadAcFanIcons();
     redrawIr();
+}
+
+void leaveIrApp() {
+    freeAcIconCache();
 }
 
 void updateIrApp() {
@@ -1127,6 +1276,7 @@ void handleIrApp(const Keyboard_Class::KeysState& status) {
                 g_ac_field = static_cast<int>(IrAcField::Fan);
                 cycleAcFan(1);
                 flashAcBtn(IrAcBtn::Fan);
+                // 顶栏风速图标就地切换，按钮高亮仍整页刷一次
                 drawIrMain();
                 return;
             }

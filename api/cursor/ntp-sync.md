@@ -2,7 +2,7 @@
 
 > 非 HTTP JSON 接口。Cursor 在连上 WiFi 后、请求用量 API **之前**调用 `quickSyncTime()`。  
 > 实现：`src/app_cursor.cpp` → `quickSyncTime()`  
-> 同类逻辑：[`api/time/ntp-sync.md`](../time/ntp-sync.md)（Time App）、`app_mic.cpp`（后台校时）
+> 同类逻辑：[`api/time/ntp-sync.md`](../time/ntp-sync.md)（Time App）
 
 ## 作用
 
@@ -21,7 +21,7 @@ configTzTime(getAppTimezone(), "ntp.aliyun.com", "pool.ntp.org");
 | 主 NTP | `ntp.aliyun.com` |
 | 备 NTP | `pool.ntp.org` |
 | 有效阈值 | Unix 秒 `> 1700000000`（约 2023-11 之后） |
-| 超时 | Cursor：约 4s；Time App / Mic：更长（含 `time.windows.com`） |
+| 超时 | Cursor：约 4s；Time App：更长（含 `time.windows.com`） |
 
 ## 与 Time App 的差异
 

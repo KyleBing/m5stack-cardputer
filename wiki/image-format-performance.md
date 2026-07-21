@@ -128,18 +128,7 @@ LittleFS 读原始像素 → pushAlphaImage（读底色 + 混合 + 写回）
 
 转换脚本：
 
-```bash
-python scripts/png_to_rgba8888.py data/icon/ir
-python scripts/png_to_rgba8888.py data/icon/device data/logo_60.png data/logo_50.png
-```
-
-RGB565 转换脚本 `scripts/png_to_rgb565.py`：
-
-- 用 `Image.alpha_composite` 叠到黑底（保留抗锯齿）
-- 默认 **Floyd–Steinberg 抖动** 再量化到 565（避免直接 `>>` 截断发脏）
-- `--no-dither` 可关掉抖动
-
-若仍与屏上 PNG 有差：最齐的做法是设备上 `drawPngFile` → `readRect` 导出像素（与 M5GFX 解码完全一致）。
+ARGB8888（若仍使用）可用独立脚本；**RGB565 禁止电脑离线转换**，见第 8 节，必须设备 bake。
 
 网页配置预览仍使用 **PNG**（浏览器友好）；固件绘制优先原始像素文件。
 
@@ -165,9 +154,9 @@ RGB565 转换脚本 `scripts/png_to_rgb565.py`：
 
 ## 8. 如何得到「与 M5GFX 屏上一致」的 RGB565
 
-PC 脚本（Pillow）无法复刻 LovyanGFX/pngle 的解码与混合，所以手转 565 容易发脏。
+**禁止**在电脑上用 Pillow 等离线转 565：解码/混色与 LovyanGFX/pngle 不一致，屏上会发脏。
 
-**正确做法：在设备上用 M5GFX 解码，再导出像素。**
+**正确做法：必须在设备上用 M5GFX 解码，再导出像素。**
 
 ```
 drawPngFile（库解码 + 透明混合到黑底）
@@ -175,17 +164,17 @@ drawPngFile（库解码 + 透明混合到黑底）
   → 写入 .rgb565
 ```
 
-### 操作
+### 操作（推荐：一条命令）
 
-1. 烧录含烘焙功能的固件，并 `uploadfs`（需有 PNG 源文件）。
-2. 打开 **Icons** 应用，按 **`b`** 烘焙（左上角会闪一下解码过程）。
-3. 或 Config 网页在线时：`POST http://<设备IP>/bake-rgb565`
-4. 拉回工程 `data/`：
+前提：固件已烧录、LittleFS 里有 PNG、设备 WiFi 在线（Config 网页可用）。
 
 ```bash
+# 设备上 POST /bake-rgb565，再拉回 data/
 python scripts/pull_rgb565_from_device.py http://<设备IP> --bake
 ```
 
-5. 之后固件绘制顺序为：**`.rgb565` → `.argb8888` → `.png`**。
+或只触发烘焙：`curl -X POST http://<IP>/bake-rgb565`
 
-API：`bakePngToRgb565File` / `bakeAllPngIconsToRgb565`（`app_device_icons.h`）。
+之后固件绘制顺序为：**`.rgb565` → `.argb8888` → `.png`**。
+
+设备端 API：`bakePngToRgb565File` / `bakeAllPngIconsToRgb565`（`app_device_icons.h`）。

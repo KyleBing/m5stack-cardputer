@@ -486,7 +486,15 @@ static JsonObject ensureSoundObject(JsonDocument& doc) {
     return doc["sound"].as<JsonObject>();
 }
 
+void setAppConfigSpeakerVolumeLocal(const uint8_t volume_percent) {
+    g_config.speaker_volume = volume_percent > 100 ? 100 : volume_percent;
+}
+
 bool saveAppConfigSpeakerVolume(const uint8_t volume_percent) {
+    // 先更新内存，UI / getAppConfig 立刻一致；再写盘（不再整表 reload）
+    const uint8_t pct = volume_percent > 100 ? 100 : volume_percent;
+    g_config.speaker_volume = pct;
+
     JsonDocument doc;
     if (LittleFS.exists(CONFIG_PATH)) {
         File in = LittleFS.open(CONFIG_PATH, "r");
@@ -500,7 +508,6 @@ bool saveAppConfigSpeakerVolume(const uint8_t volume_percent) {
     }
 
     JsonObject sound = ensureSoundObject(doc);
-    const uint8_t pct = volume_percent > 100 ? 100 : volume_percent;
     sound["volume"] = pct;
 
     if (doc["devices"].isNull()) {
@@ -513,7 +520,7 @@ bool saveAppConfigSpeakerVolume(const uint8_t volume_percent) {
     }
     serializeJsonPretty(doc, out);
     out.close();
-    return loadAppConfig();
+    return true;
 }
 
 bool saveAppConfigTimeKeySound(const bool enabled) {

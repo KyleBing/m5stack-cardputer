@@ -93,24 +93,28 @@ void flushCardputerInput(bool wait_btn_a = true);
 // 翻页键：-1 上一页，0 无，1 下一页（方向键 / ; , . /）
 int getMenuNavDelta(const Keyboard_Class::KeysState& status);
 
-// I2S/功放冷启动预热（短提示音前调用）
+// 需要出声时 begin 并套用音量
 void warmUpSpeakerIfNeeded();
 // 关喇叭并拉低 I2S 脚，避免 NS4168 悬空嗡嗡（Mic 占用 WS 时不碰 WS）
 void releaseSpeakerQuiet();
+// Mic.end 后：Speaker 抢回与 PDM 共用的 G43，再静音卸 I2S + 拉低（否则只 hold 常仍嗡）
+void reclaimAndReleaseSpeakerQuiet();
 // 出声/开麦前解除 gpio_hold，否则 begin 抢不到脚
 void releaseAudioPinHolds();
-// 主循环：提示音播完后自动 releaseSpeakerQuiet
+// 主循环占位（已取消提示音播完自动静音）
 void pollSpeakerQuietRelease();
 void cancelSpeakerQuietRelease();
+// 主循环：音量脏标记空闲后再写盘（避免挡 UI）
+void pollSpeakerVolumeSave();
 // 按配置音量应用到已启用的 Speaker
 void applyAppSpeakerVolume();
 // 当前有效音量 0~100（含未写盘的调节）
 uint8_t getAppSpeakerVolumePercent();
-// 调节音量（先改 Speaker，写盘延后到 flushSpeakerVolumeSave）
+// 调节音量（先改内存/Speaker，写盘延后到 flush / poll）
 void adjustAppSpeakerVolume(int delta_percent);
 void flushSpeakerVolumeSave();
-// 播放短 UI 提示音（内部会按需预热；播完由 poll 静音释放）
-void playUiTone(float freq_hz, uint32_t duration_ms);
+// 播放短 UI 提示音；auto_quiet 已忽略（保留参数兼容旧调用）
+void playUiTone(float freq_hz, uint32_t duration_ms, bool auto_quiet = false);
 // Time 按键声：受 settings/sound.time_key 控制（countdown 闹钟请用 playUiTone）
 void playTimeKeyTone(float freq_hz, uint32_t duration_ms);
 bool isTimeKeySoundEnabled();

@@ -414,7 +414,6 @@ void recoverScreenshotsOnBoot() {
     if (!LittleFS.begin(false)) {
         return;
     }
-    ensureShotDirOn(LittleFS);
 
     // 上次 setup 没跑完（崩溃/看门狗）→ 删最后一张 Flash 截图
     if (LittleFS.exists(SHOT_BOOT_PENDING)) {
@@ -423,18 +422,15 @@ void recoverScreenshotsOnBoot() {
         LittleFS.remove(SHOT_BOOT_PENDING);
     }
 
-    // 空间过紧：继续删最后一张直到够用或没有截图
-    int guard = 0;
-    while (fsFreeBytes(LittleFS, false) < SHOT_MIN_FREE_BOOT && guard < 32) {
-        if (!deleteLastScreenshot()) {
-            break;
+    // 确保 /shot 可写。勿在开机调用 LittleFS.usedBytes()：图标一多全盘扫描可达数秒。
+    // 空间回收改到真正截图保存时（saveToFs 已有删旧逻辑）。
+    if (!ensureShotDirOn(LittleFS)) {
+        for (int i = 0; i < 8 && !ensureShotDirOn(LittleFS); i++) {
+            if (!deleteLastScreenshot()) {
+                break;
+            }
         }
-        guard++;
     }
-    Serial.printf("[shot] boot free=%u used=%u/%u\n",
-                  static_cast<unsigned>(fsFreeBytes(LittleFS, false)),
-                  static_cast<unsigned>(LittleFS.usedBytes()),
-                  static_cast<unsigned>(LittleFS.totalBytes()));
 
     // 标记启动中；正常结束由 markScreenshotBootOk 清除
     File pend = LittleFS.open(SHOT_BOOT_PENDING, "w");
