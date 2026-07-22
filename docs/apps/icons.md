@@ -20,4 +20,4 @@
 
 1. 分页查看已打包进 LittleFS 的图标。
 2. 含设备图标与 IR AC 模式 / 风速资源。
-3. 现场 RGB565 烘焙已改为 Config Web `POST /bake-rgb565`，本 App 不再提供 `b` 烘焙。
+3. 现场 RGB565 烘焙已改为 Config Web `POST /bake-rgb565`，本 App 不再提供 `b` 烘焙。流程与性能说明见 [图片处理与烘焙](/dev/images)。

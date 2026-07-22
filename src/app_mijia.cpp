@@ -123,6 +123,11 @@ struct MijiaRefreshJob {
 };
 
 static MijiaRefreshJob* mijiaDeferredJob = nullptr;
+// 炸锅操作后延迟回读（设备状态有滞后，约 1s 后再 QUERY）
+static uint32_t mijiaPostOpRefreshAtMs = 0;
+static int mijiaPostOpRefreshDeviceIdx = -1;
+static int mijiaLastFryerRemainSec = -2;
+static bool mijiaForceControlsRedraw = false;
 
 // 释放概览 UI 缓存
 static void freeMijiaOverviewUi() {
@@ -160,6 +165,10 @@ static bool mijiaOverviewUiOk(const int idx) {
 
 static void scheduleMijiaRefresh();
 static void requestMijiaRefresh();
+static void scheduleMijiaPostOpRefresh(uint32_t delay_ms = 1000);
+static void clearMijiaPostOpRefresh();
+static void updateMijiaPostOpRefresh();
+static void updateMijiaFryerCountdownTick();
 static void scheduleMijiaOverviewRefreshJob();
 static void requestMijiaOverviewPageRefresh();
 static void scheduleMijiaGroupJob();
@@ -321,7 +330,9 @@ static bool mijiaPanelControlsVisualChanged(const MijiaUiState& old_ui, const Mi
            old_ui.sat != new_ui.sat || old_ui.speed != new_ui.speed || old_ui.roll != new_ui.roll ||
            old_ui.roll_angle != new_ui.roll_angle || old_ui.mode != new_ui.mode ||
            old_ui.fan_level != new_ui.fan_level || old_ui.aqi != new_ui.aqi ||
-           old_ui.fryer_time != new_ui.fryer_time || old_ui.temp_known != new_ui.temp_known ||
+           old_ui.fryer_time != new_ui.fryer_time ||
+           old_ui.fryer_cd_end_ms != new_ui.fryer_cd_end_ms ||
+           old_ui.temp_known != new_ui.temp_known ||
            old_ui.humidity_known != new_ui.humidity_known ||
            old_ui.battery_known != new_ui.battery_known ||
            old_ui.temperature != new_ui.temperature || old_ui.humidity != new_ui.humidity ||
@@ -381,8 +392,10 @@ static void applyMijiaControlRefresh(const bool force_full) {
     const bool device_changed = mijiaRenderedDeviceIdx != mijiaDeviceIdx;
     const bool icon_dirty = force_full || !mijiaControlInitialized || device_changed ||
                             mijiaPanelIconVisualChanged(mijiaRenderedUi, mijiaUi);
+    const bool force_controls = mijiaForceControlsRedraw;
+    mijiaForceControlsRedraw = false;
     const bool right_dirty =
-        force_full || !mijiaControlInitialized || device_changed ||
+        force_full || force_controls || !mijiaControlInitialized || device_changed ||
         mijiaPanelRightVisualChanged(mijiaRenderedUi, mijiaUi, mijiaRenderedNetStatus, net);
 
     if (!icon_dirty && !right_dirty) {
@@ -615,6 +628,70 @@ static void requestMijiaBleBackground() {
 }
 
 // 取消进行中的查询/控制，切换设备或新操作时丢弃旧任务
+static void clearMijiaPostOpRefresh() {
+    mijiaPostOpRefreshAtMs = 0;
+    mijiaPostOpRefreshDeviceIdx = -1;
+}
+
+// 操作完成后延迟 QUERY（炸锅状态/剩余时间有滞后）
+static void scheduleMijiaPostOpRefresh(const uint32_t delay_ms) {
+    mijiaPostOpRefreshAtMs = millis() + delay_ms;
+    mijiaPostOpRefreshDeviceIdx = mijiaDeviceIdx;
+}
+
+static void updateMijiaPostOpRefresh() {
+    if (mijiaPostOpRefreshAtMs == 0) {
+        return;
+    }
+    if (static_cast<int32_t>(millis() - mijiaPostOpRefreshAtMs) < 0) {
+        return;
+    }
+    const int idx = mijiaPostOpRefreshDeviceIdx;
+    clearMijiaPostOpRefresh();
+    if (idx != mijiaDeviceIdx || mijiaOverviewMode || mijiaGroupMode || mijiaHelpVisible ||
+        mijiaQuickSelectMode || mijiaHotkeyEditMode) {
+        return;
+    }
+    // 仍有后台任务时稍后再刷，避免打断进行中的 SET
+    if (mijiaRefreshTaskRunning) {
+        scheduleMijiaPostOpRefresh(200);
+        return;
+    }
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev == nullptr || mijiaClassifyModel(dev->model) != MijiaDevKind::AIR_FRYER) {
+        return;
+    }
+    requestMijiaRefresh();
+}
+
+// 炸锅本地倒计时每秒刷新右栏显示
+static void updateMijiaFryerCountdownTick() {
+    if (mijiaOverviewMode || mijiaGroupMode || mijiaHelpVisible || mijiaQuickSelectMode ||
+        mijiaHotkeyEditMode) {
+        return;
+    }
+    const MijiaDevice* dev = getCurrentMijiaDevice();
+    if (dev == nullptr || mijiaClassifyModel(dev->model) != MijiaDevKind::AIR_FRYER) {
+        mijiaLastFryerRemainSec = -2;
+        return;
+    }
+    const int remain = mijiaFryerRemainSec(mijiaUi);
+    if (remain < 0) {
+        if (mijiaLastFryerRemainSec >= 0) {
+            mijiaLastFryerRemainSec = -2;
+            applyMijiaControlRefresh(false);
+        }
+        return;
+    }
+    if (remain == mijiaLastFryerRemainSec) {
+        return;
+    }
+    mijiaLastFryerRemainSec = remain;
+    // 本地秒数变化时 UI 字段未变，强制右栏重绘
+    mijiaForceControlsRedraw = true;
+    applyMijiaControlRefresh(false);
+}
+
 static void cancelMijiaPendingJobs() {
     mijiaRefreshGen++;
     mijiaRefreshTimedOut = false;
@@ -624,6 +701,7 @@ static void cancelMijiaPendingJobs() {
     mijiaOverviewPendingCellCount = 0;
     mijiaGroupJobQueueLen = 0;
     mijiaGroupJobQueuePos = 0;
+    clearMijiaPostOpRefresh();
     if (mijiaDeferredJob != nullptr) {
         delete mijiaDeferredJob;
         mijiaDeferredJob = nullptr;
@@ -933,6 +1011,11 @@ static void mijiaJobTaskFn(void* arg) {
             mijiaNeedRedraw = true;
             if (mijiaOverviewUiOk(job_idx)) {
                 mijiaOverviewUi[job_idx] = temp;
+            }
+            // 炸锅开关后状态有滞后：1s 后再 QUERY 一次（温/时长调节在按键路径调度）
+            if (job_type == MijiaJobType::SET_POWER &&
+                mijiaClassifyModel(device.model) == MijiaDevKind::AIR_FRYER) {
+                scheduleMijiaPostOpRefresh(1000);
             }
         }
     }
@@ -1945,8 +2028,8 @@ static void drawMijiaGridBottomHints(const AppConfig& cfg) {
     M5Cardputer.Display.print("off ");
     cx += M5Cardputer.Display.textWidth("off ");
     cx += drawKeyBadge(cx, hint_y, 't', 1);
-    // BtnA 也可切换开关
-    cx += drawTextBadge(cx, hint_y, "BtnA", 1);
+    // BtnGO 也可切换开关
+    cx += drawTextBadge(cx, hint_y, "BtnGO", 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, text_y);
@@ -2841,14 +2924,14 @@ static void drawMijiaHotkeyEditPage() {
         M5Cardputer.Display.print(other[0] != '\0' ? other : "device");
         y += INFO_LINE_H;
         M5Cardputer.Display.setCursor(x, y);
-        M5Cardputer.Display.print("BtnA replace?");
+        M5Cardputer.Display.print("BtnGO replace?");
     } else {
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
         M5Cardputer.Display.setCursor(x, y);
         M5Cardputer.Display.print("press key");
         y += INFO_LINE_H;
         M5Cardputer.Display.setCursor(x, y);
-        M5Cardputer.Display.print("BtnA save");
+        M5Cardputer.Display.print("BtnGO save");
     }
 }
 
@@ -3107,7 +3190,7 @@ static void drawMijiaHelpContent(const MijiaDevice* dev) {
     static const KeyHintItem common_items[] = {
         {'o', "on"},
         {'i', "off"},
-        {'t', "tog/BtnA"},
+        {'t', "tog/BtnGO"},
         {'r', "refresh"},
         {'q', "quick"},
         {'h', "help"},
@@ -3227,7 +3310,7 @@ static void drawMijiaGridHelpPage() {
     y = drawMijiaHelpBadge(2, y, "[ ]", "page");
     y = drawMijiaHelpBadge(2, y, "1-9", "pick cell");
     y = drawMijiaHelpBadge(2, y, "o/i/t", "power");
-    y = drawMijiaHelpBadge(2, y, "BtnA", "toggle");
+    y = drawMijiaHelpBadge(2, y, "BtnGO", "toggle");
     y = drawMijiaHelpBadge(2, y, "l/g/d", "views");
 
     y = drawMijiaHelpColHeader(manual_x, col_y, screen_w - manual_x, "manual");
@@ -3366,6 +3449,8 @@ void leaveMijiaApp() {
 void updateMijiaApp() {
     updateMijiaWifiConnect();
     updateMijiaRefreshTimeout();
+    updateMijiaPostOpRefresh();
+    updateMijiaFryerCountdownTick();
     flushMijiaGridCellUpdates();
 
     // BLE 聚焦扫（r）：非阻塞，解析失败继续听直到超时
@@ -3816,12 +3901,16 @@ void handleMijiaApp(const String& key) {
             strncpy(mijiaUi.status, "wifi fail", sizeof(mijiaUi.status));
         } else if (key == "-") {
             mijiaAdjustFryerTemp(dev, mijiaUi, -5);
+            scheduleMijiaPostOpRefresh(1000);
         } else if (key == "=" || key == "+") {
             mijiaAdjustFryerTemp(dev, mijiaUi, 5);
+            scheduleMijiaPostOpRefresh(1000);
         } else if (key == "[") {
             mijiaAdjustFryerTime(dev, mijiaUi, -1);
+            scheduleMijiaPostOpRefresh(1000);
         } else if (key == "]") {
             mijiaAdjustFryerTime(dev, mijiaUi, 1);
+            scheduleMijiaPostOpRefresh(1000);
         } else {
             handled = false;
         }

@@ -2,7 +2,9 @@
 
 主菜单按键：`u`
 
-启动 SoftAP 或接入已有局域网，用浏览器打开 Web 页面管理 `config.json`：设备、编组、WiFi、亮度、红外默认、截图下载等。
+通过设备自发 AP 或者 连接WiFi， 设备变成一个 Web 服务器，同局域网电脑可以通过访问 cardputer ip 或者 ap 地址访问这个配置网页。
+
+能实现 设备、编组、WiFi、亮度、红外默认、截图下载等操作，这些配置最终都被保存在 `config.json` 配置文件中。这个文件位于设备 flash 的存储区中。
 
 ## 截图
 
@@ -32,7 +34,7 @@
    - `/wifi`：多 WiFi 档案（最多 5 条）与 Active
    - `/shots`：截图预览、下载、清空 TF / Flash
    - `/about`：固件版本信息
-   - RGB565 烘焙：`POST /bake-rgb565`（现场生成图标 bake 文件）
+   - RGB565 烘焙：`POST /bake-rgb565`（现场生成图标 bake 文件；说明见 [图片处理与烘焙](/dev/images)）
 4. 修改保存后写入 LittleFS；部分项（如反色、音量）会立即生效。
 
 配网完成后可按 `ESC` 回菜单，再进 [Mijia](./mijia) / [WiFi](./wifi) 使用。

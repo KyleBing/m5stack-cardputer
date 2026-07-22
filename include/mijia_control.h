@@ -38,8 +38,10 @@ struct MijiaUiState {
     int roll_angle;  // 风扇摇头角度（P5: 30/60/90/120/140）
     int mode;        // 风扇 0=normal 1=nature；净化器 0-5；炸锅工作状态 0-9
     int fan_level;   // 净化器风速 0-5；炸锅目标温度 °C
-    int aqi;         // 净化器 AQI；炸锅剩余时间 min
+    int aqi;         // 净化器 AQI；炸锅剩余时间 min（设备回报）
     int fryer_time;  // 炸锅目标时长 min（手动模式）
+    // 炸锅本地倒计时：刷新时用 left_time 锚定，本地递减，不每秒问设备；0=无
+    uint32_t fryer_cd_end_ms;
     // BLE 传感器
     bool temp_known;
     bool humidity_known;
@@ -115,3 +117,9 @@ void mijiaAdjustFryerTemp(const MijiaDevice* dev, MijiaUiState& state, int delta
 
 // 空气炸锅：调节目标时长（分钟）
 void mijiaAdjustFryerTime(const MijiaDevice* dev, MijiaUiState& state, int delta);
+
+// 炸锅：按 left_time / 运行态锚定本地倒计时截止时刻
+void mijiaSyncFryerCountdown(MijiaUiState& state);
+
+// 炸锅：本地剩余秒数；无倒计时返回 -1
+int mijiaFryerRemainSec(const MijiaUiState& state);

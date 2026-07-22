@@ -1,5 +1,6 @@
 #include "mijia_control.h"
 #include "miio_client.h"
+#include <Arduino.h>
 #include <cstring>
 
 static int clampInt(const int value, const int min_v, const int max_v) {
@@ -118,6 +119,7 @@ void mijiaResetUiState(MijiaUiState& state) {
     state.fan_level = 0;
     state.aqi = 0;
     state.fryer_time = 15;
+    state.fryer_cd_end_ms = 0;
     state.temp_known = false;
     state.humidity_known = false;
     state.battery_known = false;
@@ -222,6 +224,7 @@ void mijiaRefreshDevice(const MijiaDevice* dev, MijiaUiState& state) {
             if (result.ok) {
                 state.power_known = true;
                 state.extra_known = true;
+                mijiaSyncFryerCountdown(state);
             }
             break;
         case MijiaDevKind::SENSOR_HT:
@@ -278,6 +281,7 @@ void mijiaSetDevicePower(const MijiaDevice* dev, MijiaUiState& state, const bool
                 if (st.ok) {
                     state.power_known = true;
                     state.extra_known = true;
+                    mijiaSyncFryerCountdown(state);
                     if (on && !state.power_on) {
                         // 多半还在关机/待机：需机身先开机，或锅未推到位
                         st.ok = false;
@@ -585,4 +589,28 @@ void mijiaAdjustFryerTime(const MijiaDevice* dev, MijiaUiState& state, const int
         state.extra_known = true;
     }
     applyResult(state, result);
+}
+
+// 设备 left_time 为分钟；运行中锚定本地截止时刻，暂停则只显示静态剩余
+void mijiaSyncFryerCountdown(MijiaUiState& state) {
+    // mode：0 off 1 idle 2 pause 3 timer 4 cook 5 pre 6 done 7 preok 8 prep 9 pot
+    const bool running = state.power_on && state.aqi > 0 && state.mode != 2;
+    if (running) {
+        state.fryer_cd_end_ms =
+            millis() + static_cast<uint32_t>(state.aqi) * 60u * 1000u;
+        return;
+    }
+    state.fryer_cd_end_ms = 0;
+}
+
+int mijiaFryerRemainSec(const MijiaUiState& state) {
+    if (state.fryer_cd_end_ms != 0) {
+        const int32_t left = static_cast<int32_t>(state.fryer_cd_end_ms - millis());
+        return left > 0 ? static_cast<int>(left / 1000) : 0;
+    }
+    // 暂停等：用设备回报的分钟做静态显示
+    if (state.power_on && state.aqi > 0) {
+        return state.aqi * 60;
+    }
+    return -1;
 }

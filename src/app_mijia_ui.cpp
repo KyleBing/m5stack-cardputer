@@ -892,9 +892,20 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
             int cx = x;
             cx += drawMijiaStatusTag(cx, cy, STATUS_NAMES[si], true,
                                      ui.power_on ? APP_COLOR_OK : APP_COLOR_LABEL, text_size);
-            if (ui.aqi > 0 && ui.power_on) {
-                snprintf(buf, sizeof(buf), "left %dm", ui.aqi);
-                drawMijiaStatusTag(cx, cy, buf, true, APP_COLOR_MUTED, text_size);
+            // 剩余时间：状态行最右侧本地倒计时（刷新时锚定，不每秒问设备）
+            const int remain_sec = mijiaFryerRemainSec(ui);
+            if (remain_sec >= 0) {
+                const int mm = remain_sec / 60;
+                const int ss = remain_sec % 60;
+                if (mm >= 60) {
+                    snprintf(buf, sizeof(buf), "%d:%02d:%02d", mm / 60, mm % 60, ss);
+                } else {
+                    snprintf(buf, sizeof(buf), "%d:%02d", mm, ss);
+                }
+                M5Cardputer.Display.setTextSize(text_size);
+                M5Cardputer.Display.setTextColor(CYAN, BLACK);
+                const int text_y = cy + (MIJIA_TAG_H - 8 * text_size) / 2;
+                M5Cardputer.Display.drawRightString(buf, x + w, text_y);
             }
             cy += MIJIA_TAG_H + 4;
             // 手动模式：温度 / 时长进度条（1x 小字）

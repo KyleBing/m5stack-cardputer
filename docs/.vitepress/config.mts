@@ -8,6 +8,11 @@ export default defineConfig({
   lastUpdated: true,
   cleanUrls: true,
 
+  vite: {
+    server: { port: 3123 },
+    preview: { port: 3123 },
+  },
+
   head: [
     ['link', { rel: 'icon', href: '/assets/logo_60.png' }],
   ],
@@ -44,18 +49,11 @@ export default defineConfig({
         ],
       },
       {
-        text: '智能家居',
+        text: '米家控制',
         items: [
           { text: 'Mijia 米家', link: '/apps/mijia' },
+          { text: '米家设备 Token 获取', link: '/apps/mijia-token' },
           { text: 'Infrared 红外', link: '/apps/infrared' },
-        ],
-      },
-      {
-        text: '网络与配置',
-        items: [
-          { text: 'Config 配网', link: '/apps/config' },
-          { text: 'WiFi', link: '/apps/wifi' },
-          { text: 'BLE', link: '/apps/ble' },
         ],
       },
       {
@@ -64,11 +62,6 @@ export default defineConfig({
           { text: 'Time 时间', link: '/apps/time' },
           { text: 'Battery 电池', link: '/apps/battery' },
           { text: 'Sleep 睡眠', link: '/apps/sleep' },
-        ],
-      },
-      {
-        text: '效率工具',
-        items: [
           { text: 'Cursor 用量', link: '/apps/cursor' },
           { text: 'HID Keyboard', link: '/apps/hid-keyboard' },
           { text: 'Morse 摩斯', link: '/apps/morse' },
@@ -77,6 +70,9 @@ export default defineConfig({
       {
         text: '系统与信息',
         items: [
+          { text: 'Config 配网', link: '/apps/config' },
+          { text: 'WiFi', link: '/apps/wifi' },
+          { text: 'BLE', link: '/apps/ble' },
           { text: 'Options 选项', link: '/apps/options' },
           { text: 'Info 信息', link: '/apps/info' },
           { text: 'Version 版本', link: '/apps/version' },
@@ -92,6 +88,13 @@ export default defineConfig({
           { text: 'Icons 图标', link: '/apps/icons' },
           { text: 'Font 字体', link: '/apps/font' },
           { text: 'I2C 扫描', link: '/apps/i2c' },
+        ],
+      },
+      {
+        text: '开发',
+        items: [
+          { text: '图片处理与烘焙', link: '/dev/images' },
+          { text: '内存说明', link: '/dev/memory' },
         ],
       },
     ],

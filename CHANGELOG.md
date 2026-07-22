@@ -10,6 +10,10 @@
 
 ### 新增
 
+- **米家炸锅本地倒计时**：刷新拿到 `left-time` 后在状态行右侧本地倒数（不每秒问设备）；操作后约 1s 再回读状态
+- **开发文档 · 内存说明**（`docs/dev/memory.md`）：Heap / PSRAM / 碎片与 Max Alloc、固件分配习惯、常见 lowmem 场景、Info Memory 数值解读
+- **开发文档 · 图片处理与烘焙**（`docs/dev/images.md`）：从 wiki 迁入 VitePress「开发」侧栏
+- **米家设备 Token 获取**（`docs/apps/mijia-token.md`）
 - **VitePress 文档**（`docs/`）：功能目录与各 App 简介 / 快捷键 / 使用说明；截图预留 `docs/public/shots/{app}-{子功能}.png`；米家页含 model 分类表与设备图标；对应固件 **v1.0.0** 文档起点（`npm run docs:dev`）
 - **多 WiFi 配置**：`wifis[]` + `wifi_active`（最多 5 条）；WiFi App / Config Web `/wifi` 均可管理；其它 App 只用当前 active
 - **Infrared AC Auto 模式图标**：`ac_auto` / `ac_auto_active`；模式栏改为上 3 下 2
@@ -18,6 +22,8 @@
 
 ### 改进
 
+- **Time 倒计时到点**：红色 `00:00:00` + `UP!` 横幅；响铃时红白闪烁；底栏 `Time up` + `x cancel`；标题强调 `UP`
+- **文档侧栏**：拆「开发」模块；米家控制 / 系统与信息分组调整；docs dev 端口 `3123`
 - **Icons**：补入 IR AC 模式（off/on）与风速六档资源页
 - **BLE**：去掉 info 页；入口 `[S] scan` 用 x2 + key badge；翻页支持 `[]`（仅 Help 说明，tip 不显示）
 - **BLE**：操作 tip 移到底栏并加 Help（设备类型说明）；列表改用 Font0 x1；序号橙色、类别黄色；收紧条目上下行间距

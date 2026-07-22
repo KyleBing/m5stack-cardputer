@@ -31,4 +31,4 @@
 | Net | WiFi / IP / RSSI 等 |
 | Run | 运行时长等相关 |
 
-排查内存或配网问题时优先看 Memory 与 Net。
+排查内存或配网问题时优先看 Memory 与 Net。字段含义、分配机制与常见不足场景见 [内存说明](/dev/memory)。

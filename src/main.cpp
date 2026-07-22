@@ -2059,9 +2059,9 @@ static void drawLightSleepPrompt(const int seconds_left) {
     drawSleepCountdownOnly(seconds_left);
     y += 30;
 
-    // 两行 2x 提示：BtnA wake / S Deep
+    // 两行 2x 提示：BtnGO wake / S Deep
     int cx = APP_CONTENT_X;
-    cx += drawTextBadge(cx, y, "BtnA", 2);
+    cx += drawTextBadge(cx, y, "BtnGO", 2);
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, y);
@@ -2095,7 +2095,7 @@ static void drawDeepSleepPrompt(const int seconds_left) {
     y += 30;
 
     int cx = APP_CONTENT_X;
-    cx += drawTextBadge(cx, y, "BtnA", 2);
+    cx += drawTextBadge(cx, y, "BtnGO", 2);
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, y);

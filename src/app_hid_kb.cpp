@@ -756,7 +756,7 @@ static void drawHintBar() {
 
     // 下行：退出 + 配对；右侧 h help
     cx = APP_CONTENT_X;
-    cx += drawTextBadge(cx, row2_y, "BtnA", 1);
+    cx += drawTextBadge(cx, row2_y, "BtnGO", 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, row2_y + 1);
@@ -832,7 +832,7 @@ static void drawHelpPage() {
 
     if (g_help_page == 0) {
         int y = helpDrawColHeader(0, col_y, col_w, "keymap");
-        y = helpDrawBadge(2, y, "BtnA", "exit app");
+        y = helpDrawBadge(2, y, "BtnGO", "exit app");
         y = helpDrawBadge(2, y, "Fn+u", "USB");
         y = helpDrawBadge(2, y, "Fn+b", "BLE");
         y = helpDrawBadge(2, y, "Fn+p", "pair");
@@ -859,7 +859,7 @@ static void drawHelpPage() {
         y = helpDrawLine(manual_x + 2, y, "Opt = Win / Cmd");
         y = helpDrawLine(manual_x + 2, y, "Fn uses orange keys");
         y = helpDrawLine(manual_x + 2, y, "unknown Fn ignored");
-        y = helpDrawLine(manual_x + 2, y, "side BtnA exits");
+        y = helpDrawLine(manual_x + 2, y, "side BtnGO exits");
     }
 
     drawHelpHintBar();

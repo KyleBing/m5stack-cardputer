@@ -23,7 +23,7 @@
 | `-` | TV：音量− · AC：温度− |
 | `=` | （对称调节，见面板） |
 | `[` | TV：频道相关 |
-| **BtnA** / `Space` / `Enter` | 发送当前动作 |
+| **BtnGO** / `Space` / `Enter` | 发送当前动作 |
 | TV：`m` / `i` | Mute / Input 等 |
 | AC：`m` / `f` | 模式 / 风速 |
 
@@ -40,6 +40,8 @@
 ### AC
 
 支持品牌：Midea、Gree、Haier、AUX、Hisense、Xiaomi。
+
+Midea 有些无响应的，改成 Xiaomi 品牌就能控制了。
 
 - 模式图标：制冷 / 制热 / 除湿 / 送风 / Auto  
 - 顶栏风速图标：auto / min / low / med / high / max  

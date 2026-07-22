@@ -186,7 +186,7 @@ static void drawTimeHelpScreen() {
     y = drawTimeHelpKey(2, y, 's', "stopwatch");
     y = drawTimeHelpKey(2, y, 'p', "pure mode");
     y = drawTimeHelpKey(2, y, 'r', "sync / reset");
-    y = drawTimeHelpBadge(2, y, "BtnA", "start / pause");
+    y = drawTimeHelpBadge(2, y, "BtnGO", "start / pause");
 
     y = drawTimeHelpColHeader(manual_x, col_y, screen_w - manual_x, "manual");
     y = drawTimeHelpText(manual_x + 2, y, "uptime since boot");

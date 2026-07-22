@@ -884,7 +884,7 @@ static void drawIrHelpPage() {
     y = drawHelpKeyAt(kx, y, 'p', "power");
     y = drawHelpKeyAt(kx, y, '-', "vol / temp");
     y = drawHelpKeyAt(kx, y, '[', "TV ch");
-    y = drawHelpBadgeAt(kx, y, "BtnA", "send");
+    y = drawHelpBadgeAt(kx, y, "BtnGO", "send");
 
     y = drawHelpColHeader(notes_x, col_y, screen_w - notes_x, "manual");
     const int nx = notes_x + 2;

@@ -1525,11 +1525,11 @@ static void drawCursorHelpPage() {
   y = drawCursorHelpBadge(2, y, "d/w/m", "charts");
   y = drawCursorHelpBadge(2, y, "[ ]", "records");
   y = drawCursorHelpKey(2, y, 'r', "refresh");
-  y = drawCursorHelpBadge(2, y, "BtnA", "screen off");
+  y = drawCursorHelpBadge(2, y, "BtnGO", "screen off");
 
   y = drawCursorHelpColHeader(manual_x, col_y, screen_w - manual_x, "manual");
   y = drawCursorHelpText(manual_x + 2, y, "Cursor usage viewer");
-  y = drawCursorHelpText(manual_x + 2, y, "Auto/API / On-Demand");
+  y = drawCursorHelpText(manual_x + 2, y, "Auto/API/On-Demand");
   y = drawCursorHelpText(manual_x + 2, y, "latest + charts");
   y = drawCursorHelpText(manual_x + 2, y, "idle auto refresh");
   y = drawCursorHelpText(manual_x + 2, y, "WiFi hold 1m / off");

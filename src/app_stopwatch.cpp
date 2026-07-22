@@ -19,7 +19,7 @@ static uint32_t swElapsedMs() {
     return swAccumMs;
 }
 
-// 底栏：BtnA（侧边唤醒键）开始/暂停，替代原 g 键
+// 底栏：BtnGO（侧边唤醒键）开始/暂停，替代原 g 键
 static void drawStopwatchActionHints() {
     const char* go_text = "start";
     if (swRunning) {
@@ -34,7 +34,7 @@ static void drawStopwatchActionHints() {
                                  BLACK);
 
     int cx = APP_CONTENT_X;
-    cx += drawTextBadge(cx, y, "BtnA", 1);
+    cx += drawTextBadge(cx, y, "BtnGO", 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
     M5Cardputer.Display.setCursor(cx, y);
