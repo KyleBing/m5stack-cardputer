@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitepress'
 
 // Sparks 固件文档（v1.0.0）
-// GitHub Pages 项目站需子路径 base；本地 dev 仍用根路径
-const base = process.env.GITHUB_ACTIONS ? '/m5stack-cardputer/' : '/'
+// GitHub Pages 项目站 base 须与仓库名一致（非 ./，VitePress 不支持相对 base）
+const base = process.env.GITHUB_ACTIONS ? '/m5stack-cardputer-sparks/' : '/'
 
 export default defineConfig({
   title: 'Sparks',
@@ -18,7 +18,7 @@ export default defineConfig({
   },
 
   head: [
-    ['link', { rel: 'icon', href: '/assets/logo_60.png' }],
+    ['link', { rel: 'icon', href: `${base}assets/logo_60.png` }],
   ],
 
   themeConfig: {
@@ -32,7 +32,7 @@ export default defineConfig({
         text: 'v1.0.0',
         items: [
           { text: '入门', link: '/guide/getting-started' },
-          { text: 'CHANGELOG', link: 'https://github.com/KyleBing/m5stack-cardputer/blob/main/CHANGELOG.md' },
+          { text: 'CHANGELOG', link: 'https://github.com/KyleBing/m5stack-cardputer-sparks/blob/main/CHANGELOG.md' },
         ],
       },
     ],
@@ -104,7 +104,7 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/KyleBing/m5stack-cardputer' },
+      { icon: 'github', link: 'https://github.com/KyleBing/m5stack-cardputer-sparks' },
     ],
 
     search: {
