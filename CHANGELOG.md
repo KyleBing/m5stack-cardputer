@@ -73,6 +73,8 @@
 - **Infrared**：AC/TV 按键统一为上下叠排样式；屏高紧时 Auto+Fan 同行；右栏贴边距
 - **喇叭脚拉低**：开机与 Mic 进出时 `releaseSpeakerQuiet`（卸 I2S + hold）；列表播过后不再 `Mic.begin`（避免 PDM 时钟灌进功放 LRCLK）；退出列表整页重绘 Record
 - **Mic**：列表与 header 留白；选中条对齐字形；列表模式关麦；播完保持喇叭脚拉低；回示波器若本会话播过音则显示 `mic paused`，按 `R` 再开麦
+- **M5Burner 元信息**：`m5burner.json` 更名为 Sparks，仓库链到 `m5stack-cardputer-sparks`；打包产物改为 `Sparks-<ver>.zip` / `sparks_merged.bin`
+- **M5Burner 打包（Windows）**：Git Bash 下 `python3`/`python` 自动回退；strip CRLF 避免版本号污染 JSON；无 `zip` 时用 `tar -a` 打 zip
 - **M5Burner 打包**：`version` / `author` / 描述中的版本信息统一取自 `include/app_version.h`，发版只改该头文件
 - **IR 模式图标**：进入 App 时预缓存全部 `.rgb565`；切模式直接 `pushImage` 覆盖，去掉先清黑底造成的闪烁
 

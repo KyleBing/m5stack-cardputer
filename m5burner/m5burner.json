@@ -1,14 +1,14 @@
 {
-  "name": "Cardputer Apps",
-  "description": "M5Stack Cardputer multi-app firmware (Arduino / PlatformIO).",
-  "keywords": "ESP32S3, Cardputer, Arduino",
+  "name": "Sparks",
+  "description": "Personal multi-app firmware for M5Stack Cardputer-ADV (Mijia, Cursor, Time, IR, etc.).",
+  "keywords": "ESP32S3, Cardputer, Cardputer-ADV, Arduino, Mijia, Sparks",
   "author": "KyleBing",
-  "repository": "https://github.com/KyleBing/m5stack-cardputer",
+  "repository": "https://github.com/KyleBing/m5stack-cardputer-sparks",
   "firmware_category": {
     "path": "firmware",
     "device": ["M5Cardputer"],
     "default_baud": 921600
   },
-  "version": "0.0.0",
+  "version": "1.0.0",
   "framework": "Arduino"
 }

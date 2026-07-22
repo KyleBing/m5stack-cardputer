@@ -10,8 +10,8 @@
 #
 # 输出:
 #   dist/m5burner/                 # M5Burner 目录结构
-#   dist/CardputerApps-<ver>.zip   # 可导入 / 发布的 zip
-#   dist/cardputer_merged.bin      # esptool 从 0x0 整片写入
+#   dist/Sparks-<ver>.zip          # 可导入 / 发布的 zip
+#   dist/sparks_merged.bin         # esptool 从 0x0 整片写入
 
 set -euo pipefail
 
@@ -65,7 +65,7 @@ fi
   read -r AUTHOR
   read -r EMAIL
   read -r WEBSITE
-} < <(python3 - "$VERSION_H" <<'PY'
+} < <(PYTHON_BIN="$(command -v python3 || command -v python)"; "$PYTHON_BIN" - "$VERSION_H" <<'PY'
 import re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
 
@@ -75,18 +75,21 @@ def grab(name: str) -> str:
         raise SystemExit(f"app_version.h 缺少 {name}")
     return m.group(1)
 
-print(grab("APP_VERSION"))
-print(grab("APP_UPDATE_TIME"))
-print(grab("APP_AUTHOR"))
-print(grab("APP_EMAIL"))
-print(grab("APP_WEBSITE"))
+for key in ("APP_VERSION", "APP_UPDATE_TIME", "APP_AUTHOR", "APP_EMAIL", "APP_WEBSITE"):
+    print(grab(key))
 PY
 )
+# Git Bash / Windows 读入可能带 CRLF
+VERSION="${VERSION//$'\r'/}"
+UPDATE_TIME="${UPDATE_TIME//$'\r'/}"
+AUTHOR="${AUTHOR//$'\r'/}"
+EMAIL="${EMAIL//$'\r'/}"
+WEBSITE="${WEBSITE//$'\r'/}"
 if [[ -z "$VERSION" || -z "$AUTHOR" ]]; then
   echo "从 $VERSION_H 解析版本失败" >&2
   exit 1
 fi
-ZIP_NAME="CardputerApps-${VERSION}.zip"
+ZIP_NAME="Sparks-${VERSION}.zip"
 echo "==> 版本来自 app_version.h: ${VERSION} (${UPDATE_TIME}) by ${AUTHOR}"
 
 # 发布包用 example，绝不带入本地测试 config.json
@@ -148,7 +151,8 @@ echo "==> 组装 M5Burner 目录"
 rm -rf "$OUT_DIR"
 mkdir -p "$FW_DIR"
 # 模板 + app_version.h 字段 → 发布用 m5burner.json
-python3 - "$META_SRC" "${OUT_DIR}/m5burner.json" \
+PYTHON_BIN="$(command -v python3 || command -v python)"
+"$PYTHON_BIN" - "$META_SRC" "${OUT_DIR}/m5burner.json" \
   "$VERSION" "$UPDATE_TIME" "$AUTHOR" "$EMAIL" "$WEBSITE" <<'PY'
 import json, sys
 src, dst, ver, updated, author, email, website = sys.argv[1:8]
@@ -172,7 +176,14 @@ rm -f "${DIST}/${ZIP_NAME}"
 # zip 内顶层即 m5burner.json + firmware/，便于直接导入
 (
   cd "$OUT_DIR"
-  zip -r "${DIST}/${ZIP_NAME}" m5burner.json firmware
+  if command -v zip >/dev/null 2>&1; then
+    zip -r "${DIST}/${ZIP_NAME}" m5burner.json firmware
+  elif command -v tar >/dev/null 2>&1; then
+    tar -a -c -f "${DIST}/${ZIP_NAME}" m5burner.json firmware
+  else
+    echo "缺少 zip 或 tar，无法生成 ${DIST}/${ZIP_NAME}" >&2
+    exit 1
+  fi
 )
 
 # 找 esptool：PATH → PlatformIO tool-esptoolpy
@@ -188,7 +199,7 @@ elif [[ -x "${HOME}/.platformio/penv/bin/python" ]]; then
   ESPTOOL=("${HOME}/.platformio/penv/bin/python" -m esptool)
 fi
 
-MERGED="${DIST}/cardputer_merged.bin"
+MERGED="${DIST}/sparks_merged.bin"
 if [[ ${#ESPTOOL[@]} -gt 0 ]]; then
   echo "==> merge_bin -> ${MERGED}"
   "${ESPTOOL[@]}" --chip esp32s3 merge_bin \
