@@ -1,0 +1,31 @@
+# Version 版本
+
+主菜单按键：`v`
+
+显示固件版本、作者与 Logo 烟花动画。
+
+## 截图
+
+![version-main](/shots/version-main.png)
+
+<p align="center">
+  <img src="/assets/logo_60.png" alt="Sparks logo" width="60" height="60" />
+</p>
+
+当前文档对应：
+
+| 字段 | 值 |
+|------|-----|
+| 版本 | **1.0.0** |
+| 更新日期 | 2026.07.22 |
+| 作者 | KyleBing |
+
+## 快捷键
+
+| 按键 | 作用 |
+|------|------|
+| `r` / `R` | 刷新烟花动画 |
+
+## 使用说明
+
+版本字符串定义在 `include/app_version.h`（`APP_VERSION` / `APP_UPDATE_TIME`）。发版时只改该头文件；M5Burner 打包脚本会读取同一来源。

@@ -59,15 +59,3 @@ void drawIconBattery(int x, int y, int level, bool charging);
 
 // ===== 分页圆点 =====
 void drawIconPageDots(int x, int cy, int page, int page_count);
-
-// ===== Info 列表图标（24x24） =====
-static constexpr int ICON_INFO_W = 24;
-static constexpr int ICON_INFO_H = 24;
-
-void drawIconInfoChip(int x, int y, uint16_t color);
-void drawIconInfoStorage(int x, int y, uint16_t color);
-void drawIconInfoBattery(int x, int y, uint16_t color);
-// 指定边长绘制 Info 图标（Icons 展示页用）
-void drawIconInfoChipSized(int x, int y, uint16_t color, int size);
-void drawIconInfoStorageSized(int x, int y, uint16_t color, int size);
-void drawIconInfoBatterySized(int x, int y, uint16_t color, int size);

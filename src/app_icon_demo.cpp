@@ -81,15 +81,6 @@ static void drawDemoBattery(const int x, const int y) {
 static void drawDemoPageDots(const int x, const int y) {
     drawDemoInBox(x, y, 22, 4, [](const int bx, const int by) { drawIconPageDots(bx, by + 2, 1, 4); });
 }
-static void drawDemoInfoChip(const int x, const int y) {
-    drawIconInfoChipSized(x, y, WHITE, ICON_DEMO_SIZE);
-}
-static void drawDemoInfoStorage(const int x, const int y) {
-    drawIconInfoStorageSized(x, y, WHITE, ICON_DEMO_SIZE);
-}
-static void drawDemoInfoBattery(const int x, const int y) {
-    drawIconInfoBatterySized(x, y, WHITE, ICON_DEMO_SIZE);
-}
 
 static constexpr int DEVICE_ICON_DEMO_GAP = 8;
 static constexpr int DEVICE_ICON_DEMO_PAIR_W = DEVICE_ICON_NATIVE_PX * 2 + DEVICE_ICON_DEMO_GAP;
@@ -121,6 +112,46 @@ DEFINE_DEVICE_ICON_DEMO(sensor_ht)
 DEFINE_DEVICE_ICON_DEMO(wifispeaker)
 DEFINE_DEVICE_ICON_DEMO(default)
 
+// IR AC：模式 30px off|on；风速 24px 单图
+static constexpr int IR_MODE_ICON_PX = 30;
+static constexpr int IR_FAN_ICON_PX = 24;
+static constexpr int IR_ICON_DEMO_GAP = 8;
+static constexpr int IR_MODE_DEMO_PAIR_W = IR_MODE_ICON_PX * 2 + IR_ICON_DEMO_GAP;
+static constexpr int IR_FAN_DEMO_STRIP_W =
+    IR_FAN_ICON_PX * 6 + IR_ICON_DEMO_GAP * 5;
+
+// 并排展示 IR 模式 normal / active
+static void drawDemoIrModePair(const char* basename, const int x, const int y) {
+    char path[48];
+    snprintf(path, sizeof(path), "/icon/ir/%s.png", basename);
+    drawDevicePngNative(path, x, y);
+    snprintf(path, sizeof(path), "/icon/ir/%s_active.png", basename);
+    drawDevicePngNative(path, x + IR_MODE_ICON_PX + IR_ICON_DEMO_GAP, y);
+}
+
+#define DEFINE_IR_MODE_ICON_DEMO(name)                                                             \
+    static void drawDemoIrMode_##name(const int x, const int y) {                                  \
+        drawDemoIrModePair(#name, x, y);                                                           \
+    }
+
+DEFINE_IR_MODE_ICON_DEMO(ac_cool)
+DEFINE_IR_MODE_ICON_DEMO(ac_heat)
+DEFINE_IR_MODE_ICON_DEMO(ac_dry)
+DEFINE_IR_MODE_ICON_DEMO(ac_fan)
+DEFINE_IR_MODE_ICON_DEMO(ac_auto)
+
+// 风速六档横排
+static void drawDemoIrFanStrip(const int x, const int y) {
+    static const char* kFans[] = {
+        "ac_fan_auto", "ac_fan_min", "ac_fan_low", "ac_fan_med", "ac_fan_high", "ac_fan_max",
+    };
+    char path[48];
+    for (int i = 0; i < 6; i++) {
+        snprintf(path, sizeof(path), "/icon/ir/%s.png", kFans[i]);
+        drawDevicePngNative(path, x + i * (IR_FAN_ICON_PX + IR_ICON_DEMO_GAP), y);
+    }
+}
+
 static const IconDemoItem ICON_DEMO_ITEMS[] = {
     {"app logo", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoLogo},
     {"arrow left", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoArrowLeft},
@@ -135,9 +166,6 @@ static const IconDemoItem ICON_DEMO_ITEMS[] = {
     {"charging bolt", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoChargingBolt},
     {"battery", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoBattery},
     {"page dots", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoPageDots},
-    {"info chip", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoChip},
-    {"info storage", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoStorage},
-    {"info battery", ICON_DEMO_SIZE, ICON_DEMO_SIZE, drawDemoInfoBattery},
     {"device airpurifier", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_airpurifier},
     {"device bslamp2", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_bslamp2},
     {"device camera", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_camera},
@@ -151,6 +179,12 @@ static const IconDemoItem ICON_DEMO_ITEMS[] = {
     {"device wifispeaker", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX,
      drawDemoDevice_wifispeaker},
     {"device default", DEVICE_ICON_DEMO_PAIR_W, DEVICE_ICON_NATIVE_PX, drawDemoDevice_default},
+    {"ir ac_cool", IR_MODE_DEMO_PAIR_W, IR_MODE_ICON_PX, drawDemoIrMode_ac_cool},
+    {"ir ac_heat", IR_MODE_DEMO_PAIR_W, IR_MODE_ICON_PX, drawDemoIrMode_ac_heat},
+    {"ir ac_dry", IR_MODE_DEMO_PAIR_W, IR_MODE_ICON_PX, drawDemoIrMode_ac_dry},
+    {"ir ac_fan", IR_MODE_DEMO_PAIR_W, IR_MODE_ICON_PX, drawDemoIrMode_ac_fan},
+    {"ir ac_auto", IR_MODE_DEMO_PAIR_W, IR_MODE_ICON_PX, drawDemoIrMode_ac_auto},
+    {"ir fan speeds", IR_FAN_DEMO_STRIP_W, IR_FAN_ICON_PX, drawDemoIrFanStrip},
 };
 
 static int getIconDemoItemCount() {
@@ -209,6 +243,7 @@ static void drawIconHelpPage() {
     y = drawIconHelpText(manual_x + 2, y, "used by firmware");
     y = drawIconHelpText(manual_x + 2, y, "built-in UI icons");
     y = drawIconHelpText(manual_x + 2, y, "device off/on PNG");
+    y = drawIconHelpText(manual_x + 2, y, "IR mode + fan PNG");
 
     // Help tip 放左下角
     const int hint_y = M5Cardputer.Display.height() - 12;
@@ -264,8 +299,10 @@ static void drawIconDemoApp() {
         M5Cardputer.Display.setTextSize(1);
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, row_y + title_line_h);
-        if (large_icon) {
-            M5Cardputer.Display.printf("off | on  %dx%d", item.width, item.height);
+        if (strncmp(item.name, "device ", 7) == 0 || strncmp(item.name, "ir ac_", 6) == 0) {
+            M5Cardputer.Display.printf("off | on  %dx%d", item.height, item.height);
+        } else if (strcmp(item.name, "ir fan speeds") == 0) {
+            M5Cardputer.Display.printf("auto..max  %dx%d", IR_FAN_ICON_PX, IR_FAN_ICON_PX);
         } else {
             M5Cardputer.Display.printf("size %dx%d", item.width, item.height);
         }

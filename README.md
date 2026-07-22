@@ -2,6 +2,13 @@
 
 M5Stack Cardputer 多应用固件：字母键启动器，覆盖米家控制、红外遥控、配网、时间工具、Cursor 用量与硬件调试等。
 
+**文档（VitePress · v1.0.0）：** 见 [`docs/`](./docs/)。本地预览：
+
+```bash
+npm install
+npm run docs:dev
+```
+
 ---
 
 ## 功能目录

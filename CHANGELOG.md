@@ -10,6 +10,7 @@
 
 ### 新增
 
+- **VitePress 文档**（`docs/`）：功能目录与各 App 简介 / 快捷键 / 使用说明；截图预留 `docs/public/shots/{app}-{子功能}.png`；米家页含 model 分类表与设备图标；对应固件 **v1.0.0** 文档起点（`npm run docs:dev`）
 - **多 WiFi 配置**：`wifis[]` + `wifi_active`（最多 5 条）；WiFi App / Config Web `/wifi` 均可管理；其它 App 只用当前 active
 - **Infrared AC Auto 模式图标**：`ac_auto` / `ac_auto_active`；模式栏改为上 3 下 2
 - **Infrared AC 风速图标**：顶栏显示当前档（`ac_fan_auto` / `min` / `low` / `med` / `high` / `max`），进 App 时预缓存
@@ -17,6 +18,9 @@
 
 ### 改进
 
+- **Icons**：补入 IR AC 模式（off/on）与风速六档资源页
+- **BLE**：去掉 info 页；入口 `[S] scan` 用 x2 + key badge；翻页支持 `[]`（仅 Help 说明，tip 不显示）
+- **BLE**：操作 tip 移到底栏并加 Help（设备类型说明）；列表改用 Font0 x1；序号橙色、类别黄色；收紧条目上下行间距
 - **配置键统一**：`Infrared` → `infrared`；`brightness` 迁入 `screen.brightness`（兼容旧顶层 `brightness` / 大写 `Infrared`）
 - **WiFi 配置兼容**：旧 `"wifi":{ssid,password}` 加载时自动迁移；Config Web `/wifi` 列表增删改与设 Active
 - **Mic 退出嗡嗡**：`Mic.end` 后 `reclaimAndReleaseSpeakerQuiet`（Speaker begin→静音 end 再 hold），把 G43 从 PDM 残余抢回；进 Help 关麦同路径
