@@ -39,7 +39,7 @@ enum class TimeDefaultMode : uint8_t {
     Stopwatch = 3,
 };
 
-// 红外入口默认功能块（config: Infrared.default）
+// 红外入口默认功能块（config: infrared.default）
 enum class IrDefaultCategory : uint8_t {
     Tv = 0,
     Ac = 1,
@@ -49,12 +49,25 @@ enum class IrDefaultCategory : uint8_t {
 static constexpr int IR_TV_BRAND_COUNT = 5;
 static constexpr int IR_AC_BRAND_COUNT = 6;
 
+// 多 WiFi 配置上限（wifis[]）
+static constexpr int WIFI_PROFILE_MAX = 5;
+
+struct WifiProfile {
+    char ssid[33];
+    char password[65];
+};
+
 struct AppConfig {
+    // 当前 active 镜像（ensureStaWifi 等直接读这两项）
     char wifi_ssid[33];
     char wifi_password[65];
+    WifiProfile wifis[WIFI_PROFILE_MAX];
+    int wifi_count;
+    char wifi_active[33]; // 当前选用的 ssid
     char cursor_token[CURSOR_TOKEN_MAX];
     char timezone[48]; // POSIX TZ，如 CST-8；缺省东八区
-    uint8_t brightness;      // 配置存 0~100；setBrightness 时再转 0~255
+    uint8_t brightness;      // screen.brightness：0~100；setBrightness 时再转 0~255
+    bool screen_invert;      // screen.invert：屏幕反色
     uint8_t speaker_volume;  // 喇叭音量 0~100；setVolume 时再转 0~255
     bool time_key_sound;     // Time 内按键声（countdown 到点闹钟不受影响）
     bool mijia_on_off_sound; // 米家开/关提示音
@@ -79,11 +92,20 @@ bool loadAppConfig();
 // 保存 JSON 到 /config.json 并重新加载
 bool saveAppConfigJson(const char* json);
 
-// 更新 WiFi 字段并写回（保留 devices 等其它配置）
+// 按 ssid upsert 到 wifis[]，并设为 wifi_active 后写回
 bool saveAppConfigWifi(const char* ssid, const char* password);
 
-// 更新屏幕亮度并写回（percent：0~100）
+// 切换当前 active（须已在 wifis[] 中）；写回并同步镜像
+bool setAppConfigWifiActive(const char* ssid);
+
+// 按 ssid 更新或追加；set_active 为 true 时同时设为当前；满且非同名则失败
+bool upsertAppConfigWifi(const char* ssid, const char* password, bool set_active = true);
+
+// 更新屏幕亮度并写回（screen.brightness，percent：0~100）
 bool saveAppConfigBrightness(uint8_t brightness_percent);
+
+// 更新屏幕反色并写回（screen.invert）
+bool saveAppConfigScreenInvert(bool invert);
 
 // 更新喇叭音量并写回（percent：0~100）
 bool saveAppConfigSpeakerVolume(uint8_t volume_percent);
@@ -122,7 +144,7 @@ uint8_t cycleIrTvBrand(uint8_t cur, int delta);
 uint8_t cycleIrAcBrand(uint8_t cur, int delta);
 IrDefaultCategory cycleIrDefaultCategory(IrDefaultCategory cur, int delta);
 
-// 更新红外默认并写回（Infrared 对象）
+// 更新红外默认并写回（infrared 对象）
 bool saveAppConfigInfrared(IrDefaultCategory category, uint8_t tv_brand, uint8_t ac_brand);
 
 // 常用时区预设（Settings 里 -= 循环）

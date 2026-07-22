@@ -1,8 +1,11 @@
 {
-  "wifi": {
-    "ssid": "your-ssid",
-    "password": "your-password"
-  },
+  "wifis": [
+    {
+      "ssid": "your-ssid",
+      "password": "your-password"
+    }
+  ],
+  "wifi_active": "your-ssid",
   "devices": [
     {
       "name": "living-room-light",
@@ -69,7 +72,10 @@
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
   },
   "timezone": "CST-8",
-  "brightness": 30,
+  "screen": {
+    "brightness": 30,
+    "invert": false
+  },
   "sound": {
     "time_key": true,
     "mijia_on_off": true,
@@ -79,7 +85,7 @@
     "default": "up",
     "pure": false
   },
-  "Infrared": {
+  "infrared": {
     "default": "tv",
     "tv_brand": "samsung",
     "ac_brand": "midea"

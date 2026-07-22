@@ -10,11 +10,15 @@
 
 ### 新增
 
+- **多 WiFi 配置**：`wifis[]` + `wifi_active`（最多 5 条）；WiFi App / Config Web `/wifi` 均可管理；其它 App 只用当前 active
 - **Infrared AC Auto 模式图标**：`ac_auto` / `ac_auto_active`；模式栏改为上 3 下 2
 - **Infrared AC 风速图标**：顶栏显示当前档（`ac_fan_auto` / `min` / `low` / `med` / `high` / `max`），进 App 时预缓存
+- **屏幕反色持久化**：`screen.invert`；Options / Config Web 可改，开机与 Web 保存后立即生效
 
 ### 改进
 
+- **配置键统一**：`Infrared` → `infrared`；`brightness` 迁入 `screen.brightness`（兼容旧顶层 `brightness` / 大写 `Infrared`）
+- **WiFi 配置兼容**：旧 `"wifi":{ssid,password}` 加载时自动迁移；Config Web `/wifi` 列表增删改与设 Active
 - **Mic 退出嗡嗡**：`Mic.end` 后 `reclaimAndReleaseSpeakerQuiet`（Speaker begin→静音 end 再 hold），把 G43 从 PDM 残余抢回；进 Help 关麦同路径
 - **米家概览缓存**：`mijiaOverviewUi` 按 `device_count` 进 App 时分配、离开释放，不再开机常驻 50 台
 - **设备图标绘制**：RGB565 1:1 按行推屏；缩放临时 `malloc`，去掉静态整图 scratch

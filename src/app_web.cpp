@@ -49,10 +49,13 @@ static bool g_web_screen_ready = false;
 static bool g_web_help_visible = false;
 
 static const char* DEFAULT_CONFIG = R"({
-  "wifi": {
-    "ssid": "your-ssid",
-    "password": "your-password"
-  },
+  "wifis": [
+    {
+      "ssid": "your-ssid",
+      "password": "your-password"
+    }
+  ],
+  "wifi_active": "your-ssid",
   "devices": [
     {
       "name": "living-room-light",
@@ -98,7 +101,10 @@ static const char* DEFAULT_CONFIG = R"({
     "token": "your-cursor-session-jwt"
   },
   "timezone": "CST-8",
-  "brightness": 30,
+  "screen": {
+    "brightness": 30,
+    "invert": false
+  },
   "sound": {
     "time_key": true,
     "mijia_on_off": true,
@@ -107,7 +113,7 @@ static const char* DEFAULT_CONFIG = R"({
   "time": {
     "default": "up"
   },
-  "Infrared": {
+  "infrared": {
     "default": "tv",
     "tv_brand": "samsung",
     "ac_brand": "midea"
@@ -230,6 +236,18 @@ static void sendHtmlPage(const String& body, const uint8_t css_flags = HTML_CSS_
         ".btn-add-row{display:block;width:100%;margin:8px 0 0;padding:12px;font-size:22px;"
         "font-weight:600;line-height:1;text-align:center}"
         ".wifi-grid{max-width:480px}"
+        ".wifi-table{width:100%;max-width:720px;border-collapse:collapse;table-layout:fixed}"
+        ".wifi-table th,.wifi-table td{border:1px solid var(--tab-bd);padding:6px 8px;"
+        "vertical-align:middle;background:var(--td-bg)}"
+        ".wifi-table th{background:var(--th-bg);font-size:12px;font-weight:600;text-align:left;"
+        "color:var(--fg)}"
+        ".wifi-table tr:nth-child(even) td{background:var(--td-alt)}"
+        ".wifi-table .col-active{width:56px;text-align:center}"
+        ".wifi-table .col-active input{width:auto;margin:0;accent-color:#1a73e8}"
+        ".wifi-table .col-ssid{width:36%}"
+        ".wifi-table .col-pass{width:40%}"
+        ".wifi-table .col-act{width:72px}"
+        ".wifi-table input[type=text]{margin:0}"
         ".about-dl{margin:0;max-width:520px}"
         ".about-dl dt{font-size:12px;color:var(--hint);margin:12px 0 2px}"
         ".about-dl dd{margin:0;font-size:14px;color:var(--fg-h);word-break:break-all}"
@@ -458,9 +476,10 @@ static void appendCfgDataScript(String& body, const String& cfg) {
 
 // 默认 cfg 对象字面量（JS）
 static const char* JS_CFG_DEFAULT =
-    "{wifi:{ssid:'',password:''},devices:[],device_groups:[],cursor:{token:''},"
-    "timezone:'CST-8',brightness:30,sound:{time_key:true,mijia_on_off:true,volume:25},"
-    "time:{default:'up'},Infrared:{default:'tv',tv_brand:'samsung',ac_brand:'midea'}}";
+    "{wifis:[],wifi_active:'',devices:[],device_groups:[],cursor:{token:''},"
+    "timezone:'CST-8',screen:{brightness:30,invert:false},"
+    "sound:{time_key:true,mijia_on_off:true,volume:25},"
+    "time:{default:'up'},infrared:{default:'tv',tv_brand:'samsung',ac_brand:'midea'}}";
 
 // 加载并规范化 cfg（各编辑页共用）
 static void appendJsLoadCfg(String& body) {
@@ -471,14 +490,25 @@ static void appendJsLoadCfg(String& body) {
               "catch(e){cfg=");
     body += JS_CFG_DEFAULT;
     body += F(";}"
-              "if(!cfg.wifi)cfg.wifi={ssid:'',password:''};"
+              // 旧 wifi 对象迁移为 wifis[] + wifi_active
+              "if((!cfg.wifis||!cfg.wifis.length)&&cfg.wifi&&cfg.wifi.ssid){"
+              "cfg.wifis=[{ssid:cfg.wifi.ssid||'',password:cfg.wifi.password||''}];"
+              "if(!cfg.wifi_active)cfg.wifi_active=cfg.wifi.ssid;}"
+              "if(!cfg.wifis)cfg.wifis=[];"
+              "if(cfg.wifi_active==null)cfg.wifi_active='';"
+              "delete cfg.wifi;"
               "if(!cfg.devices)cfg.devices=[];"
               "if(!cfg.device_groups)cfg.device_groups=[];"
               "if(!cfg.cursor)cfg.cursor={token:''};"
               "if(!cfg.timezone)cfg.timezone='CST-8';"
-              "let bright=cfg.brightness;if(bright==null||isNaN(+bright))bright=30;"
+              // screen：兼容旧顶层 brightness
+              "if(!cfg.screen)cfg.screen={};"
+              "if(cfg.screen.brightness==null&&cfg.brightness!=null)cfg.screen.brightness=cfg.brightness;"
+              "delete cfg.brightness;"
+              "let bright=cfg.screen.brightness;if(bright==null||isNaN(+bright))bright=30;"
               "bright=+bright;if(bright>100)bright=Math.round(bright*100/255);"
-              "if(bright<0)bright=0;if(bright>100)bright=100;cfg.brightness=bright;"
+              "if(bright<0)bright=0;if(bright>100)bright=100;cfg.screen.brightness=bright;"
+              "if(cfg.screen.invert==null)cfg.screen.invert=false;"
               "if(!cfg.sound)cfg.sound={};"
               "if(cfg.sound.time_key==null)cfg.sound.time_key=true;"
               "if(cfg.sound.mijia_on_off==null)cfg.sound.mijia_on_off=true;"
@@ -486,11 +516,13 @@ static void appendJsLoadCfg(String& body) {
               "svol=+svol;if(svol<0)svol=0;if(svol>100)svol=100;cfg.sound.volume=svol;"
               "if(!cfg.time)cfg.time={};"
               "if(!cfg.time.default)cfg.time.default='up';"
-              "if(!cfg.Infrared&&cfg.infrared){cfg.Infrared=cfg.infrared;delete cfg.infrared;}"
-              "if(!cfg.Infrared)cfg.Infrared={};"
-              "if(!cfg.Infrared.default)cfg.Infrared.default='tv';"
-              "if(!cfg.Infrared.tv_brand)cfg.Infrared.tv_brand='samsung';"
-              "if(!cfg.Infrared.ac_brand)cfg.Infrared.ac_brand='midea';}");
+              // infrared：兼容旧大写 Infrared
+              "if(!cfg.infrared&&cfg.Infrared){cfg.infrared=cfg.Infrared;}"
+              "delete cfg.Infrared;"
+              "if(!cfg.infrared)cfg.infrared={};"
+              "if(!cfg.infrared.default)cfg.infrared.default='tv';"
+              "if(!cfg.infrared.tv_brand)cfg.infrared.tv_brand='samsung';"
+              "if(!cfg.infrared.ac_brand)cfg.infrared.ac_brand='midea';}");
 }
 
 // 米家设备页（原主页设备表）
@@ -621,22 +653,32 @@ static void handleFormRoot() {
     sendHtmlPage(body, HTML_CSS_DEVICES);
 }
 
-// WiFi 配置页（从主页拆出）
+// WiFi 配置页：管理 wifis[] + wifi_active（最多 5 条）
 static void handleWifiPage() {
     const String cfg = sanitizeJsonForHtml(loadConfigText());
 
     String body;
-    body.reserve(cfg.length() + 2048);
+    body.reserve(cfg.length() + 4096);
     appendTopBar(body, "WiFi", WebNavTab::Wifi);
     body += F("<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
               "<h2>WiFi</h2>"
-              "<p class='hint'>用于设备联网与 Config STA 模式；SSID / 密码写入 "
-              "<code>wifi</code>。</p>"
-              "<div class='wifi-grid'>"
-              "<label>SSID<input id='wifi-ssid' autocomplete='off'></label>"
-              "<label>密码<input id='wifi-pass' autocomplete='off'></label>"
+              "<p class='hint'>对应 <code>wifis[]</code> + <code>wifi_active</code>；最多 "
+              "<strong>5</strong> 条。选中 Active 为当前联网凭据；设备 WiFi App 也可切换。</p>"
+              "<div class='toolbar'>"
+              "<span class='count' id='wifi-count'></span>"
               "</div>"
+              "<div class='table-wrap'>"
+              "<table class='wifi-table' id='wifi-table'>"
+              "<thead><tr>"
+              "<th class='col-active'>Active</th>"
+              "<th class='col-ssid'>SSID</th>"
+              "<th class='col-pass'>密码</th>"
+              "<th class='col-act'></th>"
+              "</tr></thead>"
+              "<tbody id='wifi-tbody'></tbody>"
+              "</table></div>"
+              "<button type='button' class='btn-add-row' id='btn-add-wifi' title='添加'>+</button>"
               "<div class='save-bar'>"
               "<button type='submit' class='primary' id='btn-save'>保存到设备</button>"
               "</div></form>");
@@ -644,17 +686,89 @@ static void handleWifiPage() {
     appendCfgDataScript(body, cfg);
     body += F("<script>");
     appendJsLoadCfg(body);
+    // 列表渲染 / 增删 / 收集；上限与固件 WIFI_PROFILE_MAX 一致
     body += F(
-        "function collect(){cfg.wifi.ssid=document.getElementById('wifi-ssid').value;"
-        "cfg.wifi.password=document.getElementById('wifi-pass').value;}"
-        "function init(){loadCfg();"
-        "document.getElementById('wifi-ssid').value=cfg.wifi.ssid||'';"
-        "document.getElementById('wifi-pass').value=cfg.wifi.password||'';"
+        "const WIFI_MAX=5;"
+        "function ensureWifis(){"
+        "if(!Array.isArray(cfg.wifis))cfg.wifis=[];"
+        "if(cfg.wifis.length>WIFI_MAX)cfg.wifis=cfg.wifis.slice(0,WIFI_MAX);"
+        "if(cfg.wifi_active==null)cfg.wifi_active='';"
+        "const names=cfg.wifis.map(w=>w&&w.ssid).filter(Boolean);"
+        "if(cfg.wifi_active&&names.indexOf(cfg.wifi_active)<0)cfg.wifi_active=names[0]||'';"
+        "if(!cfg.wifi_active&&names.length)cfg.wifi_active=names[0];"
+        "delete cfg.wifi;}"
+        "function updateCount(){"
+        "const n=(cfg.wifis||[]).length;"
+        "document.getElementById('wifi-count').textContent=n+' / '+WIFI_MAX;"
+        "document.getElementById('btn-add-wifi').disabled=n>=WIFI_MAX;}"
+        "function renderWifiRows(){"
+        "ensureWifis();"
+        "const tb=document.getElementById('wifi-tbody');"
+        "tb.innerHTML='';"
+        "cfg.wifis.forEach((w,i)=>{"
+        "const tr=document.createElement('tr');"
+        "const act=document.createElement('td');act.className='col-active';"
+        "const radio=document.createElement('input');"
+        "radio.type='radio';radio.name='wifi_active';radio.value=String(i);"
+        "radio.checked=!!(w.ssid&&w.ssid===cfg.wifi_active);"
+        "radio.onchange=()=>{if(w.ssid)cfg.wifi_active=w.ssid;};"
+        "act.appendChild(radio);"
+        "const tdS=document.createElement('td');tdS.className='col-ssid';"
+        "const inS=document.createElement('input');inS.type='text';inS.autocomplete='off';"
+        "inS.value=w.ssid||'';inS.placeholder='SSID';"
+        "inS.oninput=()=>{const old=w.ssid||'';w.ssid=inS.value;"
+        "if(cfg.wifi_active===old||radio.checked)cfg.wifi_active=w.ssid;};"
+        "tdS.appendChild(inS);"
+        "const tdP=document.createElement('td');tdP.className='col-pass';"
+        "const inP=document.createElement('input');inP.type='text';inP.autocomplete='off';"
+        "inP.value=w.password||'';inP.placeholder='password';"
+        "inP.oninput=()=>{w.password=inP.value;};"
+        "tdP.appendChild(inP);"
+        "const tdA=document.createElement('td');tdA.className='col-act';"
+        "const del=document.createElement('button');del.type='button';"
+        "del.className='danger icon-btn';del.textContent='删';"
+        "del.onclick=()=>{"
+        "const was=w.ssid||'';"
+        "cfg.wifis.splice(i,1);"
+        "if(cfg.wifi_active===was){"
+        "cfg.wifi_active=(cfg.wifis[0]&&cfg.wifis[0].ssid)||'';}"
+        "renderWifiRows();};"
+        "tdA.appendChild(del);"
+        "tr.appendChild(act);tr.appendChild(tdS);tr.appendChild(tdP);tr.appendChild(tdA);"
+        "tb.appendChild(tr);});"
+        "updateCount();}"
+        "function collect(){"
+        "ensureWifis();"
+        "const rows=[...document.querySelectorAll('#wifi-tbody tr')];"
+        "const next=[];"
+        "let active='';"
+        "rows.forEach((tr,i)=>{"
+        "const ssid=(tr.querySelector('.col-ssid input')||{}).value||'';"
+        "const pass=(tr.querySelector('.col-pass input')||{}).value||'';"
+        "const s=ssid.trim();"
+        "if(!s)return;"
+        "if(next.length>=WIFI_MAX)return;"
+        "next.push({ssid:s,password:pass});"
+        "const radio=tr.querySelector('.col-active input');"
+        "if(radio&&radio.checked)active=s;});"
+        "cfg.wifis=next;"
+        "if(!active&&next.length)active=next[0].ssid;"
+        "if(active&&!next.some(w=>w.ssid===active))active=next.length?next[0].ssid:'';"
+        "cfg.wifi_active=active;"
+        "delete cfg.wifi;}"
+        "function init(){loadCfg();ensureWifis();renderWifiRows();"
+        "document.getElementById('btn-add-wifi').onclick=()=>{"
+        "ensureWifis();"
+        "if(cfg.wifis.length>=WIFI_MAX)return;"
+        "cfg.wifis.push({ssid:'',password:''});"
+        "renderWifiRows();"
+        "const last=document.querySelector('#wifi-tbody tr:last-child .col-ssid input');"
+        "if(last)last.focus();};"
         "document.getElementById('save-form').onsubmit=()=>{collect();"
         "document.getElementById('config-payload').value=JSON.stringify(cfg,null,2);};}"
         "init();");
     body += F("</script>");
-    sendHtmlPage(body);
+    sendHtmlPage(body, HTML_CSS_DEVICES);
 }
 
 // 编组页
@@ -831,8 +945,8 @@ static void handleSystemPage() {
     appendTopBar(body, "系统设置", WebNavTab::System);
     body += F("<form id='save-form' method='POST' action='/save'>"
               "<input type='hidden' name='config' id='config-payload'>"
-              "<p class='hint'>时区、亮度、提示音与红外默认。亮度配置为 0~100，"
-              "设备端会换算为背光 0~255。</p>"
+              "<p class='hint'>时区、屏幕、提示音与红外默认。亮度在 screen.brightness（0~100），"
+              "设备端会换算为背光 0~255；反色写入 screen.invert。</p>"
               "<div class='sys-grid'>"
               "<label>时区（POSIX TZ）"
               "<input id='sys-timezone' placeholder='CST-8' autocomplete='off'></label>"
@@ -841,6 +955,9 @@ static void handleSystemPage() {
               "<input id='sys-brightness' type='range' min='0' max='100' step='1'>"
               "<span class='bright-val' id='sys-brightness-val'>30</span>"
               "</div></label>"
+              "<label class='check-row'>"
+              "<input id='sys-screen-invert' type='checkbox'>"
+              "<span>屏幕反色（invert）</span></label>"
               "<label class='check-row'>"
               "<input id='sys-sound-time-key' type='checkbox'>"
               "<span>Time 按键声（stopwatch / countdown）</span></label>"
@@ -892,8 +1009,11 @@ static void handleSystemPage() {
     body += F(
         "function collect(){"
         "cfg.timezone=document.getElementById('sys-timezone').value||'CST-8';"
+        "if(!cfg.screen)cfg.screen={};"
         "let b=+document.getElementById('sys-brightness').value;if(isNaN(b))b=30;"
-        "if(b<0)b=0;if(b>100)b=100;cfg.brightness=b;"
+        "if(b<0)b=0;if(b>100)b=100;cfg.screen.brightness=b;"
+        "cfg.screen.invert=document.getElementById('sys-screen-invert').checked;"
+        "delete cfg.brightness;"
         "if(!cfg.sound)cfg.sound={};"
         "cfg.sound.time_key=document.getElementById('sys-sound-time-key').checked;"
         "cfg.sound.mijia_on_off=document.getElementById('sys-sound-mijia').checked;"
@@ -901,23 +1021,24 @@ static void handleSystemPage() {
         "if(v<0)v=0;if(v>100)v=100;cfg.sound.volume=v;"
         "if(!cfg.time)cfg.time={};"
         "cfg.time.default=document.getElementById('sys-time-default').value||'up';"
-        "delete cfg.infrared;"
-        "if(!cfg.Infrared)cfg.Infrared={};"
-        "cfg.Infrared.default=document.getElementById('sys-ir-default').value||'tv';"
-        "cfg.Infrared.tv_brand=document.getElementById('sys-ir-tv-brand').value||'samsung';"
-        "cfg.Infrared.ac_brand=document.getElementById('sys-ir-ac-brand').value||'midea';}"
+        "delete cfg.Infrared;"
+        "if(!cfg.infrared)cfg.infrared={};"
+        "cfg.infrared.default=document.getElementById('sys-ir-default').value||'tv';"
+        "cfg.infrared.tv_brand=document.getElementById('sys-ir-tv-brand').value||'samsung';"
+        "cfg.infrared.ac_brand=document.getElementById('sys-ir-ac-brand').value||'midea';}"
         "function init(){loadCfg();"
         "document.getElementById('sys-timezone').value=cfg.timezone||'CST-8';"
-        "document.getElementById('sys-brightness').value=String(cfg.brightness);"
-        "document.getElementById('sys-brightness-val').textContent=String(cfg.brightness);"
+        "document.getElementById('sys-brightness').value=String(cfg.screen.brightness);"
+        "document.getElementById('sys-brightness-val').textContent=String(cfg.screen.brightness);"
+        "document.getElementById('sys-screen-invert').checked=!!cfg.screen.invert;"
         "document.getElementById('sys-sound-time-key').checked=!!cfg.sound.time_key;"
         "document.getElementById('sys-sound-mijia').checked=!!cfg.sound.mijia_on_off;"
         "document.getElementById('sys-sound-volume').value=String(cfg.sound.volume);"
         "document.getElementById('sys-sound-volume-val').textContent=String(cfg.sound.volume);"
         "document.getElementById('sys-time-default').value=cfg.time.default||'up';"
-        "document.getElementById('sys-ir-default').value=cfg.Infrared.default||'tv';"
-        "document.getElementById('sys-ir-tv-brand').value=cfg.Infrared.tv_brand||'samsung';"
-        "document.getElementById('sys-ir-ac-brand').value=cfg.Infrared.ac_brand||'midea';"
+        "document.getElementById('sys-ir-default').value=cfg.infrared.default||'tv';"
+        "document.getElementById('sys-ir-tv-brand').value=cfg.infrared.tv_brand||'samsung';"
+        "document.getElementById('sys-ir-ac-brand').value=cfg.infrared.ac_brand||'midea';"
         "document.getElementById('sys-brightness').oninput=e=>{"
         "document.getElementById('sys-brightness-val').textContent=e.target.value;};"
         "document.getElementById('sys-sound-volume').oninput=e=>{"
@@ -954,9 +1075,10 @@ static void handleSave() {
 
     const String json = g_server.arg("config");
     if (saveAppConfigJson(json.c_str())) {
-        // 保存后立即生效时区与亮度
+        // 保存后立即生效时区、亮度与反色
         applyLocalTimezone();
         M5Cardputer.Display.setBrightness(brightnessPercentToHw(getAppConfig().brightness));
+        M5Cardputer.Display.invertDisplay(getAppConfig().screen_invert);
         snprintf(g_web_status, sizeof(g_web_status), "saved %d dev",
                  getAppConfig().device_count);
         String body;
@@ -991,7 +1113,7 @@ static void handleExample() {
               "BLE 传感器用 <code>mac</code> + <code>ble.key</code>，可加 <code>name_zh</code>。"
               "可选 <code>hotkey</code>（a-z/0-9，勿用 q）供设备端 Q 快速选择；重复时保留靠前第一个。"
               "米家设备编组见 <code>device_groups</code>，成员用设备 <code>id</code> 引用。"
-              "系统项见 <a href='/system'>系统设置</a>（时区 / 亮度 / 提示音 / Infrared）。"
+              "系统项见 <a href='/system'>系统设置</a>（时区 / 屏幕 / 提示音 / infrared）。"
               "Cursor 用量见 <a href='/cursor'>Cursor</a> 页。</p><pre>");
     body += DEFAULT_CONFIG;
     body += F("</pre>");

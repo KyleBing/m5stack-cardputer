@@ -21,6 +21,85 @@ static void copyField(char* dest, const size_t dest_size, const char* src) {
     dest[dest_size - 1] = '\0';
 }
 
+// 按 ssid 查找 wifis[] 下标；未找到返回 -1
+static int findWifiProfileIndex(const char* ssid) {
+    if (ssid == nullptr || ssid[0] == '\0') {
+        return -1;
+    }
+    for (int i = 0; i < g_config.wifi_count; i++) {
+        if (strcmp(g_config.wifis[i].ssid, ssid) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// 把 wifi_active 对应项镜像到 wifi_ssid / wifi_password
+static void syncActiveWifiMirror() {
+    g_config.wifi_ssid[0] = '\0';
+    g_config.wifi_password[0] = '\0';
+    if (g_config.wifi_count <= 0) {
+        g_config.wifi_active[0] = '\0';
+        return;
+    }
+    int idx = findWifiProfileIndex(g_config.wifi_active);
+    if (idx < 0) {
+        idx = 0;
+        copyField(g_config.wifi_active, sizeof(g_config.wifi_active), g_config.wifis[0].ssid);
+    }
+    copyField(g_config.wifi_ssid, sizeof(g_config.wifi_ssid), g_config.wifis[idx].ssid);
+    copyField(g_config.wifi_password, sizeof(g_config.wifi_password),
+              g_config.wifis[idx].password);
+}
+
+// 从 JsonDocument 写入 wifis[] + wifi_active，并去掉旧 wifi 对象
+static void writeWifisToDoc(JsonDocument& doc) {
+    doc.remove("wifi");
+    doc.remove("wifis");
+    JsonArray arr = doc["wifis"].to<JsonArray>();
+    for (int i = 0; i < g_config.wifi_count; i++) {
+        JsonObject item = arr.add<JsonObject>();
+        item["ssid"] = g_config.wifis[i].ssid;
+        item["password"] = g_config.wifis[i].password;
+    }
+    if (g_config.wifi_active[0] != '\0') {
+        doc["wifi_active"] = g_config.wifi_active;
+    } else if (g_config.wifi_count > 0) {
+        doc["wifi_active"] = g_config.wifis[0].ssid;
+    } else {
+        doc["wifi_active"] = "";
+    }
+}
+
+// 把当前内存中的 wifis 写回 /config.json 并 reload
+static bool persistWifiProfiles() {
+    JsonDocument doc;
+    if (LittleFS.exists(CONFIG_PATH)) {
+        File in = LittleFS.open(CONFIG_PATH, "r");
+        if (in) {
+            const DeserializationError err = deserializeJson(doc, in);
+            in.close();
+            if (err) {
+                doc.clear();
+            }
+        }
+    }
+
+    writeWifisToDoc(doc);
+
+    if (doc["devices"].isNull()) {
+        doc["devices"].to<JsonArray>();
+    }
+
+    File out = LittleFS.open(CONFIG_PATH, "w");
+    if (!out) {
+        return false;
+    }
+    serializeJsonPretty(doc, out);
+    out.close();
+    return loadAppConfig();
+}
+
 // 粗判私网局域网 IP（用于区分云端假 IP）
 static bool isPrivateLanIp(const char* ip) {
     if (ip == nullptr || ip[0] == '\0') {
@@ -53,6 +132,7 @@ bool loadAppConfig() {
     g_config = {};
     g_config.loaded = false;
     g_config.brightness = 30; // 默认 30%
+    g_config.screen_invert = false;
     g_config.speaker_volume = 25; // 默认 25% ≈ setVolume(64)
     g_config.time_key_sound = true; // 默认开
     g_config.mijia_on_off_sound = true;
@@ -79,10 +159,44 @@ bool loadAppConfig() {
         return false;
     }
 
-    JsonObject wifi = doc["wifi"];
-    if (!wifi.isNull()) {
-        copyField(g_config.wifi_ssid, sizeof(g_config.wifi_ssid), wifi["ssid"]);
-        copyField(g_config.wifi_password, sizeof(g_config.wifi_password), wifi["password"]);
+    // WiFi：优先 wifis[] + wifi_active；否则迁移旧 wifi 对象
+    g_config.wifi_count = 0;
+    g_config.wifi_active[0] = '\0';
+    g_config.wifi_ssid[0] = '\0';
+    g_config.wifi_password[0] = '\0';
+    {
+        JsonArray wifis = doc["wifis"].as<JsonArray>();
+        if (!wifis.isNull() && wifis.size() > 0) {
+            for (JsonObject item : wifis) {
+                if (g_config.wifi_count >= WIFI_PROFILE_MAX) {
+                    break;
+                }
+                const char* ssid = item["ssid"] | "";
+                if (ssid[0] == '\0') {
+                    continue;
+                }
+                WifiProfile& p = g_config.wifis[g_config.wifi_count];
+                copyField(p.ssid, sizeof(p.ssid), ssid);
+                copyField(p.password, sizeof(p.password), item["password"] | "");
+                g_config.wifi_count++;
+            }
+            copyField(g_config.wifi_active, sizeof(g_config.wifi_active),
+                      doc["wifi_active"] | "");
+        } else {
+            // 兼容旧格式："wifi": { "ssid", "password" }
+            JsonObject wifi = doc["wifi"];
+            if (!wifi.isNull()) {
+                const char* ssid = wifi["ssid"] | "";
+                if (ssid[0] != '\0') {
+                    copyField(g_config.wifis[0].ssid, sizeof(g_config.wifis[0].ssid), ssid);
+                    copyField(g_config.wifis[0].password, sizeof(g_config.wifis[0].password),
+                              wifi["password"] | "");
+                    g_config.wifi_count = 1;
+                    copyField(g_config.wifi_active, sizeof(g_config.wifi_active), ssid);
+                }
+            }
+        }
+        syncActiveWifiMirror();
     }
 
     JsonObject cursor = doc["cursor"];
@@ -90,9 +204,21 @@ bool loadAppConfig() {
         copyField(g_config.cursor_token, sizeof(g_config.cursor_token), cursor["token"]);
     }
 
-    // 亮度：配置为 0~100；>100 视为旧版 0~255 并换算
+    // screen：brightness / invert（兼容旧顶层 brightness）
     {
-        int raw = doc["brightness"] | 30;
+        g_config.screen_invert = false;
+        int raw = 30;
+        JsonObject screen = doc["screen"];
+        if (!screen.isNull()) {
+            if (!screen["brightness"].isNull()) {
+                raw = screen["brightness"] | 30;
+            } else {
+                raw = doc["brightness"] | 30;
+            }
+            g_config.screen_invert = screen["invert"] | false;
+        } else {
+            raw = doc["brightness"] | 30;
+        }
         if (raw < 0) {
             raw = 0;
         }
@@ -134,13 +260,13 @@ bool loadAppConfig() {
         g_config.time_pure = time_obj["pure"] | false;
     }
 
-    // Infrared：default / tv_brand / ac_brand（兼容小写 infrared）
+    // infrared：default / tv_brand / ac_brand（兼容旧大写 Infrared）
     g_config.infrared_default = IrDefaultCategory::Tv;
     g_config.infrared_tv_brand = 0;
     g_config.infrared_ac_brand = 0;
-    JsonObject ir_obj = doc["Infrared"];
+    JsonObject ir_obj = doc["infrared"];
     if (ir_obj.isNull()) {
-        ir_obj = doc["infrared"];
+        ir_obj = doc["Infrared"];
     }
     if (!ir_obj.isNull()) {
         g_config.infrared_default = parseIrDefaultCategory(ir_obj["default"]);
@@ -416,37 +542,47 @@ bool saveAppConfigJson(const char* json) {
 }
 
 bool saveAppConfigWifi(const char* ssid, const char* password) {
+    // 扫网连上后：upsert 并设为 active
+    return upsertAppConfigWifi(ssid, password, true);
+}
+
+bool setAppConfigWifiActive(const char* ssid) {
+    if (ssid == nullptr || ssid[0] == '\0') {
+        return false;
+    }
+    if (findWifiProfileIndex(ssid) < 0) {
+        return false;
+    }
+    copyField(g_config.wifi_active, sizeof(g_config.wifi_active), ssid);
+    syncActiveWifiMirror();
+    return persistWifiProfiles();
+}
+
+bool upsertAppConfigWifi(const char* ssid, const char* password, const bool set_active) {
     if (ssid == nullptr || ssid[0] == '\0') {
         return false;
     }
 
-    JsonDocument doc;
-    if (LittleFS.exists(CONFIG_PATH)) {
-        File in = LittleFS.open(CONFIG_PATH, "r");
-        if (in) {
-            const DeserializationError err = deserializeJson(doc, in);
-            in.close();
-            if (err) {
-                doc.clear();
-            }
+    int idx = findWifiProfileIndex(ssid);
+    if (idx >= 0) {
+        copyField(g_config.wifis[idx].password, sizeof(g_config.wifis[idx].password),
+                  password == nullptr ? "" : password);
+    } else {
+        if (g_config.wifi_count >= WIFI_PROFILE_MAX) {
+            return false;
         }
+        idx = g_config.wifi_count;
+        copyField(g_config.wifis[idx].ssid, sizeof(g_config.wifis[idx].ssid), ssid);
+        copyField(g_config.wifis[idx].password, sizeof(g_config.wifis[idx].password),
+                  password == nullptr ? "" : password);
+        g_config.wifi_count++;
     }
 
-    JsonObject wifi = doc["wifi"].to<JsonObject>();
-    wifi["ssid"] = ssid;
-    wifi["password"] = password == nullptr ? "" : password;
-
-    if (doc["devices"].isNull()) {
-        doc["devices"].to<JsonArray>();
+    if (set_active) {
+        copyField(g_config.wifi_active, sizeof(g_config.wifi_active), ssid);
     }
-
-    File out = LittleFS.open(CONFIG_PATH, "w");
-    if (!out) {
-        return false;
-    }
-    serializeJsonPretty(doc, out);
-    out.close();
-    return loadAppConfig();
+    syncActiveWifiMirror();
+    return persistWifiProfiles();
 }
 
 bool saveAppConfigBrightness(const uint8_t brightness_percent) {
@@ -463,7 +599,45 @@ bool saveAppConfigBrightness(const uint8_t brightness_percent) {
     }
 
     const uint8_t pct = brightness_percent > 100 ? 100 : brightness_percent;
-    doc["brightness"] = pct;
+    // 统一写 screen.brightness；去掉旧顶层键
+    doc.remove("brightness");
+    JsonObject screen = doc["screen"].as<JsonObject>();
+    if (screen.isNull()) {
+        screen = doc["screen"].to<JsonObject>();
+    }
+    screen["brightness"] = pct;
+
+    if (doc["devices"].isNull()) {
+        doc["devices"].to<JsonArray>();
+    }
+
+    File out = LittleFS.open(CONFIG_PATH, "w");
+    if (!out) {
+        return false;
+    }
+    serializeJsonPretty(doc, out);
+    out.close();
+    return loadAppConfig();
+}
+
+bool saveAppConfigScreenInvert(const bool invert) {
+    JsonDocument doc;
+    if (LittleFS.exists(CONFIG_PATH)) {
+        File in = LittleFS.open(CONFIG_PATH, "r");
+        if (in) {
+            const DeserializationError err = deserializeJson(doc, in);
+            in.close();
+            if (err) {
+                doc.clear();
+            }
+        }
+    }
+
+    JsonObject screen = doc["screen"].as<JsonObject>();
+    if (screen.isNull()) {
+        screen = doc["screen"].to<JsonObject>();
+    }
+    screen["invert"] = invert;
 
     if (doc["devices"].isNull()) {
         doc["devices"].to<JsonArray>();
@@ -810,11 +984,11 @@ bool saveAppConfigInfrared(const IrDefaultCategory category, const uint8_t tv_br
         }
     }
 
-    // 统一写 Infrared；去掉旧小写键避免重复
-    doc.remove("infrared");
-    JsonObject ir_obj = doc["Infrared"].as<JsonObject>();
+    // 统一写 infrared；去掉旧大写键避免重复
+    doc.remove("Infrared");
+    JsonObject ir_obj = doc["infrared"].as<JsonObject>();
     if (ir_obj.isNull()) {
-        ir_obj = doc["Infrared"].to<JsonObject>();
+        ir_obj = doc["infrared"].to<JsonObject>();
     }
     ir_obj["default"] = irDefaultCategoryName(category);
     ir_obj["tv_brand"] = irTvBrandConfigName(tv_brand);

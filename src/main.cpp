@@ -39,6 +39,7 @@ struct VersionInfo {
     const String version;
     const String update_time;
     const String author;
+    const String github;
     const String email;
     const String website;
 };
@@ -348,6 +349,7 @@ VersionInfo getVersionInfo() {
         APP_VERSION,
         APP_UPDATE_TIME,
         APP_AUTHOR,
+        APP_GITHUB,
         APP_EMAIL,
         APP_WEBSITE,
     };
@@ -420,18 +422,20 @@ static VersionPageLayout getVersionPageLayout() {
     const int screen_w = M5Cardputer.Display.width();
 
     constexpr int logo_px = APP_LOGO_60_PX;
-    const int logo_y = APP_CONTENT_Y;
+    const int logo_y = APP_CONTENT_Y - 8; // logo 上移 8px
     const int logo_bottom = logo_y + logo_px;
-    const int text_y = logo_bottom + 10;
+    const int text_y = logo_bottom + 5; // 与文字区间隔 5px
     constexpr int line_h = 12;
     constexpr int text_line_h = 8;
 
     M5Cardputer.Display.setTextSize(1);
+    const String line0 = "v" + info.version;
     const String line1 = "date: " + info.update_time;
-    const String line2 = "auth: " + info.author + "  v" + info.version;
+    const String line2 = "github: " + info.github;
     const int text_w =
-        max(M5Cardputer.Display.textWidth(line1.c_str()),
-            M5Cardputer.Display.textWidth(line2.c_str())) +
+        max(M5Cardputer.Display.textWidth(line0.c_str()),
+            max(M5Cardputer.Display.textWidth(line1.c_str()),
+                M5Cardputer.Display.textWidth(line2.c_str()))) +
         16;
 
     return VersionPageLayout{
@@ -441,7 +445,7 @@ static VersionPageLayout getVersionPageLayout() {
         (screen_w - text_w) / 2,
         text_y - 4,
         text_w,
-        line_h + text_line_h + 8,
+        line_h * 2 + text_line_h + 8,
     };
 }
 
@@ -520,7 +524,7 @@ static void drawVersionOverlay() {
 
     constexpr int logo_px = APP_LOGO_60_PX;
     const int logoX = (M5Cardputer.Display.width() - logo_px) / 2;
-    const int logoY = APP_CONTENT_Y;
+    const int logoY = APP_CONTENT_Y - 8; // logo 上移 8px
     int logo_bottom = logoY + logo_px;
     if (!drawAppLogo60(logoX, logoY, 1.0f)) {
         constexpr int fallback_size = APP_LOGO_DESIGN_SIZE;
@@ -529,17 +533,20 @@ static void drawVersionOverlay() {
         logo_bottom = logoY + fallback_size;
     }
 
-    const int textY = logo_bottom + 10;
+    const int textY = logo_bottom + 5; // 与文字区间隔 5px
     const int centerX = M5Cardputer.Display.width() / 2;
     constexpr int lineH = 12;
 
     M5Cardputer.Display.setTextSize(1);
+    // 文字区最上：版本号
+    M5Cardputer.Display.setTextColor(WHITE, BLACK);
+    M5Cardputer.Display.drawCenterString(("v" + info.version).c_str(), centerX, textY);
     M5Cardputer.Display.setTextColor(LIGHTGREY, BLACK);
     M5Cardputer.Display.drawCenterString(
-        ("date: " + info.update_time).c_str(), centerX, textY);
+        ("date: " + info.update_time).c_str(), centerX, textY + lineH);
     M5Cardputer.Display.setTextColor(WHITE, BLACK);
     M5Cardputer.Display.drawCenterString(
-        ("auth: " + info.author + "  v" + info.version).c_str(), centerX, textY + lineH);
+        ("github: " + info.github).c_str(), centerX, textY + lineH * 2);
 }
 
 // 全屏重绘 Version 页（header + 烟花 + 前景）
@@ -1221,7 +1228,9 @@ static void applySettingsValueDelta(const int val_delta) {
             if (g_settings_row == 0) {
                 adjustBrightness(val_delta * 5);
             } else if (g_settings_row == 1) {
-                M5Cardputer.Display.invertDisplay(!M5Cardputer.Display.getInvert());
+                const bool next = !M5Cardputer.Display.getInvert();
+                M5Cardputer.Display.invertDisplay(next);
+                saveAppConfigScreenInvert(next);
             }
             break;
         case SettingsModule::Sound:
@@ -1358,7 +1367,9 @@ void handleSettingsApp(const Keyboard_Class::KeysState& status) {
             return;
         }
         if (key == "r") {
-            M5Cardputer.Display.invertDisplay(!M5Cardputer.Display.getInvert());
+            const bool next = !M5Cardputer.Display.getInvert();
+            M5Cardputer.Display.invertDisplay(next);
+            saveAppConfigScreenInvert(next);
             drawSettingsApp();
         }
     }
@@ -2280,10 +2291,13 @@ void setup() {
     forceShutdownStaWifi();
     M5Cardputer.Display.setRotation(1);
     uint8_t brightness = 30;
+    bool screen_invert = false;
     if (getAppConfig().loaded) {
         brightness = getAppConfig().brightness;
+        screen_invert = getAppConfig().screen_invert;
     }
     M5Cardputer.Display.setBrightness(brightnessPercentToHw(brightness));
+    M5Cardputer.Display.invertDisplay(screen_invert);
     const uint32_t t_flush0 = millis();
     // 冷启动轻量清输入：完整 flush 固定约 230ms（12+6 次 delay）
     for (int i = 0; i < 3; i++) {
