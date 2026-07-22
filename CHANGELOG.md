@@ -23,6 +23,9 @@
 
 ### 改进
 
+- **README 刷机说明**：esptool / M5Burner 下载、串口连接、整片 / 程序 / 资源三种烧录指令与常见问题；链到在线文档
+- **Release 说明**：GitHub Release 正文同步完整刷机步骤（与 README 一致）
+- **Cursor / 米家 / Time 文档**：补充更新机制、后台运行说明（`docs/apps/cursor.md`、`mijia.md`、`time.md`）
 - **VitePress `base`**：CI 使用 `/m5stack-cardputer-sparks/`（与 GitHub Pages 仓库名一致）；修复资源 404；favicon 随 base 拼接
 - **Time 倒计时到点**：红色 `00:00:00` + `UP!` 横幅；响铃时红白闪烁；底栏 `Time up` + `x cancel`；标题强调 `UP`
 - **文档侧栏**：拆「开发」模块；米家控制 / 系统与信息分组调整；docs dev 端口 `3123`

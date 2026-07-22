@@ -71,5 +71,40 @@
 
 1. 默认进入模式由配置 `time.default`（如 `up`）决定；`time.pure` 可默认开启 Pure。
 2. 时钟依赖 RTC；有网时可 `r` 做 NTP，时区见配置 `timezone`（如 `CST-8`）。
-3. 倒计时到期会响铃提示（音量受 `sound.volume` 影响）；后台计时在离开 App 后仍可能继续，到期弹窗提醒。
-4. Pure 适合把 Cardputer 当桌面时钟 / 秒表使用。
+3. Pure 适合把 Cardputer 当桌面时钟 / 秒表使用。
+4. **Countdown / Stopwatch** 可在离开 Time App 或切换到其它子模式后继续计时，详见下文。
+
+## 后台运行
+
+Uptime 与 Clock 仅在 Time 前台刷新显示；**Countdown** 与 **Stopwatch** 的状态保存在内存中，切换子模式或返回主菜单 **不会清零**。
+
+### Countdown 倒计时
+
+| 场景 | 行为 |
+|------|------|
+| 运行中切到 Clock / Uptime 等 | 计时继续；回到 Countdown 显示剩余时间 |
+| 运行中返回主菜单或其它 App | 计时继续；**主循环** `pollCountdownBackground` 检测到期 |
+| 到期时不在 Countdown 页 | **自动切入** Time App 的 Countdown 结束页 |
+| 到期响铃 | 哔-哔-歇循环，最长 **30s**；不在 CD 页也会响（音量受 `sound.volume` 影响） |
+| 停止响铃 | 结束页按 `x` 取消并回到设置；或 `r` 重置 |
+
+暂停（PAUSED）时保存剩余毫秒；继续时按 `millis()` 重算结束时刻。离开 App **不会** 调用 `leaveCountdownApp` 停表——只有到期、重置或取消闹钟才会结束。
+
+### Stopwatch 秒表
+
+| 场景 | 行为 |
+|------|------|
+| 运行中切子模式 / 回主菜单 | `swRunning` 与累计时长保留；基于 `millis()` 继续计 |
+| 再次进入 Stopwatch | 显示正确已计时长（含离开期间） |
+| 前台刷新 | 运行中约 **30ms** 刷新一次，显示到 **1ms** |
+| 重置 | 双击音效的 `r` 清零 |
+
+秒表无全局到期弹窗；离开期间不刷新屏幕，但时间仍在走。
+
+### 子模式切换
+
+在 Time App 内按 `u` / `t` / `c` / `s` 切换子模式时，Countdown 与 Stopwatch 的 **运行态均保留**（`enterCountdownApp` / `enterStopwatchApp` 只重绘，不重置 phase）。
+
+### Pure 模式
+
+Pure 隐藏 header / 底栏 tip，Countdown 到期页仍保留 **取消提示**；后台计时与响铃逻辑与非 Pure 相同。
