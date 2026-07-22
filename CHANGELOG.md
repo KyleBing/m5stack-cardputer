@@ -10,6 +10,7 @@
 
 ### 新增
 
+- **GitHub Pages 文档站**：`.github/workflows/docs.yml` 在 push `main` 时自动 build VitePress 并部署；产物不进仓库；在线地址 https://kylebing.github.io/m5stack-cardputer/
 - **米家炸锅本地倒计时**：刷新拿到 `left-time` 后在状态行右侧本地倒数（不每秒问设备）；操作后约 1s 再回读状态
 - **开发文档 · 内存说明**（`docs/dev/memory.md`）：Heap / PSRAM / 碎片与 Max Alloc、固件分配习惯、常见 lowmem 场景、Info Memory 数值解读
 - **开发文档 · 图片处理与烘焙**（`docs/dev/images.md`）：从 wiki 迁入 VitePress「开发」侧栏
@@ -22,6 +23,8 @@
 
 ### 改进
 
+- **README**：文档入口增加 GitHub Pages 在线链接
+- **VitePress `base`**：CI 使用 `/m5stack-cardputer/` 子路径，本地 `docs:dev` 仍为根路径
 - **Time 倒计时到点**：红色 `00:00:00` + `UP!` 横幅；响铃时红白闪烁；底栏 `Time up` + `x cancel`；标题强调 `UP`
 - **文档侧栏**：拆「开发」模块；米家控制 / 系统与信息分组调整；docs dev 端口 `3123`
 - **Icons**：补入 IR AC 模式（off/on）与风速六档资源页

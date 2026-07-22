@@ -1,10 +1,14 @@
 import { defineConfig } from 'vitepress'
 
 // Sparks 固件文档（v1.0.0）
+// GitHub Pages 项目站需子路径 base；本地 dev 仍用根路径
+const base = process.env.GITHUB_ACTIONS ? '/m5stack-cardputer/' : '/'
+
 export default defineConfig({
   title: 'Sparks',
   description: 'M5Stack Cardputer 多应用固件文档',
   lang: 'zh-CN',
+  base,
   lastUpdated: true,
   cleanUrls: true,
 
