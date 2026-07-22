@@ -127,7 +127,6 @@ static MijiaRefreshJob* mijiaDeferredJob = nullptr;
 static uint32_t mijiaPostOpRefreshAtMs = 0;
 static int mijiaPostOpRefreshDeviceIdx = -1;
 static int mijiaLastFryerRemainSec = -2;
-static bool mijiaForceControlsRedraw = false;
 
 // 释放概览 UI 缓存
 static void freeMijiaOverviewUi() {
@@ -392,10 +391,8 @@ static void applyMijiaControlRefresh(const bool force_full) {
     const bool device_changed = mijiaRenderedDeviceIdx != mijiaDeviceIdx;
     const bool icon_dirty = force_full || !mijiaControlInitialized || device_changed ||
                             mijiaPanelIconVisualChanged(mijiaRenderedUi, mijiaUi);
-    const bool force_controls = mijiaForceControlsRedraw;
-    mijiaForceControlsRedraw = false;
     const bool right_dirty =
-        force_full || force_controls || !mijiaControlInitialized || device_changed ||
+        force_full || !mijiaControlInitialized || device_changed ||
         mijiaPanelRightVisualChanged(mijiaRenderedUi, mijiaUi, mijiaRenderedNetStatus, net);
 
     if (!icon_dirty && !right_dirty) {
@@ -664,10 +661,10 @@ static void updateMijiaPostOpRefresh() {
     requestMijiaRefresh();
 }
 
-// 炸锅本地倒计时每秒刷新右栏显示
+// 炸锅本地倒计时：每秒只刷剩余时间，不重绘整栏
 static void updateMijiaFryerCountdownTick() {
-    if (mijiaOverviewMode || mijiaGroupMode || mijiaHelpVisible || mijiaQuickSelectMode ||
-        mijiaHotkeyEditMode) {
+    if (!mijiaControlInitialized || mijiaOverviewMode || mijiaGroupMode || mijiaHelpVisible ||
+        mijiaQuickSelectMode || mijiaHotkeyEditMode) {
         return;
     }
     const MijiaDevice* dev = getCurrentMijiaDevice();
@@ -679,7 +676,9 @@ static void updateMijiaFryerCountdownTick() {
     if (remain < 0) {
         if (mijiaLastFryerRemainSec >= 0) {
             mijiaLastFryerRemainSec = -2;
-            applyMijiaControlRefresh(false);
+            // 倒计时消失：只清右侧时间区
+            const MijiaPanelLayout layout = calcMijiaPanelLayout(APP_CONTENT_Y, APP_CONTENT_X);
+            drawMijiaFryerRemainTick(mijiaUi, layout, getMijiaNetworkStatusForUi());
         }
         return;
     }
@@ -687,9 +686,8 @@ static void updateMijiaFryerCountdownTick() {
         return;
     }
     mijiaLastFryerRemainSec = remain;
-    // 本地秒数变化时 UI 字段未变，强制右栏重绘
-    mijiaForceControlsRedraw = true;
-    applyMijiaControlRefresh(false);
+    const MijiaPanelLayout layout = calcMijiaPanelLayout(APP_CONTENT_Y, APP_CONTENT_X);
+    drawMijiaFryerRemainTick(mijiaUi, layout, getMijiaNetworkStatusForUi());
 }
 
 static void cancelMijiaPendingJobs() {

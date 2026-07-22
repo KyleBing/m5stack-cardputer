@@ -1,0 +1,57 @@
+---
+description: Keyboard (HID) app Fn layer mappings and usage conventions
+globs: src/app_hid_keyboard.cpp,include/app_hid_keyboard.h
+alwaysApply: false
+---
+
+# Keyboard（`k` 应用）Fn 层约定
+
+库不会自动做 Fn 映射；`app_hid_keyboard.cpp` 在组 HID report 时自行转换。
+
+## 面板橙色 / 功能键
+
+| 组合 | HID |
+|---|-----|
+| Fn + \` | Esc |
+| Fn + Bksp | Delete |
+| Fn + ; , . / | ↑ ← ↓ → |
+| Fn + 1..0 | F1..F10 |
+| Fn + - / = | F11 / F12 |
+
+未列出的 Fn+键：吞掉，不发给主机。
+
+## 左下角修饰键（Ctrl / Opt / Alt）
+
+| 组合 | 含义 |
+|---|---|
+| Ctrl / Opt / Alt | Left Ctrl / Left GUI(Win·Cmd) / Left Alt |
+| Fn + Ctrl / Opt / Alt | Right Ctrl / Right GUI / Right Alt |
+| Fn + Aa(Shift) | Caps Lock（并翻转本地 caps 状态） |
+
+## 应用热键（不发给主机）
+
+| 组合 | 作用 |
+|---|---|
+| Fn + u / b | USB / BLE |
+| Fn + p | BLE 主机列表（最多 5 槽：切换 / 新配对 / 删除） |
+| Fn + h | 帮助页（`,` / `.` 翻页，`h` 关闭） |
+| BtnA | 退出应用（按键都给主机，不能用 Esc 退出） |
+
+### 主机列表内按键
+
+| 按键 | 作用 |
+|---|---|
+| 1–5 / 方向键 | 选槽 |
+| Enter / Space | 切换到该主机 |
+| n | 开放新配对（需空槽；会拒绝旧主机抢连） |
+| d | 删除槽位 bond |
+| p / h | 关闭列表 |
+
+## 注意事项
+
+- 默认 BLE，避免占用 USB 烧录口；USB 模式退出后需恢复 Serial/JTAG
+- 退出 Keyboard（BtnGO / 回菜单）会断开 BLE 并 deinit 协议栈
+- Header 蓝牙图标看 `BLEDevice::getInitialized()`（含本应用自建栈）
+- BLE 同时只连一台主机；多设备靠 `Fn+p` 列表切换
+- 槽位 NVS 名仍为 `hidkb`（兼容旧数据）
+- 帮助文案与映射表变更时，同步改 `drawHelpPage()` 两页内容

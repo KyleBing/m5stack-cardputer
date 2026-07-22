@@ -69,22 +69,19 @@ static uint32_t cdSetupTotalMs() {
     return total_sec * 1000u;
 }
 
-// 结束页底栏更高，时间区相应上收，避免与 x2 取消提示重叠
+// 结束提示贴在大字下方，不占底栏
 static void getCountdownDisplayArea(int& area_y, int& area_h) {
     if (isTimePureMode()) {
         getTimePureDisplayArea(area_y, area_h);
-        if (cdPhase == CountdownPhase::FINISHED && area_h > CD_FINISH_HINT_H + 20) {
-            area_h -= CD_FINISH_HINT_H;
-        }
+        return;
+    }
+    if (cdPhase == CountdownPhase::FINISHED) {
+        const int screen_h = M5Cardputer.Display.height();
+        area_y = APP_CONTENT_Y;
+        area_h = screen_h - area_y;
         return;
     }
     getTimeDisplayArea(area_y, area_h);
-    if (cdPhase == CountdownPhase::FINISHED) {
-        const int extra = CD_FINISH_HINT_H - TIME_HINT_ROW_H;
-        if (extra > 0 && area_h > extra + 20) {
-            area_h -= extra;
-        }
-    }
 }
 
 static void cdGetDisplayHms(int& hours, int& minutes, int& seconds) {
@@ -236,7 +233,16 @@ static void drawCountdownTime(const int y, const int h, const bool force) {
         const int main_w = cdDigitW * 3 + cdColonW * 2;
         cdMainH = 8 * cdTs;
         cdMainX = margin + (avail_w - main_w) / 2;
-        cdMainY = y + (h - cdMainH) / 2 - 2;
+        // 到点：为大字下方「Time up / x OK」留出 8px + 提示行
+        if (cdPhase == CountdownPhase::FINISHED) {
+            const int below = 8 + CD_FINISH_HINT_H;
+            cdMainY = y + (h - cdMainH - below) / 2;
+            if (cdMainY < y) {
+                cdMainY = y;
+            }
+        } else {
+            cdMainY = y + (h - cdMainH) / 2 - 2;
+        }
         cdHx = cdMainX;
         cdMx = cdMainX + cdDigitW + cdColonW;
         cdSx = cdMainX + cdDigitW * 2 + cdColonW * 2;
@@ -289,44 +295,40 @@ static void drawCountdownStateBanner() {
         M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
         M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
         M5Cardputer.Display.print("PAUSED");
-    } else if (cdPhase == CountdownPhase::FINISHED) {
-        // 到点：醒目 UP!（响铃时与数字同步闪烁）
-        M5Cardputer.Display.setTextSize(1);
-        M5Cardputer.Display.setTextColor(cdFinishedDigitColor(), BLACK);
-        M5Cardputer.Display.setCursor(APP_CONTENT_X, area_y + area_h - 10);
-        M5Cardputer.Display.print("UP!");
     }
+    // FINISHED：不画左下角 UP!，提示贴在大字下方
 }
 
-// 结束页：居中「Time up」+ x2 取消（取消闹钟并回到设置）
+// 结束页：大字下方 8px，「Time up」靠左、「x OK」靠右，与时间同宽对齐
 static void drawCountdownFinishedCancelHint() {
-    const int screen_w = M5Cardputer.Display.width();
-    const int y = M5Cardputer.Display.height() - CD_FINISH_HINT_H;
-    M5Cardputer.Display.fillRect(APP_CONTENT_X, y, screen_w - APP_CONTENT_X * 2, CD_FINISH_HINT_H,
-                                 BLACK);
-
-    const char* up_label = "Time up ";
-    const char* label = "cancel";
-    M5Cardputer.Display.setTextSize(2);
-    const int letter_tw = M5Cardputer.Display.textWidth("X");
-    constexpr int pad_x = 2;
-    constexpr int gap = 3;
-    const int badge_w = letter_tw + pad_x * 2;
-    const int up_tw = M5Cardputer.Display.textWidth(up_label);
-    const int label_tw = M5Cardputer.Display.textWidth(label);
-    const int total_w = up_tw + badge_w + gap + label_tw;
-    int cx = APP_CONTENT_X + (screen_w - APP_CONTENT_X * 2 - total_w) / 2;
-    if (cx < APP_CONTENT_X) {
-        cx = APP_CONTENT_X;
+    if (cdTs <= 0 || cdMainH <= 0) {
+        return;
     }
+    const int main_w = cdDigitW * 3 + cdColonW * 2;
+    const int y = cdMainY + cdMainH + 8;
+    M5Cardputer.Display.fillRect(cdMainX, y, main_w, CD_FINISH_HINT_H, BLACK);
+
+    const char* up_label = "Time up";
+    const char* label = "OK";
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(APP_COLOR_ERROR, BLACK);
-    M5Cardputer.Display.setCursor(cx, y + 1);
+    M5Cardputer.Display.setCursor(cdMainX, y + 1);
     M5Cardputer.Display.print(up_label);
-    cx += up_tw;
+
+    // 右侧：x 徽章 + OK，右缘与大字右缘对齐
+    constexpr int pad_x = 2;
+    constexpr int gap = 3;
+    const int letter_tw = M5Cardputer.Display.textWidth("X");
+    const int badge_w = letter_tw + pad_x * 2;
+    const int label_tw = M5Cardputer.Display.textWidth(label);
+    const int right_w = badge_w + gap + label_tw;
+    int cx = cdMainX + main_w - right_w;
+    if (cx < cdMainX) {
+        cx = cdMainX;
+    }
     cx += drawKeyBadge(cx, y + 1, CD_ALARM_CANCEL_KEY, 2);
     M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK); // 徽章后恢复说明色
     M5Cardputer.Display.setCursor(cx, y + 1);
     M5Cardputer.Display.print(label);
 }
@@ -373,10 +375,6 @@ static void drawCountdownActionHints() {
         drawCountdownSetupBottomHints();
         return;
     }
-    if (cdPhase == CountdownPhase::FINISHED) {
-        drawCountdownFinishedCancelHint();
-        return;
-    }
 
     const char* go_text = "start";
     if (cdPhase == CountdownPhase::RUNNING) {
@@ -418,13 +416,14 @@ static void drawCountdownActionHints() {
 }
 
 static void drawCountdownChrome() {
+    if (cdPhase == CountdownPhase::FINISHED) {
+        // 到点：只画大字旁提示，不画左下角 / 底栏
+        drawCountdownFinishedCancelHint();
+        return;
+    }
     if (isTimePureMode()) {
         if (cdPhase != CountdownPhase::SETUP) {
             drawCountdownStateBanner();
-        }
-        // Pure 结束页也要能看到取消键
-        if (cdPhase == CountdownPhase::FINISHED) {
-            drawCountdownFinishedCancelHint();
         }
         return;
     }
@@ -704,7 +703,7 @@ void updateCountdownApp() {
             drawCountdownApp(false);
         }
     } else if (cdPhase == CountdownPhase::FINISHED && cdAlarmActive) {
-        // 响铃期间红白闪烁：强制重绘数字与 UP! 横幅
+        // 响铃期间红白闪烁：强制重绘数字与下方提示
         static uint32_t last_blink_ms = 0;
         static bool last_blink_on = false;
         const bool blink_on = ((millis() / 400) & 1) != 0;
@@ -716,7 +715,7 @@ void updateCountdownApp() {
             int area_h = 0;
             getCountdownDisplayArea(area_y, area_h);
             drawCountdownTime(area_y, area_h, true);
-            drawCountdownStateBanner();
+            drawCountdownFinishedCancelHint();
         }
     }
 

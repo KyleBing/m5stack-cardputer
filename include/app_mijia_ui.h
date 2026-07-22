@@ -113,6 +113,10 @@ void drawMijiaPanelRightColumn(const MijiaDevice* dev, MijiaDevKind kind,
                                const MijiaPanelLayout& layout, const MijiaUiState& ui,
                                const char* net_status = nullptr);
 
+// 仅刷新炸锅状态行右侧剩余时间（不重绘整栏）
+void drawMijiaFryerRemainTick(const MijiaUiState& ui, const MijiaPanelLayout& layout,
+                              const char* net_status = nullptr);
+
 // ON/OFF 双 tag；inline_status 为 false 时不绘制行尾状态字
 void drawMijiaPowerTags(int x, int y, bool known, bool on, const char* status,
                         bool inline_status = true, int text_size = 1);

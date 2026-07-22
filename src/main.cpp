@@ -21,7 +21,7 @@
 #include "app_mic.h"
 #include "app_battery.h"
 #include "app_info.h"
-#include "app_hid_kb.h"
+#include "app_hid_keyboard.h"
 #include "app_screenshot.h"
 #include <WiFi.h>
 #include <esp_sleep.h>
@@ -68,7 +68,7 @@ enum class AppState {
     FONT_DEMO,
     LED,
     BATTERY,
-    HID_KB,
+    HID_KEYBOARD,
     INFO, // 系统信息 / 内存（字母 i）
 };
 
@@ -97,7 +97,7 @@ static const MenuItem MENU_ITEMS[] = {
     {'x', "IR", "Infrared", AppState::IR},
 
     // 系统功能测试
-    {'k', "KB", "HID Keyboard", AppState::HID_KB},
+    {'k', "KB", "Keyboard", AppState::HID_KEYBOARD},
     {'g', "IMU", "IMU", AppState::BMI},
     {'l', "LED", "RGB LED", AppState::LED},
     {'r', "Mic", "Mic", AppState::MIC},
@@ -192,8 +192,8 @@ const char* getCurrentAppShotSlug() {
             return "led";
         case AppState::BATTERY:
             return "battery";
-        case AppState::HID_KB:
-            return "hidkb";
+        case AppState::HID_KEYBOARD:
+            return "hidkeyboard";
         case AppState::INFO:
             return "info";
         default:
@@ -287,7 +287,7 @@ void showMenu() {
     menuNoAppPrompt = false;
     leaveCursorApp();
     leaveLedApp();
-    leaveHidKbApp();
+    leaveHidKeyboardApp();
     leaveIrApp(); // 释放红外图标 RAM 缓存
     // leaveCountdownApp 不再停后台计时；到期由 poll 弹窗
     leaveMijiaApp();
@@ -2156,8 +2156,8 @@ void enterApp(const AppState state) {
     if (currentState == AppState::MIC && state != AppState::MIC) {
         leaveMicApp();
     }
-    if (currentState == AppState::HID_KB && state != AppState::HID_KB) {
-        leaveHidKbApp();
+    if (currentState == AppState::HID_KEYBOARD && state != AppState::HID_KEYBOARD) {
+        leaveHidKeyboardApp();
     }
     // 防御：离开 Cursor 时务必停 fetch / 放 WiFi，避免与 Config 抢射频
     if (currentState == AppState::CURSOR && state != AppState::CURSOR) {
@@ -2238,8 +2238,8 @@ void enterApp(const AppState state) {
         case AppState::BATTERY:
             enterBatteryApp();
             break;
-        case AppState::HID_KB:
-            enterHidKbApp();
+        case AppState::HID_KEYBOARD:
+            enterHidKeyboardApp();
             break;
         case AppState::INFO:
             enterInfoApp();
@@ -2350,7 +2350,7 @@ void loop() {
 
     // btngo：无 app 提示页 / 子界面返回主菜单
     // HID 键盘占用全部按键（含 ESC），改由侧边 BtnA 退出
-    if (currentState != AppState::HID_KB && wasBtnGoPressed()) {
+    if (currentState != AppState::HID_KEYBOARD && wasBtnGoPressed()) {
         if (menuNoAppPrompt || currentState != AppState::MENU) {
             if (currentState == AppState::MIC) {
                 leaveMicApp();
@@ -2421,12 +2421,12 @@ void loop() {
     } else if (currentState == AppState::IR) {
         pollIrBtnA();
         updateIrApp();
-    } else if (currentState == AppState::HID_KB) {
-        if (pollHidKbBtnAExit()) {
+    } else if (currentState == AppState::HID_KEYBOARD) {
+        if (pollHidKeyboardBtnAExit()) {
             showMenu();
             return;
         }
-        updateHidKbApp();
+        updateHidKeyboardApp();
     }
 
     // 倒计时后台：到期响铃并强制切入 CD 界面
@@ -2575,9 +2575,9 @@ void loop() {
                     handleBatteryApp(M5Cardputer.Keyboard.keysState());
                 }
                 break;
-            case AppState::HID_KB:
+            case AppState::HID_KEYBOARD:
                 // 按下与松开都要处理，避免主机卡键
-                handleHidKbApp(M5Cardputer.Keyboard.keysState());
+                handleHidKeyboardApp(M5Cardputer.Keyboard.keysState());
                 break;
             case AppState::INFO:
                 if (M5Cardputer.Keyboard.isPressed()) {
@@ -2592,7 +2592,7 @@ void loop() {
     // 实时 app 不休眠；Cursor 无操作 5 分钟后 1s 一拍，否则 10ms；其它状态 yield 10ms
     if (currentState == AppState::CURSOR && isCursorIdleSlowLoop()) {
         delay(1000);
-    } else if (currentState == AppState::HID_KB) {
+    } else if (currentState == AppState::HID_KEYBOARD) {
         // HID 键盘：更密采样 + 排空 BLE 发送队列
         delay(2);
     } else if (currentState != AppState::BMI && currentState != AppState::MIC &&

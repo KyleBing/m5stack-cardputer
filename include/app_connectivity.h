@@ -26,8 +26,14 @@ void updateStaWifiIdle();
 // 按 BLE 初始化状态配置 WiFi 休眠，避免 ESP-IDF coexist 层 abort
 void applyWifiRadioSleepPolicy();
 
-// BLE 栈是否已启动
+// BLE 栈是否已启动（对外可见：广播/连接中）
 bool isBleStackReady();
+
+// HID 等退出时停用但不 deinit：标记为停泊，Header 不显示蓝牙图标
+void markBleStackParked();
+
+// 清除停泊标记（重新占用 BLE 前）
+void clearBleStackParked();
 
 // BLE 是否有客户端连接
 bool isBleConnected();

@@ -33,7 +33,7 @@
 | 键 | App | 说明 |
 |----|-----|------|
 | `c` | [Cursor](./cursor) | Cursor 用量摘要、日、星期、月用量图表 |
-| `k` | [HID Keyboard](./hid-keyboard) | USB / BLE HID 键盘 |
+| `k` | [Keyboard](./hid-keyboard) | USB / BLE HID 键盘 |
 | `j` | [Morse](./morse) | 摩斯电码发声 |
 
 ## 系统与信息

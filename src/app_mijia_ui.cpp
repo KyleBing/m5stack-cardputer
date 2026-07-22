@@ -501,6 +501,64 @@ void drawMijiaPanelRightColumn(const MijiaDevice* dev, const MijiaDevKind kind,
     drawMijiaDeviceControls(dev, kind, ui, layout.info_x, info_y, layout.info_w);
 }
 
+// 炸锅剩余秒数格式化为 mm:ss / h:mm:ss；无倒计时返回 false
+static bool mijiaFormatFryerRemain(const MijiaUiState& ui, char* buf, const size_t buf_len) {
+    const int remain_sec = mijiaFryerRemainSec(ui);
+    if (remain_sec < 0 || buf == nullptr || buf_len == 0) {
+        return false;
+    }
+    const int mm = remain_sec / 60;
+    const int ss = remain_sec % 60;
+    if (mm >= 60) {
+        snprintf(buf, buf_len, "%d:%02d:%02d", mm / 60, mm % 60, ss);
+    } else {
+        snprintf(buf, buf_len, "%d:%02d", mm, ss);
+    }
+    return true;
+}
+
+// 状态行右侧右对齐绘制剩余时间
+static void drawMijiaFryerRemainText(const int x, const int y, const int w, const char* buf) {
+    constexpr int text_size = MIJIA_PANEL_TEXT_SIZE;
+    M5Cardputer.Display.setTextSize(text_size);
+    M5Cardputer.Display.setTextColor(CYAN, BLACK);
+    const int text_y = y + (MIJIA_TAG_H - 8 * text_size) / 2;
+    M5Cardputer.Display.drawRightString(buf, x + w, text_y);
+}
+
+// 炸锅控制区起点 y（与 drawMijiaPanelRightColumn 对齐）
+static int mijiaFryerControlsTopY(const MijiaPanelLayout& layout, const MijiaUiState& ui,
+                                  const char* net_status) {
+    int info_y = layout.right_top_y;
+    if (net_status != nullptr && net_status[0] != '\0') {
+        info_y += INFO_LINE_H;
+    }
+    if (mijiaPanelShowsInlineStatus(ui.status, ui.power_known)) {
+        info_y += mijiaPanelInlineStatusLineH(ui.status);
+    }
+    return info_y;
+}
+
+// 仅擦除并重绘状态行右侧剩余时间，避免每秒整栏闪烁
+void drawMijiaFryerRemainTick(const MijiaUiState& ui, const MijiaPanelLayout& layout,
+                              const char* net_status) {
+    if (!ui.extra_known) {
+        return;
+    }
+    const int row_y = mijiaFryerControlsTopY(layout, ui, net_status);
+    // 默认字库约 6px 宽；最长约 "99:59:59"
+    constexpr int text_size = MIJIA_PANEL_TEXT_SIZE;
+    constexpr int clear_w = 8 * 6 * text_size + 2;
+    const int clear_x = layout.info_x + layout.info_w - clear_w;
+    if (clear_w > 0 && clear_x >= layout.info_x) {
+        M5Cardputer.Display.fillRect(clear_x, row_y, clear_w, MIJIA_TAG_H, BLACK);
+    }
+    char buf[16];
+    if (mijiaFormatFryerRemain(ui, buf, sizeof(buf))) {
+        drawMijiaFryerRemainText(layout.info_x, row_y, layout.info_w, buf);
+    }
+}
+
 int drawMijiaDevicePanel(const MijiaDevice* dev, const MijiaDevKind kind, const int device_idx,
                          const int device_count, const MijiaUiState& ui, const int x, const int y,
                          const char* net_status) {
@@ -893,19 +951,9 @@ int drawMijiaDeviceControls(const MijiaDevice* dev, const MijiaDevKind kind,
             cx += drawMijiaStatusTag(cx, cy, STATUS_NAMES[si], true,
                                      ui.power_on ? APP_COLOR_OK : APP_COLOR_LABEL, text_size);
             // 剩余时间：状态行最右侧本地倒计时（刷新时锚定，不每秒问设备）
-            const int remain_sec = mijiaFryerRemainSec(ui);
-            if (remain_sec >= 0) {
-                const int mm = remain_sec / 60;
-                const int ss = remain_sec % 60;
-                if (mm >= 60) {
-                    snprintf(buf, sizeof(buf), "%d:%02d:%02d", mm / 60, mm % 60, ss);
-                } else {
-                    snprintf(buf, sizeof(buf), "%d:%02d", mm, ss);
-                }
-                M5Cardputer.Display.setTextSize(text_size);
-                M5Cardputer.Display.setTextColor(CYAN, BLACK);
-                const int text_y = cy + (MIJIA_TAG_H - 8 * text_size) / 2;
-                M5Cardputer.Display.drawRightString(buf, x + w, text_y);
+            char remain_buf[16];
+            if (mijiaFormatFryerRemain(ui, remain_buf, sizeof(remain_buf))) {
+                drawMijiaFryerRemainText(x, cy, w, remain_buf);
             }
             cy += MIJIA_TAG_H + 4;
             // 手动模式：温度 / 时长进度条（1x 小字）

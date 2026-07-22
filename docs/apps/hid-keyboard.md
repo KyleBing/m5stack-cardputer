@@ -1,4 +1,4 @@
-# HID Keyboard
+# Keyboard
 
 主菜单按键：`k`
 
@@ -6,8 +6,8 @@
 
 ## 截图
 
-![hid-kb-main](/shots/hid-kb-main.png)
-![hid-kb-help](/shots/hid-kb-help.png)
+![hid-keyboard-main](/shots/hid-keyboard-main.png)
+![hid-keyboard-help](/shots/hid-keyboard-help.png)
 
 ## 快捷键
 
@@ -17,9 +17,21 @@
 |------|------|
 | `Fn` + `u` | USB HID |
 | `Fn` + `b` | BLE HID |
-| `Fn` + `p` | BLE 配对相关 |
-| **BtnGO** | 退出回主菜单 |
+| `Fn` + `p` | BLE 主机列表（切换 / 配对） |
+| **BtnGO** | 退出回主菜单（并断开 BLE） |
 | `h` | Help |
+
+### BLE 主机列表（`Fn+p`）
+
+最多保存 **5** 台已配对主机；同时只连接一台。
+
+| 按键 | 作用 |
+|------|------|
+| `1`–`5` / `;` `,` `.` `/` | 选择槽位 |
+| Enter / Space | 切换到该主机（断开当前；目标机需在蓝牙里点一下 `Cardputer KB`） |
+| `n` | 新配对（需有空槽；会拒绝旧主机抢连） |
+| `d` | 删除当前槽位配对 |
+| `p` / `h` | 关闭列表 |
 
 ### Fn 层（Help 第 2 页）
 
@@ -35,6 +47,8 @@
 
 ## 使用说明
 
-1. 用数据线连电脑选 USB，或 `Fn+b` 开 BLE 键盘后在主机端配对（`Fn+p`）。
-2. 普通字符直接敲击；功能键走 Fn 层。
-3. 退出务必 **BtnGO**，避免与发送给主机的 Esc 混淆。
+1. 用数据线连电脑选 USB，或 `Fn+b` 开 BLE 键盘后在主机端配对（`Fn+p` → `n`）。
+2. 多台主机：`Fn+p` 打开列表，选槽后 Enter 切换。`reconnecting #N` 表示正在等目标电脑自动回连（多数几秒内成功；不行再在蓝牙里点一下 `Cardputer KB`）。
+3. 新配对按 `n`：会拒绝旧主机抢连，再在新电脑上搜索配对。
+4. 普通字符直接敲击；功能键走 Fn 层。
+5. 退出务必 **BtnGO**（会断开 BLE）；避免与发送给主机的 Esc 混淆。

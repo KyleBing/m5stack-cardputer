@@ -10,6 +10,7 @@ static bool g_ble_advertising = false;
 static bool g_ble_initialized = false;
 static bool g_ble_scan_busy = false;
 static bool g_ble_adv_before_scan = false;
+static bool g_ble_parked = false;  // 已 init 但 App 释放，Header 不当成在用
 static BLEServer* g_ble_server = nullptr;
 
 void initBleStackOnly(); // 前向声明：startBleStack 会调用
@@ -92,7 +93,21 @@ void applyWifiRadioSleepPolicy() {
 }
 
 bool isBleStackReady() {
-    return g_ble_ready;
+    if (g_ble_parked) {
+        return false;
+    }
+    // HID Keyboard 等会独自 init BLE，不走本模块的 g_ble_ready
+    return g_ble_ready || BLEDevice::getInitialized();
+}
+
+void markBleStackParked() {
+    g_ble_parked = true;
+    g_ble_ready = false;
+    g_ble_advertising = false;
+}
+
+void clearBleStackParked() {
+    g_ble_parked = false;
 }
 
 bool isBleConnected() {
@@ -137,16 +152,20 @@ void stopBleStack() {
 
 // 完全释放 BLE，之后其它模块可重新 init
 void resetBleStackFully() {
-    if (!g_ble_initialized) {
+    if (!g_ble_initialized && !BLEDevice::getInitialized()) {
+        g_ble_parked = false;
         return;
     }
-    BLEDevice::stopAdvertising();
-    BLEDevice::deinit(false);
+    if (BLEDevice::getInitialized()) {
+        BLEDevice::stopAdvertising();
+        BLEDevice::deinit(false);
+    }
     g_ble_initialized = false;
     g_ble_ready = false;
     g_ble_advertising = false;
     g_ble_server = nullptr;
     g_ble_scan_busy = false;
+    g_ble_parked = false;
     applyWifiRadioSleepPolicy();
 }
 

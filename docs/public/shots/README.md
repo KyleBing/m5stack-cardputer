@@ -48,8 +48,8 @@
 - cursor-summary.png
 - cursor-chart.png
 - cursor-help.png
-- hid-kb-main.png
-- hid-kb-help.png
+- hid-keyboard-main.png
+- hid-keyboard-help.png
 - morse-main.png
 - infrared-tv.png
 - infrared-ac.png

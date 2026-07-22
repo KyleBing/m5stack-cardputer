@@ -67,7 +67,7 @@ export default defineConfig({
           { text: 'Battery 电池', link: '/apps/battery' },
           { text: 'Sleep 睡眠', link: '/apps/sleep' },
           { text: 'Cursor 用量', link: '/apps/cursor' },
-          { text: 'HID Keyboard', link: '/apps/hid-keyboard' },
+          { text: 'Keyboard', link: '/apps/hid-keyboard' },
           { text: 'Morse 摩斯', link: '/apps/morse' },
         ],
       },
