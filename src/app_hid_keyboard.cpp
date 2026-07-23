@@ -48,6 +48,7 @@ static constexpr uint8_t kHidCapsLock = 0x39;
 
 static constexpr int kHelpPageCount = 2;
 static constexpr int kBleHostSlots = 5;  // 最多保存 5 台已配对主机
+static constexpr int kHostAliasMax = 16;  // 设备别名最大长度（屏宽约能放下）
 
 struct BleHostSlot {
     bool used = false;
@@ -55,6 +56,7 @@ struct BleHostSlot {
     uint8_t addr_type = BLE_ADDR_TYPE_PUBLIC;
     esp_bd_addr_t addr{};
     esp_bd_addr_t last_conn{};
+    char alias[kHostAliasMax + 1] = "";  // 用户自定义名称；空则显示 MAC
 };
 
 static bool g_screen_ready = false;
@@ -62,6 +64,8 @@ static bool g_active = false;
 static bool g_help_visible = false;
 static bool g_hosts_ui = false;  // BLE 主机列表（切换 / 配对）
 static bool g_hosts_exit_on_connect = false;  // 切换/新配对成功后自动回输入界面
+static bool g_rename_ui = false;  // 主机列表内重命名别名
+static char g_rename_buf[kHostAliasMax + 1] = "";
 static int g_help_page = 0;
 static bool g_fn_h_latched = false;
 static bool g_fn_caps_latched = false;
@@ -233,13 +237,22 @@ static void saveHostSlots() {
     for (int i = 0; i < kBleHostSlots; i++) {
         char key[4];
         snprintf(key, sizeof(key), "s%d", i);
+        char nkey[4];
+        snprintf(nkey, sizeof(nkey), "n%d", i);
         if (g_hosts[i].used) {
             uint8_t buf[7];
             buf[0] = g_hosts[i].addr_type;
             memcpy(buf + 1, g_hosts[i].addr, 6);
             prefs.putBytes(key, buf, sizeof(buf));
+            // 别名单独存；空则删 key，兼容旧固件
+            if (g_hosts[i].alias[0] != '\0') {
+                prefs.putString(nkey, g_hosts[i].alias);
+            } else {
+                prefs.remove(nkey);
+            }
         } else {
             prefs.remove(key);
+            prefs.remove(nkey);
         }
     }
     prefs.putChar("act", static_cast<int8_t>(g_active_slot));
@@ -254,12 +267,17 @@ static void loadHostSlots() {
     for (int i = 0; i < kBleHostSlots; i++) {
         char key[4];
         snprintf(key, sizeof(key), "s%d", i);
+        char nkey[4];
+        snprintf(nkey, sizeof(nkey), "n%d", i);
         uint8_t buf[7] = {};
         const size_t n = prefs.getBytes(key, buf, sizeof(buf));
+        g_hosts[i].alias[0] = '\0';
         if (n == sizeof(buf)) {
             g_hosts[i].used = true;
             g_hosts[i].addr_type = buf[0];
             memcpy(g_hosts[i].addr, buf + 1, 6);
+            prefs.getString(nkey, g_hosts[i].alias, sizeof(g_hosts[i].alias));
+            g_hosts[i].alias[sizeof(g_hosts[i].alias) - 1] = '\0';
         } else {
             g_hosts[i].used = false;
             g_hosts[i].addr_type = BLE_ADDR_TYPE_PUBLIC;
@@ -272,6 +290,23 @@ static void loadHostSlots() {
         g_active_slot = -1;
     }
     prefs.end();
+}
+
+// 列表/状态：有别名用别名，否则 MAC
+static void formatHostDisplayName(const int slot, char* out, size_t out_len) {
+    if (out == nullptr || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (slot < 0 || slot >= kBleHostSlots || !g_hosts[slot].used) {
+        return;
+    }
+    if (g_hosts[slot].alias[0] != '\0') {
+        strncpy(out, g_hosts[slot].alias, out_len - 1);
+        out[out_len - 1] = '\0';
+        return;
+    }
+    formatPeerAddr(g_hosts[slot].addr, out, out_len);
 }
 
 // 用 bond 列表校准槽位：补齐 / 剔除，最多保留 5 台
@@ -320,6 +355,10 @@ static void syncHostSlotsWithBonds() {
         }
         if (!found) {
             g_hosts[i].used = false;
+            g_hosts[i].has_last_conn = false;
+            g_hosts[i].alias[0] = '\0';
+            memset(g_hosts[i].addr, 0, 6);
+            memset(g_hosts[i].last_conn, 0, 6);
             dirty = true;
         }
     }
@@ -416,6 +455,7 @@ static void deleteHostSlot(const int slot) {
     }
     g_hosts[slot].used = false;
     g_hosts[slot].has_last_conn = false;
+    g_hosts[slot].alias[0] = '\0';
     memset(g_hosts[slot].addr, 0, 6);
     memset(g_hosts[slot].last_conn, 0, 6);
     if (g_active_slot == slot) {
@@ -1083,6 +1123,8 @@ static void openHostsUi() {
     applyTransport(HidTransport::BLE);
     g_hosts_ui = true;
     g_help_visible = false;
+    g_rename_ui = false;
+    g_rename_buf[0] = '\0';
     g_hosts_key_latched = true;
     g_hosts_exit_on_connect = false;  // 仅浏览列表时不自动退出
     g_hosts_status[0] = '\0';
@@ -1112,7 +1154,64 @@ static void applyTransport(const HidTransport next) {
 static void drawHelpPage();
 static void drawHostsUi();
 static void redrawHostsListAndStatus();
+static void drawHostsHintBar();
 static void drawHidKeyboardApp(const bool full_init);
+
+static void beginRenameHostSlot() {
+    if (!g_hosts[g_sel_slot].used) {
+        snprintf(g_hosts_status, sizeof(g_hosts_status), "empty");
+        redrawHostsListAndStatus();
+        return;
+    }
+    g_rename_ui = true;
+    strncpy(g_rename_buf, g_hosts[g_sel_slot].alias, sizeof(g_rename_buf) - 1);
+    g_rename_buf[sizeof(g_rename_buf) - 1] = '\0';
+    g_hosts_status[0] = '\0';
+    redrawHostsListAndStatus();
+    drawHostsHintBar();
+}
+
+static void cancelRenameHostSlot() {
+    g_rename_ui = false;
+    g_rename_buf[0] = '\0';
+    g_hosts_status[0] = '\0';
+    redrawHostsListAndStatus();
+    drawHostsHintBar();
+}
+
+static void commitRenameHostSlot() {
+    if (!g_hosts[g_sel_slot].used) {
+        cancelRenameHostSlot();
+        return;
+    }
+    // 去首尾空格，避免列表里看起来像空槽
+    size_t start = 0;
+    while (g_rename_buf[start] == ' ') {
+        start++;
+    }
+    size_t end = strlen(g_rename_buf);
+    while (end > start && g_rename_buf[end - 1] == ' ') {
+        end--;
+    }
+    const size_t n = end - start;
+    if (n == 0) {
+        g_hosts[g_sel_slot].alias[0] = '\0';
+    } else {
+        const size_t copy_n = (n > kHostAliasMax) ? kHostAliasMax : n;
+        memcpy(g_hosts[g_sel_slot].alias, g_rename_buf + start, copy_n);
+        g_hosts[g_sel_slot].alias[copy_n] = '\0';
+    }
+    saveHostSlots();
+    g_rename_ui = false;
+    g_rename_buf[0] = '\0';
+    if (g_hosts[g_sel_slot].alias[0] != '\0') {
+        snprintf(g_hosts_status, sizeof(g_hosts_status), "named #%d", g_sel_slot + 1);
+    } else {
+        snprintf(g_hosts_status, sizeof(g_hosts_status), "cleared #%d", g_sel_slot + 1);
+    }
+    redrawHostsListAndStatus();
+    drawHostsHintBar();
+}
 
 // 主机列表页按键（不发给主机）
 static bool tryHandleHostsUi(const Keyboard_Class::KeysState& status) {
@@ -1124,6 +1223,63 @@ static bool tryHandleHostsUi(const Keyboard_Class::KeysState& status) {
         return true;
     }
     if (g_hosts_key_latched) {
+        return true;
+    }
+
+    // 重命名模式：输入别名，不触发列表热键
+    if (g_rename_ui) {
+        if (status.del) {
+            g_hosts_key_latched = true;
+            const size_t n = strlen(g_rename_buf);
+            if (n > 0) {
+                g_rename_buf[n - 1] = '\0';
+                redrawHostsListAndStatus();
+            }
+            return true;
+        }
+        if (status.enter) {
+            g_hosts_key_latched = true;
+            commitRenameHostSlot();
+            return true;
+        }
+        if (status.space) {
+            g_hosts_key_latched = true;
+            const size_t n = strlen(g_rename_buf);
+            if (n < kHostAliasMax) {
+                g_rename_buf[n] = ' ';
+                g_rename_buf[n + 1] = '\0';
+                redrawHostsListAndStatus();
+            }
+            return true;
+        }
+        for (const char c : status.word) {
+            if (c == '\b') {
+                g_hosts_key_latched = true;
+                const size_t n = strlen(g_rename_buf);
+                if (n > 0) {
+                    g_rename_buf[n - 1] = '\0';
+                    redrawHostsListAndStatus();
+                }
+                return true;
+            }
+            // Esc / ` 取消（与 WiFi 密码页类似）
+            if (c == 0x1B || c == '`') {
+                g_hosts_key_latched = true;
+                cancelRenameHostSlot();
+                return true;
+            }
+            if (c < 32 || c > 126) {
+                continue;
+            }
+            g_hosts_key_latched = true;
+            const size_t n = strlen(g_rename_buf);
+            if (n < kHostAliasMax) {
+                g_rename_buf[n] = c;
+                g_rename_buf[n + 1] = '\0';
+                redrawHostsListAndStatus();
+            }
+            return true;
+        }
         return true;
     }
 
@@ -1156,6 +1312,11 @@ static bool tryHandleHostsUi(const Keyboard_Class::KeysState& status) {
             redrawHostsListAndStatus();
             return true;
         }
+        if (c == 'r' || c == 'R') {
+            g_hosts_key_latched = true;
+            beginRenameHostSlot();
+            return true;
+        }
         if (c == 'd' || c == 'D') {
             g_hosts_key_latched = true;
             if (g_hosts[g_sel_slot].used) {
@@ -1181,6 +1342,7 @@ static bool tryHandleHostsUi(const Keyboard_Class::KeysState& status) {
         if (c == 'p' || c == 'P' || c == 'h' || c == 'H') {
             g_hosts_key_latched = true;
             g_hosts_ui = false;
+            g_rename_ui = false;
             drawHidKeyboardApp(true);
             return true;
         }
@@ -1418,10 +1580,13 @@ static int echoAreaY() {
 }
 
 static void drawPeerLine() {
-    // 底栏上方只显示 MAC，槽号改到右上角大字
+    // 底栏上方：有别名显示别名，否则 MAC；槽号在右上角
     char text[sizeof(g_drawn_peer)] = "";
     if (g_transport == HidTransport::BLE) {
-        if (g_peer_addr[0] != '\0') {
+        if (g_active_slot >= 0 && g_hosts[g_active_slot].used &&
+            g_hosts[g_active_slot].alias[0] != '\0') {
+            strncpy(text, g_hosts[g_active_slot].alias, sizeof(text) - 1);
+        } else if (g_peer_addr[0] != '\0') {
             strncpy(text, g_peer_addr, sizeof(text) - 1);
         } else if (g_active_slot >= 0 && g_hosts[g_active_slot].used) {
             formatPeerAddr(g_hosts[g_active_slot].addr, text, sizeof(text));
@@ -1640,6 +1805,7 @@ static void drawHelpPage() {
         y = helpDrawLine(manual_x + 2, y, "list: 1-5 select");
         y = helpDrawLine(manual_x + 2, y, "Enter switch");
         y = helpDrawLine(manual_x + 2, y, "n new / d delete");
+        y = helpDrawLine(manual_x + 2, y, "r rename alias");
         y = helpDrawLine(manual_x + 2, y, "p close list");
         y = helpDrawLine(manual_x + 2, y, "one host at a time");
     }
@@ -1652,6 +1818,30 @@ static void drawHostsHintBar() {
     const int row2_y = hintBarY();
     const int screen_w = M5Cardputer.Display.width();
     M5Cardputer.Display.fillRect(0, row1_y, screen_w, 24, BLACK);
+
+    if (g_rename_ui) {
+        // 重命名：Enter 保存，Bksp 删字，` 取消
+        int cx = APP_CONTENT_X;
+        cx += drawTextBadge(cx, row1_y, "Ent", 1);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, row1_y + 1);
+        M5Cardputer.Display.print("save ");
+        cx = M5Cardputer.Display.getCursorX();
+        cx += drawTextBadge(cx, row1_y, "Bk", 1);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, row1_y + 1);
+        M5Cardputer.Display.print("del");
+
+        cx = APP_CONTENT_X;
+        cx += drawKeyBadge(cx, row2_y, '`', 1);
+        M5Cardputer.Display.setTextSize(1);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.setCursor(cx, row2_y + 1);
+        M5Cardputer.Display.print("cancel");
+        return;
+    }
 
     int cx = APP_CONTENT_X;
     cx += drawTextBadge(cx, row1_y, "1-5", 1);
@@ -1679,6 +1869,12 @@ static void drawHostsHintBar() {
     M5Cardputer.Display.setCursor(cx, row2_y + 1);
     M5Cardputer.Display.print("del ");
     cx = M5Cardputer.Display.getCursorX();
+    cx += drawKeyBadge(cx, row2_y, 'r', 1);
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+    M5Cardputer.Display.setCursor(cx, row2_y + 1);
+    M5Cardputer.Display.print("name ");
+    cx = M5Cardputer.Display.getCursorX();
     cx += drawKeyBadge(cx, row2_y, 'p', 1);
     M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
@@ -1690,12 +1886,17 @@ static void drawHostsHintBar() {
 static void formatHostsStatusLine(char* out, size_t out_len, uint16_t* color_out) {
     out[0] = '\0';
     *color_out = APP_COLOR_HINT;
+    if (g_rename_ui) {
+        *color_out = APP_COLOR_VALUE;
+        snprintf(out, out_len, "rename #%d", g_sel_slot + 1);
+        return;
+    }
     if (g_ble_connected) {
         *color_out = APP_COLOR_OK;
         if (g_active_slot >= 0 && g_hosts[g_active_slot].used) {
-            char mac[18];
-            formatPeerAddr(g_hosts[g_active_slot].addr, mac, sizeof(mac));
-            snprintf(out, out_len, "connected #%d %s", g_active_slot + 1, mac);
+            char name[18];
+            formatHostDisplayName(g_active_slot, name, sizeof(name));
+            snprintf(out, out_len, "connected #%d %s", g_active_slot + 1, name);
         } else if (g_peer_addr[0] != '\0') {
             snprintf(out, out_len, "connected %s", g_peer_addr);
         } else {
@@ -1734,11 +1935,14 @@ static void redrawHostsListAndStatus() {
         M5Cardputer.Display.fillRect(0, y, screen_w, 10, BLACK);
         const bool sel = (i == g_sel_slot);
         const bool linked = g_ble_connected && i == g_active_slot && g_hosts[i].used;
-        char line[28];
-        if (g_hosts[i].used) {
-            char mac[18];
-            formatPeerAddr(g_hosts[i].addr, mac, sizeof(mac));
-            snprintf(line, sizeof(line), "%c%d %s%s", sel ? '>' : ' ', i + 1, mac,
+        char line[32];
+        if (g_rename_ui && sel && g_hosts[i].used) {
+            // 编辑中：当前输入 + 光标
+            snprintf(line, sizeof(line), "%c%d %s_", sel ? '>' : ' ', i + 1, g_rename_buf);
+        } else if (g_hosts[i].used) {
+            char name[18];
+            formatHostDisplayName(i, name, sizeof(name));
+            snprintf(line, sizeof(line), "%c%d %s%s", sel ? '>' : ' ', i + 1, name,
                      linked ? " *" : "");
         } else {
             snprintf(line, sizeof(line), "%c%d (empty)", sel ? '>' : ' ', i + 1);
@@ -1787,6 +1991,8 @@ static void drawHidKeyboardApp(const bool full_init) {
         drawAppScreenHeaderAccent("Keyboard ", transportName(g_transport), APP_COLOR_LABEL);
     }
 
+    // 清屏后像素已丢，必须失效缓存，否则仍显示 paired 时会跳过绘制
+    g_drawn_link_status[0] = '\0';
     drawLinkStatus();
     g_drawn_slot_num = -2;
     drawSlotBadge();
@@ -1801,6 +2007,8 @@ void enterHidKeyboardApp() {
     g_active = true;
     g_help_visible = false;
     g_hosts_ui = false;
+    g_rename_ui = false;
+    g_rename_buf[0] = '\0';
     g_help_page = 0;
     g_fn_h_latched = false;
     g_fn_caps_latched = false;
@@ -1827,6 +2035,7 @@ void leaveHidKeyboardApp() {
     g_active = false;
     g_help_visible = false;
     g_hosts_ui = false;
+    g_rename_ui = false;
     clearBleReportQueue();
 
     // deinit 可能数秒：先清内容区提示，避免界面假死无反馈
@@ -1853,6 +2062,8 @@ void updateHidKeyboardApp() {
         if (g_ble_connected && g_hosts_exit_on_connect) {
             g_hosts_ui = false;
             g_hosts_exit_on_connect = false;
+            g_rename_ui = false;
+            g_rename_buf[0] = '\0';
             g_hosts_status[0] = '\0';
             drawHidKeyboardApp(true);
             return;

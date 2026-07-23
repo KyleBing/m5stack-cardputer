@@ -44,6 +44,7 @@ alwaysApply: false
 | 1–5 / 方向键 | 选槽 |
 | Enter / Space | 切换到该主机 |
 | n | 开放新配对（需空槽；会拒绝旧主机抢连） |
+| r | 重命名别名（Enter 保存，空名回退 MAC，` 取消） |
 | d | 删除槽位 bond |
 | p / h | 关闭列表 |
 

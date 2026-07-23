@@ -44,3 +44,13 @@
 4. 修改保存后写入 LittleFS；部分项（如反色、音量）会立即生效。
 
 配网完成后可按 `ESC` 回菜单，再进 [Mijia](./mijia) / [WiFi](./wifi) 使用。
+
+
+## 米家设备管理
+
+通过网页管理工具，还可以手动添加一些设备信息，设置一些设备分组。
+
+<img alt="web-config-mijia-devices" src="https://github.com/user-attachments/assets/63a85026-83ec-458f-b945-0bfe19dd0c49" />
+
+<img alt="web-config-mijia-device-group" src="https://github.com/user-attachments/assets/4a143e74-a2f3-445f-8ee7-0cc6ec53f8c5" />
+

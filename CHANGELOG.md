@@ -10,13 +10,15 @@
 
 ### 新增
 
+- **HID Keyboard 主机别名**：`Fn+p` 列表按 `r` 可给已配对槽位起名（最多 16 字，NVS `hidkb`）；列表 / 状态 / peer 行优先显示别名，空名回退 MAC
 - **文档截图总览**（`/apps/shots`）：无侧栏宽页平铺全部实拍，图下标注文件名；顶栏 / 功能目录可进
 - **文档实拍截图**：各 App 页替换旧占位图为 `app_*.png` 设备实拍（含 Time Pure、Options 分栏、HID 多屏等）
 - **HID Keyboard 多主机 BLE**：最多保存 5 台已配对主机；`Fn+p` 主机列表切换 / 新配对 / 删除；同时只连一台；BLE 名 `Cardputer KB`
-- **Keyboard 输入区**：右上角 2× 槽位号；peer 行仅显示 MAC
+- **Keyboard 输入区**：右上角 2× 槽位号；peer 行显示别名或 MAC
 
 ### 改进
 
+- **README / 文档品牌**：README 加 Sparks logo；文档首页 hero 用大 logo；Config 文档补充米家设备 / 分组网页管理截图
 - **Keyboard BLE 配对**：区分新配对 / 已知槽回连的认证时序；单边 bond 时提示 `plz forget on device` 并停广播拒连，避免坏密钥狂连
 - **Sleep 截图热键**：浅睡确认页 `Fn+s` 可截图，不再被 `s`→深睡抢走
 - **Keyboard 命名**：菜单短名 `KB`、标题 `Keyboard`；源码 / 文档 / 截图由 `hid-kb` 统一为 `hid-keyboard`
@@ -27,6 +29,7 @@
 
 ### 修复
 
+- **Keyboard paired 状态**：从主机列表切回输入界面时，清屏后未失效状态缓存，偶发不画绿色 `paired`；重绘前清空 `g_drawn_link_status`
 - **Keyboard 主机列表**：切换 / 新配对时的重连与白名单、断开竞态、列表闪烁；连接成功后自动关闭列表
 - **Header BLE 图标**：退出后 parked / 未初始化栈不再误显图标
 

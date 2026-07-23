@@ -6,7 +6,7 @@ hero:
   text: Cardputer ADV
   tagline: 纯英文固件。米家、时间工具、Cursor 信息。
   image:
-    src: /assets/logo_60.png
+    src: /assets/logo_big.png
     alt: Sparks
   actions:
     - theme: brand
