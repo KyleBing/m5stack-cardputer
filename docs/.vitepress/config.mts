@@ -17,10 +17,24 @@ const DOC_VERSION = `v${APP_VERSION}`
 // GitHub Pages 项目站 base 须与仓库名一致（非 ./，VitePress 不支持相对 base）
 const base = process.env.GITHUB_ACTIONS ? '/m5stack-cardputer-sparks/' : '/'
 
+const sharedTheme = {
+  logo: '/assets/logo_60.png',
+  siteTitle: 'Sparks',
+  socialLinks: [
+    { icon: 'github', link: 'https://github.com/KyleBing/m5stack-cardputer-sparks' },
+  ],
+  search: {
+    provider: 'local' as const,
+  },
+  footer: {
+    message: 'Sparks for M5Stack Cardputer',
+    copyright: `${DOC_VERSION} · ${APP_AUTHOR}`,
+  },
+}
+
 export default defineConfig({
   title: 'Sparks',
-  description: 'M5Stack Cardputer 多应用固件文档',
-  lang: 'zh-CN',
+  description: 'M5Stack Cardputer multi-app firmware docs',
   base,
   lastUpdated: true,
   cleanUrls: true,
@@ -50,115 +64,215 @@ export default defineConfig({
     },
   },
 
-  themeConfig: {
-    logo: '/assets/logo_60.png',
-    siteTitle: 'Sparks',
-    nav: [
-      { text: '首页', link: '/' },
-      { text: '功能目录', link: '/apps/' },
-      { text: '截图', link: '/apps/shots' },
-      { text: '快捷键', link: '/guide/shortcuts' },
-      {
-        text: DOC_VERSION,
-        items: [
-          { text: '入门', link: '/guide/getting-started' },
-          { text: 'CHANGELOG', link: 'https://github.com/KyleBing/m5stack-cardputer-sparks/blob/main/CHANGELOG.md' },
+  locales: {
+    root: {
+      label: '简体中文',
+      lang: 'zh-CN',
+      description: 'M5Stack Cardputer 多应用固件文档',
+      themeConfig: {
+        ...sharedTheme,
+        nav: [
+          { text: '首页', link: '/' },
+          { text: '功能目录', link: '/apps/' },
+          { text: '截图', link: '/apps/shots' },
+          { text: '快捷键', link: '/guide/shortcuts' },
+          {
+            text: DOC_VERSION,
+            items: [
+              { text: '入门', link: '/guide/getting-started' },
+              { text: 'CHANGELOG', link: 'https://github.com/KyleBing/m5stack-cardputer-sparks/blob/main/CHANGELOG.md' },
+            ],
+          },
         ],
-      },
-    ],
-
-    sidebar: [
-      {
-        text: '开始',
-        items: [
-          { text: '简介', link: '/' },
-          { text: '入门', link: '/guide/getting-started' },
-          { text: '全局快捷键', link: '/guide/shortcuts' },
+        sidebar: [
+          {
+            text: '开始',
+            items: [
+              { text: '简介', link: '/' },
+              { text: '入门', link: '/guide/getting-started' },
+              { text: '全局快捷键', link: '/guide/shortcuts' },
+            ],
+          },
+          {
+            text: '功能目录',
+            items: [
+              { text: '总览', link: '/apps/' },
+              { text: '截图总览', link: '/apps/shots' },
+            ],
+          },
+          {
+            text: '米家控制',
+            items: [
+              { text: 'Mijia 米家', link: '/apps/mijia' },
+              { text: '米家设备 Token 获取', link: '/apps/mijia-token' },
+              { text: 'Infrared 红外', link: '/apps/infrared' },
+            ],
+          },
+          {
+            text: '时间与电源',
+            items: [
+              { text: 'Time 时间', link: '/apps/time' },
+              { text: 'Battery 电池', link: '/apps/battery' },
+              { text: 'Sleep 睡眠', link: '/apps/sleep' },
+              { text: 'Cursor 用量', link: '/apps/cursor' },
+              { text: 'Keyboard', link: '/apps/hid-keyboard' },
+              { text: 'Morse 摩斯', link: '/apps/morse' },
+            ],
+          },
+          {
+            text: '系统与信息',
+            items: [
+              { text: 'Config 配网', link: '/apps/config' },
+              { text: 'WiFi', link: '/apps/wifi' },
+              { text: 'BLE', link: '/apps/ble' },
+              { text: 'Options 选项', link: '/apps/options' },
+              { text: 'Info 信息', link: '/apps/info' },
+              { text: 'Version 版本', link: '/apps/version' },
+            ],
+          },
+          {
+            text: '硬件调试与演示',
+            items: [
+              { text: 'IMU', link: '/apps/imu' },
+              { text: 'RGB LED', link: '/apps/rgb-led' },
+              { text: 'Mic 麦克风', link: '/apps/mic' },
+              { text: 'Display 显示', link: '/apps/display' },
+              { text: 'Icons 图标', link: '/apps/icons' },
+              { text: 'Font 字体', link: '/apps/font' },
+              { text: 'I2C 扫描', link: '/apps/i2c' },
+            ],
+          },
+          {
+            text: '开发',
+            items: [
+              { text: '图片处理与烘焙', link: '/dev/images' },
+              { text: '内存说明', link: '/dev/memory' },
+            ],
+          },
         ],
+        outline: {
+          label: '本页目录',
+          level: [2, 3],
+        },
+        docFooter: {
+          prev: '上一篇',
+          next: '下一篇',
+        },
+        lastUpdated: {
+          text: '最后更新',
+        },
+        returnToTopLabel: '返回顶部',
+        sidebarMenuLabel: '菜单',
+        darkModeSwitchLabel: '主题',
+        lightModeSwitchTitle: '切换到浅色',
+        darkModeSwitchTitle: '切换到深色',
+        langMenuLabel: '切换语言',
       },
-      {
-        text: '功能目录',
-        items: [
-          { text: '总览', link: '/apps/' },
-          { text: '截图总览', link: '/apps/shots' },
-        ],
-      },
-      {
-        text: '米家控制',
-        items: [
-          { text: 'Mijia 米家', link: '/apps/mijia' },
-          { text: '米家设备 Token 获取', link: '/apps/mijia-token' },
-          { text: 'Infrared 红外', link: '/apps/infrared' },
-        ],
-      },
-      {
-        text: '时间与电源',
-        items: [
-          { text: 'Time 时间', link: '/apps/time' },
-          { text: 'Battery 电池', link: '/apps/battery' },
-          { text: 'Sleep 睡眠', link: '/apps/sleep' },
-          { text: 'Cursor 用量', link: '/apps/cursor' },
-          { text: 'Keyboard', link: '/apps/hid-keyboard' },
-          { text: 'Morse 摩斯', link: '/apps/morse' },
-        ],
-      },
-      {
-        text: '系统与信息',
-        items: [
-          { text: 'Config 配网', link: '/apps/config' },
-          { text: 'WiFi', link: '/apps/wifi' },
-          { text: 'BLE', link: '/apps/ble' },
-          { text: 'Options 选项', link: '/apps/options' },
-          { text: 'Info 信息', link: '/apps/info' },
-          { text: 'Version 版本', link: '/apps/version' },
-        ],
-      },
-      {
-        text: '硬件调试与演示',
-        items: [
-          { text: 'IMU', link: '/apps/imu' },
-          { text: 'RGB LED', link: '/apps/rgb-led' },
-          { text: 'Mic 麦克风', link: '/apps/mic' },
-          { text: 'Display 显示', link: '/apps/display' },
-          { text: 'Icons 图标', link: '/apps/icons' },
-          { text: 'Font 字体', link: '/apps/font' },
-          { text: 'I2C 扫描', link: '/apps/i2c' },
-        ],
-      },
-      {
-        text: '开发',
-        items: [
-          { text: '图片处理与烘焙', link: '/dev/images' },
-          { text: '内存说明', link: '/dev/memory' },
-        ],
-      },
-    ],
-
-    socialLinks: [
-      { icon: 'github', link: 'https://github.com/KyleBing/m5stack-cardputer-sparks' },
-    ],
-
-    search: {
-      provider: 'local',
     },
 
-    outline: {
-      label: '本页目录',
-      level: [2, 3],
-    },
-
-    docFooter: {
-      prev: '上一篇',
-      next: '下一篇',
-    },
-
-    lastUpdated: {
-      text: '最后更新',
-    },
-
-    footer: {
-      message: 'Sparks for M5Stack Cardputer',
-      copyright: `${DOC_VERSION} · ${APP_AUTHOR}`,
+    en: {
+      label: 'English',
+      lang: 'en-US',
+      description: 'M5Stack Cardputer multi-app firmware docs',
+      themeConfig: {
+        ...sharedTheme,
+        nav: [
+          { text: 'Home', link: '/en/' },
+          { text: 'Apps', link: '/en/apps/' },
+          { text: 'Screenshots', link: '/en/apps/shots' },
+          { text: 'Shortcuts', link: '/en/guide/shortcuts' },
+          {
+            text: DOC_VERSION,
+            items: [
+              { text: 'Getting Started', link: '/en/guide/getting-started' },
+              { text: 'CHANGELOG', link: 'https://github.com/KyleBing/m5stack-cardputer-sparks/blob/main/CHANGELOG.md' },
+            ],
+          },
+        ],
+        sidebar: [
+          {
+            text: 'Start',
+            items: [
+              { text: 'Overview', link: '/en/' },
+              { text: 'Getting Started', link: '/en/guide/getting-started' },
+              { text: 'Global Shortcuts', link: '/en/guide/shortcuts' },
+            ],
+          },
+          {
+            text: 'App Catalog',
+            items: [
+              { text: 'Overview', link: '/en/apps/' },
+              { text: 'Screenshot Gallery', link: '/en/apps/shots' },
+            ],
+          },
+          {
+            text: 'Mijia Control',
+            items: [
+              { text: 'Mijia', link: '/en/apps/mijia' },
+              { text: 'Mijia Device Tokens', link: '/en/apps/mijia-token' },
+              { text: 'Infrared', link: '/en/apps/infrared' },
+            ],
+          },
+          {
+            text: 'Time & Power',
+            items: [
+              { text: 'Time', link: '/en/apps/time' },
+              { text: 'Battery', link: '/en/apps/battery' },
+              { text: 'Sleep', link: '/en/apps/sleep' },
+              { text: 'Cursor Usage', link: '/en/apps/cursor' },
+              { text: 'Keyboard', link: '/en/apps/hid-keyboard' },
+              { text: 'Morse', link: '/en/apps/morse' },
+            ],
+          },
+          {
+            text: 'System & Info',
+            items: [
+              { text: 'Config', link: '/en/apps/config' },
+              { text: 'WiFi', link: '/en/apps/wifi' },
+              { text: 'BLE', link: '/en/apps/ble' },
+              { text: 'Options', link: '/en/apps/options' },
+              { text: 'Info', link: '/en/apps/info' },
+              { text: 'Version', link: '/en/apps/version' },
+            ],
+          },
+          {
+            text: 'Hardware Demos',
+            items: [
+              { text: 'IMU', link: '/en/apps/imu' },
+              { text: 'RGB LED', link: '/en/apps/rgb-led' },
+              { text: 'Mic', link: '/en/apps/mic' },
+              { text: 'Display', link: '/en/apps/display' },
+              { text: 'Icons', link: '/en/apps/icons' },
+              { text: 'Font', link: '/en/apps/font' },
+              { text: 'I2C Scan', link: '/en/apps/i2c' },
+            ],
+          },
+          {
+            text: 'Development',
+            items: [
+              { text: 'Images & RGB565 Bake', link: '/en/dev/images' },
+              { text: 'Memory Notes', link: '/en/dev/memory' },
+            ],
+          },
+        ],
+        outline: {
+          label: 'On this page',
+          level: [2, 3],
+        },
+        docFooter: {
+          prev: 'Previous',
+          next: 'Next',
+        },
+        lastUpdated: {
+          text: 'Last updated',
+        },
+        returnToTopLabel: 'Return to top',
+        sidebarMenuLabel: 'Menu',
+        darkModeSwitchLabel: 'Theme',
+        lightModeSwitchTitle: 'Switch to light',
+        darkModeSwitchTitle: 'Switch to dark',
+        langMenuLabel: 'Change language',
+      },
     },
   },
 })

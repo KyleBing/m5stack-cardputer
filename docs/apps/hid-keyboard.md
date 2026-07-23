@@ -22,6 +22,7 @@
 
 ![hid-hosts-empty](/shots/app_hidkeyboard_001.png)
 ![hid-hosts](/shots/app_hidkeyboard_004.png)
+![hid-hosts-rename](/shots/app_hidkeyboard.png)
 
 </div>
 
