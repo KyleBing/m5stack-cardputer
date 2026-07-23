@@ -3440,6 +3440,15 @@ void leaveMijiaApp() {
         delay(10);
     }
     freeMijiaOverviewUi();
+    // 退出后完整释放 BLE（仅停扫会留下协议栈，额外耗电）；deinit 可能稍慢
+    if (isBleStackReady()) {
+        clearAppContentArea();
+        M5Cardputer.Display.setTextSize(2);
+        M5Cardputer.Display.setTextColor(APP_COLOR_HINT, BLACK);
+        M5Cardputer.Display.drawCenterString("Exiting.", M5Cardputer.Display.width() / 2,
+                                             APP_CONTENT_Y + 36);
+        resetBleStackFully();
+    }
     // 立刻关射频
     releaseConfigWifi();
 }

@@ -21,6 +21,7 @@
 - **Sleep 截图热键**：浅睡确认页 `Fn+s` 可截图，不再被 `s`→深睡抢走
 - **Keyboard 命名**：菜单短名 `KB`、标题 `Keyboard`；源码 / 文档 / 截图由 `hid-kb` 统一为 `hid-keyboard`
 - **Keyboard 退出**：BtnGO 退出前清内容区显示 `Exiting.`，再完整 `deinit` 释放 BLE 内存
+- **米家退出**：离开 App 时若 BLE 仍开着，提示 `Exiting.` 并 `deinit` 协议栈，避免仅停扫后常驻耗电
 - **米家炸锅倒计时**：每秒只刷状态行右侧剩余时间，避免整栏重绘闪烁
 - **倒计时到点**：`Time up` / `x OK` 贴在大字下方，不再占底栏
 
