@@ -12,7 +12,8 @@ static bool s_app_header_draw_divider = true;
 static bool s_app_header_include_battery = false;
 
 static int headerStatusIconY(const int icon_h) {
-    return (APP_HEADER_H - icon_h) / 2;
+    // 图标几何中心对齐 header 垂直中线（避免奇偶高度差 1px）
+    return APP_HEADER_H / 2 - icon_h / 2;
 }
 
 static int getMenuStatusRightX(const int screen_w, const int page_count) {

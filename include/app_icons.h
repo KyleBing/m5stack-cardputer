@@ -34,10 +34,11 @@ void drawSignalBars(int x, int y, int rssi, uint16_t color = 0xFFFF);
 
 // ===== WiFi 扇形圆图标（header） =====
 static constexpr int WIFI_INNER_SIDE = 2;
-static constexpr int WIFI_RING_GAP = 2;
+static constexpr int WIFI_RING_GAP = 2;  // 弧间距（不含线宽）
 static constexpr int WIFI_RING_COUNT = 3;
-// 内块 2px + 每层间隔 2px + 线宽 1px → 弧半径 4 / 7 / 10，外廓 11×11
-static constexpr int ICON_WIFI_SIDE = WIFI_INNER_SIDE + 3 * WIFI_RING_COUNT;
+static constexpr int WIFI_RING_STEP = WIFI_RING_GAP + 1;  // 间隔 + 线宽 1px
+// 内块 2px + 每层 3px → 弧半径 4 / 7 / 10，外廓 11×11（内容贴边）
+static constexpr int ICON_WIFI_SIDE = WIFI_INNER_SIDE + WIFI_RING_STEP * WIFI_RING_COUNT;
 static constexpr int ICON_WIFI_W = ICON_WIFI_SIDE;
 static constexpr int ICON_WIFI_H = ICON_WIFI_SIDE;
 
@@ -45,7 +46,7 @@ void drawIconWifi(int x, int y, int rssi, uint16_t color = 0xFFFF);
 
 // ===== 蓝牙 =====
 static constexpr int ICON_BLE_W = 8;
-static constexpr int ICON_BLE_H = 14;
+static constexpr int ICON_BLE_H = 13;  // 去空边后内容高（原 14 含顶 1px 留白）
 
 void drawIconBle(int x, int y, uint16_t color = 0xFFFF);
 

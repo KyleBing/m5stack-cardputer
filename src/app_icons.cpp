@@ -160,7 +160,8 @@ void drawIconWifi(const int x, const int y, const int rssi, const uint16_t color
                                  color);
 
     for (int i = 0; i < WIFI_RING_COUNT; i++) {
-        const int radius = WIFI_INNER_SIDE + 3 * (i + 1) - 1;
+        // 半径：内块外缘起算，每层 WIFI_RING_STEP
+        const int radius = WIFI_INNER_SIDE + WIFI_RING_STEP * (i + 1) - 1;
         const bool lit = level >= i + 2;
         drawWifiQuarterArc(cx, cy, radius, lit ? color : DARKGREY);
     }
@@ -169,31 +170,27 @@ void drawIconWifi(const int x, const int y, const int rssi, const uint16_t color
 // ===== 蓝牙 =====
 
 void drawIconBle(const int x, const int y, const uint16_t color) {
-    // 设定基准坐标
-    // 高度 y 到 y+14，宽度 x 到 x+9
-    const int mid = x + 4;         // 中心纵轴
-    const int left = x + 1;        // 左侧边缘
-    const int right = x + 8;       // 右侧边缘
-    const int top = y + 1;         // 顶部留白
-    const int center = y + 7;      // 水平中心线
-    const int bottom = y + 13;     // 底部
+    // 原字形整体左上移 1px，去掉空边；几何不拉伸
+    // 原：left=x+1..right=x+8，top=y+1..bottom=y+13 → 现贴 x..x+7，y..y+12
+    const int mid = x + 3;
+    const int left = x;
+    const int right = x + 7;
+    const int top = y;
+    const int center = y + 6;
+    const int bottom = y + 12;
 
-    // 1. 绘制核心竖线 (中心轴)
+    // 中心竖线
     M5Cardputer.Display.drawLine(mid, top, mid, bottom, color);
 
-    // 2. 绘制右侧主菱形（两组折线）
-    // 上半部分右侧
-    M5Cardputer.Display.drawLine(mid, top + 1, right, y + 4, color);
-    M5Cardputer.Display.drawLine(right, y + 4, mid, center, color);
-    // 下半部分右侧
-    M5Cardputer.Display.drawLine(mid, center, right, y + 10, color);
-    M5Cardputer.Display.drawLine(right, y + 10, mid, bottom - 1, color);
+    // 右侧菱形折线
+    M5Cardputer.Display.drawLine(mid, top + 1, right, y + 3, color);
+    M5Cardputer.Display.drawLine(right, y + 3, mid, center, color);
+    M5Cardputer.Display.drawLine(mid, center, right, y + 9, color);
+    M5Cardputer.Display.drawLine(right, y + 9, mid, bottom - 1, color);
 
-    // 3. 绘制左侧装饰线（对应右侧的折角）
-    // 上半部分左侧
-    M5Cardputer.Display.drawLine(left, y + 4, mid, center, color);
-    // 下半部分左侧
-    M5Cardputer.Display.drawLine(mid, center, left, y + 10, color);
+    // 左侧装饰折线
+    M5Cardputer.Display.drawLine(left, y + 3, mid, center, color);
+    M5Cardputer.Display.drawLine(mid, center, left, y + 9, color);
 }
 
 // ===== 充电闪电 =====

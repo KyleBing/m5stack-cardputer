@@ -382,6 +382,7 @@ static void drawWifiListScreen() {
 
         // 右侧：扇形圆信号图标贴边，RSSI 数值在其左侧
         const int signal_x = content_right - ICON_WIFI_W;
+        // 行高 18、图标 11：垂直约 +3
         drawIconWifi(signal_x, row_y + 3, rssi, WHITE);
 
         char rssi_buf[8];
