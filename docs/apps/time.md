@@ -6,11 +6,27 @@
 
 ## 截图
 
-![time-uptime](/shots/time-uptime.png)
-![time-clock](/shots/time-clock.png)
-![time-countdown](/shots/time-countdown.png)
-![time-stopwatch](/shots/time-stopwatch.png)
-![time-help](/shots/time-help.png)
+**Uptime / Clock / Countdown / Stopwatch**
+
+<div class="shot-row">
+
+![time-uptime](/shots/app_time_up.png)
+![time-clock](/shots/app_time_ntp.png)
+![time-countdown](/shots/app_time_cd.png)
+![time-stopwatch](/shots/app_time_sw.png)
+
+</div>
+
+**Pure 纯净显示**
+
+<div class="shot-row">
+
+![time-uptime-pure](/shots/app_time_up_pure.png)
+![time-clock-pure](/shots/app_time_ntp_pure.png)
+![time-countdown-pure](/shots/app_time_cd_pure.png)
+![time-stopwatch-pure](/shots/app_time_sw_pure.png)
+
+</div>
 
 ## 快捷键
 

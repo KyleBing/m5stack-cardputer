@@ -6,10 +6,29 @@
 
 ## 截图
 
-![wifi-connected](/shots/wifi-connected.png)
-![wifi-scan](/shots/wifi-scan.png)
-![wifi-password](/shots/wifi-password.png)
-![wifi-help](/shots/wifi-help.png)
+**已连接**
+
+<div class="shot-row">
+
+![wifi-connected](/shots/app_wifi_001.png)
+
+</div>
+
+**已保存档案**
+
+<div class="shot-row">
+
+![wifi-saved](/shots/app_wifi_002.png)
+
+</div>
+
+**Help**
+
+<div class="shot-row">
+
+![wifi-help](/shots/app_wifi_003.png)
+
+</div>
 
 ## 快捷键
 

@@ -6,7 +6,11 @@
 
 ## 截图
 
-![morse-main](/shots/morse-main.png)
+<div class="shot-row">
+
+![morse](/shots/app_morse_001.png)
+
+</div>
 
 ## 快捷键
 

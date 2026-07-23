@@ -8,9 +8,15 @@
 
 ## 截图
 
-![config-ap](/shots/config-ap.png)
-![config-lan](/shots/config-lan.png)
-![config-help](/shots/config-help.png)
+**LAN / AP / Help**
+
+<div class="shot-row">
+
+![config-lan](/shots/app_config_001.png)
+![config-ap](/shots/app_config_002.png)
+![config-help](/shots/app_config_003.png)
+
+</div>
 
 ## 快捷键
 

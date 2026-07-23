@@ -6,34 +6,37 @@
 
 ## 截图
 
-::: tip 截图预留
-将截图放到 `docs/public/shots/`，文件名如下。补全后刷新文档即可显示。
-:::
+**详情页（温湿度传感器）**
 
-**详情页**
+<div class="shot-row">
 
-![mijia-detail](/shots/mijia-detail.png)
+![mijia-detail](/shots/app_mijia_001.png)
 
-**列表**
+</div>
 
-![mijia-list](/shots/mijia-list.png)
+**列表 / 宫格 / 编组**
 
-**宫格**
+<div class="shot-row">
 
-![mijia-grid](/shots/mijia-grid.png)
+![mijia-list](/shots/app_mijia_list.png)
+![mijia-grid](/shots/app_mijia_grid.png)
+![mijia-group](/shots/app_mijia_group.png)
 
-**编组**
+</div>
 
-![mijia-group](/shots/mijia-group.png)
 
-**快捷选择 / 编辑热键**
+**设备详情示例**
 
-![mijia-quick](/shots/mijia-quick.png)
-![mijia-hotkey](/shots/mijia-hotkey.png)
+<div class="shot-row">
 
-**帮助**
+![mijia-light-on](/shots/app_mijia_light_on.png)
+![mijia-light-off](/shots/app_mijia_light_off.png)
+![mijia-fan-on](/shots/app_mijia_fan_on.png)
+![mijia-lamp-on](/shots/app_mijia_lamp_on.png)
+![mijia-fryer-on](/shots/app_mijia_fryer_on.png)
+![mijia-fryer-off](/shots/app_mijia_fryer_off.png)
 
-![mijia-help](/shots/mijia-help.png)
+</div>
 
 ## 快捷键
 
@@ -221,6 +224,8 @@ BLE **禁止在后台 task 里扫描**（会闪退），由主循环非阻塞处
 
 固件按 `model` 字符串分类（见 `mijiaClassifyModel`）。下表为**控制能力**分类；未列到的型号会落入 GENERIC（仍可开关，若图标能匹配则显示对应图标）。
 
+<div class="device-type-table">
+
 | 类型 | 匹配规则（示例） | 能力概要 | 图标 |
 |------|------------------|----------|------|
 | LIGHT | `yeelink.light.*` | 开关、亮度；部分 CT / 色相 | 见下 |
@@ -232,6 +237,8 @@ BLE **禁止在后台 task 里扫描**（会闪退），由主循环非阻塞处
 | SENSOR_HT | 含 `sensor_ht` 或 `.ht.` | BLE 温湿度 | ![sensor_ht](/assets/icon/device/sensor_ht.png) |
 | BLE_EVENT | 含 `.motion.` / `.remote.` | BLE 事件设备 | （默认图标） |
 | GENERIC | 其它 | 基础开关 | ![default](/assets/icon/device/default.png) |
+
+</div>
 
 ### 灯型号补充
 
@@ -248,6 +255,8 @@ BLE **禁止在后台 task 里扫描**（会闪退），由主循环非阻塞处
 
 图标按 model **子串**匹配（长名优先），资源来自固件 `data/icon/device/`：
 
+<div class="device-icon-table">
+
 | basename | 离 | 开 | 典型 model 片段 |
 |----------|----|----|-----------------|
 | `airpurifier` | ![off](/assets/icon/device/airpurifier.png) | ![on](/assets/icon/device/airpurifier_active.png) | airpurifier |
@@ -263,5 +272,7 @@ BLE **禁止在后台 task 里扫描**（会闪退），由主循环非阻塞处
 | `juicer` | ![off](/assets/icon/device/juicer.png) | ![on](/assets/icon/device/juicer_active.png) | juicer |
 | `wifispeaker` | ![off](/assets/icon/device/wifispeaker.png) | ![on](/assets/icon/device/wifispeaker_active.png) | wifispeaker |
 | `default` | ![off](/assets/icon/device/default.png) | ![on](/assets/icon/device/default_active.png) | 未匹配 |
+
+</div>
 
 宫格 / 列表另有 `*_25w.png` 小图；设备上优先使用同名 `.rgb565` 烘焙文件以加速绘制。

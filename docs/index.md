@@ -18,6 +18,9 @@ hero:
     - theme: alt
       text: 全局快捷键
       link: /guide/shortcuts
+    - theme: alt
+      text: 固件截图
+      link: /apps/shots
 
 features:
   - title: 米家控制
@@ -32,4 +35,4 @@ features:
 
 ## 关于本版本文档
 
-本文档对应固件 **v1.01**（`2026.07.23`），覆盖主菜单全部应用的简介、截图预留位、快捷键与使用说明。
+本文档对应固件 **v1.01**（`2026.07.23`），覆盖主菜单全部应用的简介、实机截图、快捷键与使用说明。

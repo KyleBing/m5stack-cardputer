@@ -2339,10 +2339,20 @@ void loop() {
             showMenu();
             return;
         }
-        if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-            const String key = getPressedKey();
-            if (key == "s" && sleepPhase == SleepPhase::PROMPT_LIGHT) {
-                switchToDeepSleepPrompt();
+        if (M5Cardputer.Keyboard.isChange()) {
+            // 与其它界面一致：Fn+s 截图优先，不交给 sleep 的 s→深睡
+            if (tryHandleScreenshotHotkey()) {
+                return;
+            }
+            if (M5Cardputer.Keyboard.isPressed()) {
+                const Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+                // Fn 按下时不消费字母键（留给全局热键）
+                if (!status.fn) {
+                    const String key = getPressedKey();
+                    if (key == "s" && sleepPhase == SleepPhase::PROMPT_LIGHT) {
+                        switchToDeepSleepPrompt();
+                    }
+                }
             }
         }
         return;

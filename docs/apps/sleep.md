@@ -6,8 +6,12 @@
 
 ## 截图
 
-![sleep-light](/shots/sleep-light.png)
-![sleep-deep](/shots/sleep-deep.png)
+<div class="shot-row">
+
+![sleep-light](/shots/app_sleep_light.png)
+![sleep-deep](/shots/app_sleep_deep.png)
+
+</div>
 
 ## 快捷键
 

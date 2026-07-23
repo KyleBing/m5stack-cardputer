@@ -6,11 +6,17 @@
 
 ## 截图
 
-![info-memory](/shots/info-memory.png)
-![info-chip](/shots/info-chip.png)
-![info-fw](/shots/info-fw.png)
-![info-net](/shots/info-net.png)
-![info-run](/shots/info-run.png)
+**Memory / Chip / Firmware / Network / Runtime**
+
+<div class="shot-row">
+
+![info-memory](/shots/app_info_001.png)
+![info-chip](/shots/app_info_002.png)
+![info-fw](/shots/app_info_003.png)
+![info-net](/shots/app_info_004.png)
+![info-run](/shots/app_info_005.png)
+
+</div>
 
 ## 快捷键
 

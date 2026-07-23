@@ -27,9 +27,10 @@ export default defineConfig({
     nav: [
       { text: '首页', link: '/' },
       { text: '功能目录', link: '/apps/' },
+      { text: '截图', link: '/apps/shots' },
       { text: '快捷键', link: '/guide/shortcuts' },
       {
-        text: 'v1.0.0',
+        text: 'v1.0.1',
         items: [
           { text: '入门', link: '/guide/getting-started' },
           { text: 'CHANGELOG', link: 'https://github.com/KyleBing/m5stack-cardputer-sparks/blob/main/CHANGELOG.md' },
@@ -50,6 +51,7 @@ export default defineConfig({
         text: '功能目录',
         items: [
           { text: '总览', link: '/apps/' },
+          { text: '截图总览', link: '/apps/shots' },
         ],
       },
       {

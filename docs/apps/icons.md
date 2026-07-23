@@ -6,8 +6,12 @@
 
 ## 截图
 
-![icons-page](/shots/icons-page.png)
-![icons-help](/shots/icons-help.png)
+<div class="shot-row">
+
+![icons](/shots/app_icons.png)
+![icons-ir-fan](/shots/app_icons_001.png)
+
+</div>
 
 ## 快捷键
 

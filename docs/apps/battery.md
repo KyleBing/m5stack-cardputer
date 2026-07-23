@@ -6,7 +6,11 @@
 
 ## 截图
 
-![battery-main](/shots/battery-main.png)
+<div class="shot-row">
+
+![battery](/shots/app_battery.png)
+
+</div>
 
 ## 快捷键
 

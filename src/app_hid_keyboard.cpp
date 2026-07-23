@@ -6,6 +6,7 @@
 
 #include <BLEDevice.h>
 #include <BLEHIDDevice.h>
+#include <BLESecurity.h>
 #include <BLEServer.h>
 #include <HIDTypes.h>
 #include <Preferences.h>
@@ -69,7 +70,7 @@ static HidTransport g_transport = HidTransport::BLE;
 static bool g_usb_ready = false;
 static bool g_usb_inited = false;
 static bool g_ble_ready = false;
-static bool g_ble_connected = false;
+static bool g_ble_connected = false;  // 认证成功后才为 true（可发 HID）
 static bool g_pairing_open = false;  // 只要新主机；已配对的连上会踢掉
 static int g_prefer_slot = -1;       // >=0：切换中，只接受该槽回连
 static uint16_t g_active_conn_id = 0xFFFF;  // 当前认可的连接；其它连接的 disconnect 忽略
@@ -81,10 +82,32 @@ static char g_peer_addr[18] = "";
 // 需能装下 "#1 AA:BB:CC:DD:EE:FF"；过短会导致每帧 strcmp 失败而狂闪
 static char g_drawn_peer[28] = "";
 static int g_drawn_slot_num = -2;  // 右上角槽号缓存；-1=无，-2=需重绘
+static char g_drawn_link_status[24] = "";  // 内容区状态文案缓存
 static BleHostSlot g_hosts[kBleHostSlots];
 static int g_active_slot = -1;  // 当前偏好主机槽
 static int g_sel_slot = 0;      // 列表光标
 static char g_hosts_status[36] = "";
+static char g_auth_hint[28] = "";  // 认证失败提示（如主机端需先忘掉）
+static int g_auth_fail_streak = 0;
+// 单边 bond：停广播并拒连，直到用户按 n 重新开放配对
+static bool g_stale_block = false;
+static bool g_has_blocked_bda = false;
+static esp_bd_addr_t g_blocked_bda{};
+// AUTH 有时早于 onConnect（已绑定回连）；先记下成功地址
+static bool g_early_auth_ok = false;
+static esp_bd_addr_t g_early_auth_bda{};
+
+// 链路已接上、等待 SMP 认证；认证前不写槽、不显示 paired
+struct PendingBleConn {
+    bool active = false;
+    bool is_new = false;  // 新配对（无已有槽）
+    int slot = -1;        // 已知 / prefer 槽；新配对为 -1
+    uint16_t conn_id = 0xFFFF;
+    uint8_t addr_type = BLE_ADDR_TYPE_PUBLIC;
+    esp_bd_addr_t bda{};
+    uint32_t since_ms = 0;
+};
+static PendingBleConn g_pending;
 
 static USBHIDKeyboard g_usb_kb;
 static usb_phy_handle_t g_otg_phy = nullptr;
@@ -420,20 +443,133 @@ static void configureBleAdvertising(const bool /*unused_open*/) {
     adv->start();
 }
 
-static void rememberConnectedPeer(esp_ble_gatts_cb_param_t* param) {
-    if (param == nullptr) {
-        return;
-    }
-    formatPeerAddr(param->connect.remote_bda, g_peer_addr, sizeof(g_peer_addr));
-    addOrTouchHostSlot(param->connect.remote_bda, param->connect.ble_addr_type);
+static void clearPendingConn() {
+    g_pending.active = false;
+    g_pending.is_new = false;
+    g_pending.slot = -1;
+    g_pending.conn_id = 0xFFFF;
 }
 
-// 标记已接受的连接：停广播，避免旧主机再挤进来把状态冲掉
-static void acceptBleConnection(esp_ble_gatts_cb_param_t* param) {
-    g_ble_connected = true;
+static bool isBlockedPeer(const esp_bd_addr_t addr) {
+    return g_has_blocked_bda && sameBdAddr(g_blocked_bda, addr);
+}
+
+static void clearStaleHostBlock() {
+    g_stale_block = false;
+    g_has_blocked_bda = false;
+    memset(g_blocked_bda, 0, sizeof(g_blocked_bda));
+}
+
+static void clearEarlyAuth() {
+    g_early_auth_ok = false;
+    memset(g_early_auth_bda, 0, sizeof(g_early_auth_bda));
+}
+
+// 电脑仍持旧配对狂连：停广播 + 记下地址，UI 稳定停在 plz forget on device
+static void engageStaleHostBlock(const esp_bd_addr_t bda) {
+    memcpy(g_blocked_bda, bda, 6);
+    g_has_blocked_bda = true;
+    g_stale_block = true;
+    g_pairing_open = false;
+    g_prefer_slot = -1;
+    clearEarlyAuth();
+    if (g_ble_server != nullptr) {
+        BLEDevice::stopAdvertising();
+    }
+}
+
+static void commitPendingConnection();  // 下方定义
+
+// 已知主机：链路起来即可用（不等 AUTH，避免 AUTH 先于 Connect 时卡死）
+// 新配对：只 stage，等认证成功后再写槽
+static void stageBleConnection(esp_ble_gatts_cb_param_t* param, const int slot,
+                               const bool is_new) {
+    g_pending.active = true;
+    g_pending.is_new = is_new;
+    g_pending.slot = slot;
+    g_pending.conn_id = param->connect.conn_id;
+    g_pending.addr_type = param->connect.ble_addr_type;
+    memcpy(g_pending.bda, param->connect.remote_bda, 6);
+    g_pending.since_ms = millis();
+    formatPeerAddr(g_pending.bda, g_peer_addr, sizeof(g_peer_addr));
     g_active_conn_id = param->connect.conn_id;
-    g_hosts_status[0] = '\0';
+    g_ble_connected = false;
     BLEDevice::stopAdvertising();
+
+    // AUTH 已先完成：直接提交
+    if (g_early_auth_ok && sameBdAddr(g_early_auth_bda, param->connect.remote_bda)) {
+        clearEarlyAuth();
+        commitPendingConnection();
+        return;
+    }
+
+    // 已配对槽回连：立即提交，不依赖 AUTH 回调顺序
+    if (!is_new && slot >= 0) {
+        clearEarlyAuth();
+        commitPendingConnection();
+        return;
+    }
+
+    // 新配对：拉起加密，等 onAuthenticationComplete
+    esp_ble_set_encryption(param->connect.remote_bda, ESP_BLE_SEC_ENCRYPT);
+}
+
+static void commitPendingConnection() {
+    if (!g_pending.active) {
+        g_ble_connected = true;
+        return;
+    }
+    if (g_pending.slot >= 0 && g_hosts[g_pending.slot].used) {
+        memcpy(g_hosts[g_pending.slot].last_conn, g_pending.bda, 6);
+        g_hosts[g_pending.slot].has_last_conn = true;
+        g_hosts[g_pending.slot].addr_type = g_pending.addr_type;
+        g_active_slot = g_pending.slot;
+        g_pairing_open = false;
+        g_prefer_slot = -1;
+        saveHostSlots();
+    } else {
+        addOrTouchHostSlot(g_pending.bda, g_pending.addr_type);
+    }
+    formatPeerAddr(g_pending.bda, g_peer_addr, sizeof(g_peer_addr));
+    g_ble_connected = true;
+    g_hosts_status[0] = '\0';
+    g_auth_hint[0] = '\0';
+    g_auth_fail_streak = 0;
+    clearStaleHostBlock();
+    clearEarlyAuth();
+    clearPendingConn();
+}
+
+static void handleAuthFailure(const esp_bd_addr_t bda) {
+    // 清掉半成品 / 不匹配的 bond，避免反复用坏密钥握手
+    esp_bd_addr_t addr{};
+    memcpy(addr, bda, 6);
+    esp_ble_remove_bond_device(addr);
+    g_auth_fail_streak++;
+    clearEarlyAuth();
+
+    // 仅新配对失败才提示 forget；已知槽回连失败不删槽、不停全部广播
+    if (g_pending.active && g_pending.is_new) {
+        snprintf(g_auth_hint, sizeof(g_auth_hint), "plz forget on device");
+        snprintf(g_hosts_status, sizeof(g_hosts_status), "plz forget on device");
+        engageStaleHostBlock(addr);
+    } else if (g_pending.active && g_pending.slot >= 0) {
+        snprintf(g_auth_hint, sizeof(g_auth_hint), "auth fail");
+        snprintf(g_hosts_status, sizeof(g_hosts_status), "auth fail");
+        // 只拉黑该地址，保留其它主机回连
+        memcpy(g_blocked_bda, addr, 6);
+        g_has_blocked_bda = true;
+    } else {
+        snprintf(g_auth_hint, sizeof(g_auth_hint), "plz forget on device");
+        snprintf(g_hosts_status, sizeof(g_hosts_status), "plz forget on device");
+        engageStaleHostBlock(addr);
+    }
+
+    if (g_ble_server != nullptr && g_pending.conn_id != 0xFFFF) {
+        g_ble_server->disconnect(g_pending.conn_id);
+    }
+    g_ble_connected = false;
+    clearPendingConn();
 }
 
 // 只断开该 conn；不要在这里清 g_ble_connected（旧主机延迟 disconnect 会误伤新连接）
@@ -442,6 +578,35 @@ static void kickConnection(BLEServer* server, const uint16_t conn_id) {
         server->disconnect(conn_id);
     }
 }
+
+class HidKeyboardSecurityCallbacks : public BLESecurityCallbacks {
+    uint32_t onPassKeyRequest() override {
+        return 0;
+    }
+    void onPassKeyNotify(uint32_t pass_key) override {
+        (void)pass_key;
+    }
+    bool onSecurityRequest() override {
+        return true;
+    }
+    void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) override {
+        if (!cmpl.success) {
+            handleAuthFailure(cmpl.bd_addr);
+            return;
+        }
+        if (g_pending.active) {
+            commitPendingConnection();
+            return;
+        }
+        // 已绑定回连时 AUTH 常早于 onConnect：先记下，等 stage 时提交
+        g_early_auth_ok = true;
+        memcpy(g_early_auth_bda, cmpl.bd_addr, 6);
+    }
+    bool onConfirmPIN(uint32_t pin) override {
+        (void)pin;
+        return true;
+    }
+};
 
 class HidKeyboardBleCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* server) override {
@@ -452,6 +617,15 @@ class HidKeyboardBleCallbacks : public BLEServerCallbacks {
         if (param == nullptr) {
             return;
         }
+        // 仅拒拉黑地址；g_stale_block 只停广播，不误杀其它已配对主机
+        if (isBlockedPeer(param->connect.remote_bda)) {
+            kickConnection(server, param->connect.conn_id);
+            return;
+        }
+        if (g_stale_block) {
+            kickConnection(server, param->connect.conn_id);
+            return;
+        }
         const int slot = findHostSlotFuzzy(param->connect.remote_bda);
 
         // 新配对模式：拒绝已在槽里的旧主机
@@ -460,25 +634,17 @@ class HidKeyboardBleCallbacks : public BLEServerCallbacks {
                 kickConnection(server, param->connect.conn_id);
                 return;
             }
-            rememberConnectedPeer(param);
-            acceptBleConnection(param);
+            stageBleConnection(param, -1, true);
             return;
         }
 
-        // 切换中：只留目标槽；未知 RPA 也先算作目标槽回连
+        // 切换中：只留目标槽；未知 RPA 也先算作目标槽回连（认证成功后再写入）
         if (g_prefer_slot >= 0 && g_hosts[g_prefer_slot].used) {
             if (slot >= 0 && slot != g_prefer_slot) {
                 kickConnection(server, param->connect.conn_id);
                 return;
             }
-            formatPeerAddr(param->connect.remote_bda, g_peer_addr, sizeof(g_peer_addr));
-            memcpy(g_hosts[g_prefer_slot].last_conn, param->connect.remote_bda, 6);
-            g_hosts[g_prefer_slot].has_last_conn = true;
-            g_hosts[g_prefer_slot].addr_type = param->connect.ble_addr_type;
-            g_active_slot = g_prefer_slot;
-            g_prefer_slot = -1;
-            saveHostSlots();
-            acceptBleConnection(param);
+            stageBleConnection(param, g_prefer_slot, false);
             return;
         }
 
@@ -488,14 +654,11 @@ class HidKeyboardBleCallbacks : public BLEServerCallbacks {
                 kickConnection(server, param->connect.conn_id);
                 return;
             }
-            rememberConnectedPeer(param);
-            acceptBleConnection(param);
+            stageBleConnection(param, -1, true);
             return;
         }
 
-        rememberConnectedPeer(param);
-        g_prefer_slot = -1;
-        acceptBleConnection(param);
+        stageBleConnection(param, slot, false);
     }
 
     void onDisconnect(BLEServer* server) override {
@@ -515,11 +678,18 @@ class HidKeyboardBleCallbacks : public BLEServerCallbacks {
         }
         g_ble_connected = false;
         g_active_conn_id = 0xFFFF;
+        clearPendingConn();
         clearPeerInfo();
-        if (g_ble_ready && server != nullptr) {
-            configureBleAdvertising(g_pairing_open || g_prefer_slot >= 0 ||
-                                    usedHostSlotCount() == 0);
+        if (!g_ble_ready || server == nullptr) {
+            return;
         }
+        // stale block 期间绝不恢复广播，否则电脑会立刻再连上来跳 UI
+        if (g_stale_block) {
+            BLEDevice::stopAdvertising();
+            return;
+        }
+        configureBleAdvertising(g_pairing_open || g_prefer_slot >= 0 ||
+                                usedHostSlotCount() == 0);
     }
 };
 
@@ -537,6 +707,13 @@ static const char* connectionStatusText() {
     if (g_ble_connected) {
         return "paired";
     }
+    // stale / 认证失败提示优先于 connecting，避免跳变
+    if (g_auth_hint[0] != '\0') {
+        return g_auth_hint;
+    }
+    if (g_pending.active) {
+        return "connecting";
+    }
     if (g_pairing_open) {
         return "pair new";
     }
@@ -544,6 +721,19 @@ static const char* connectionStatusText() {
         return "reconnecting";
     }
     return "pairing...";
+}
+
+static uint16_t connectionStatusColor() {
+    if (g_transport == HidTransport::USB) {
+        return g_usb_ready ? APP_COLOR_OK : APP_COLOR_WARN;
+    }
+    if (g_ble_connected) {
+        return APP_COLOR_OK;
+    }
+    if (g_auth_hint[0] != '\0') {
+        return APP_COLOR_WARN;
+    }
+    return APP_COLOR_HINT;
 }
 
 // Cardputer 面板橙色键：库只给 base HID，Fn 层由应用自己映射
@@ -767,6 +957,11 @@ static void stopBleKeyboard() {
     g_pairing_open = false;
     g_prefer_slot = -1;
     g_active_conn_id = 0xFFFF;
+    g_auth_hint[0] = '\0';
+    g_auth_fail_streak = 0;
+    clearPendingConn();
+    clearStaleHostBlock();
+    clearEarlyAuth();
     clearPeerInfo();
     clearBleStackParked();
     resetBleStackFully();
@@ -798,6 +993,7 @@ static void startBleKeyboard() {
     BLEDevice::init("Cardputer KB");
     g_ble_server = BLEDevice::createServer();
     g_ble_server->setCallbacks(new HidKeyboardBleCallbacks());
+    BLEDevice::setSecurityCallbacks(new HidKeyboardSecurityCallbacks());
 
     g_hid = new BLEHIDDevice(g_ble_server);
     g_kb_input = g_hid->inputReport(1);
@@ -819,10 +1015,13 @@ static void startBleKeyboard() {
 
     g_ble_ready = true;
     g_ble_connected = false;
+    clearStaleHostBlock();
+    clearEarlyAuth();
+    g_auth_hint[0] = '\0';
     syncHostSlotsWithBonds();
     // 无已存主机时开放配对；否则只等 active 槽回连
     g_pairing_open = (usedHostSlotCount() == 0);
-    configureBleAdvertising(g_pairing_open);
+    configureBleAdvertising(g_pairing_open || usedHostSlotCount() > 0);
 }
 
 // 切到指定已配对主机：断开后开放广播，只接受该槽回连（需主机端点选键盘）
@@ -839,9 +1038,13 @@ static void switchToHostSlot(const int slot) {
     g_active_slot = slot;
     g_prefer_slot = slot;
     g_pairing_open = false;
+    g_auth_hint[0] = '\0';
+    g_auth_fail_streak = 0;
+    clearStaleHostBlock();
     saveHostSlots();
     disconnectBleClients();
     g_ble_connected = false;
+    clearPendingConn();
     clearPeerInfo();
     delay(120);
     configureBleAdvertising(false);
@@ -863,8 +1066,12 @@ static void startOpenPairing() {
     clearBleReportQueue();
     g_pairing_open = true;
     g_prefer_slot = -1;
+    g_auth_hint[0] = '\0';
+    g_auth_fail_streak = 0;
+    clearStaleHostBlock();
     disconnectBleClients();
     g_ble_connected = false;
+    clearPendingConn();
     clearPeerInfo();
     delay(120);
     configureBleAdvertising(true);
@@ -1207,7 +1414,7 @@ static int peerLineY() {
 }
 
 static int echoAreaY() {
-    return APP_CONTENT_Y + INFO_LINE_H_2X + 4;
+    return APP_CONTENT_Y + INFO_LINE_H_2X + 4 + 5;  // 输入回显相对状态行再下移 5px
 }
 
 static void drawPeerLine() {
@@ -1234,7 +1441,7 @@ static void drawPeerLine() {
     memcpy(g_drawn_peer, text, sizeof(g_drawn_peer));
 }
 
-// 右上角 2x 显示当前主机槽号（1..5）
+// 右上角黄底徽章显示当前主机槽号（1..5）
 static void drawSlotBadge() {
     int num = -1;
     if (g_transport == HidTransport::BLE && g_active_slot >= 0 && g_hosts[g_active_slot].used) {
@@ -1244,20 +1451,39 @@ static void drawSlotBadge() {
         return;
     }
     const int screen_w = M5Cardputer.Display.width();
-    constexpr int badge_w = 20;
-    constexpr int badge_h = 16;
-    const int x = screen_w - badge_w - 4;
+    constexpr int clear_w = 28;
+    constexpr int clear_h = 20;
+    const int clear_x = screen_w - clear_w - 2;
     const int y = APP_CONTENT_Y;
-    M5Cardputer.Display.fillRect(x, y, badge_w, badge_h, BLACK);
-    if (num >= 1) {
-        char buf[4];
-        snprintf(buf, sizeof(buf), "%d", num);
+    M5Cardputer.Display.fillRect(clear_x, y, clear_w, clear_h, BLACK);
+    if (num >= 1 && num <= 9) {
+        const char key = static_cast<char>('0' + num);
         M5Cardputer.Display.setTextSize(2);
-        M5Cardputer.Display.setTextColor(APP_COLOR_LABEL, BLACK);
-        M5Cardputer.Display.setCursor(x + 4, y);
-        M5Cardputer.Display.print(buf);
+        const char str[2] = {key, '\0'};
+        const int tw = M5Cardputer.Display.textWidth(str);
+        const int bw = tw + 4;  // 与 drawKeyBadge pad_x*2 一致
+        const int x = screen_w - bw - 4;
+        drawKeyBadge(x, y, key, 2);
     }
     g_drawn_slot_num = num;
+}
+
+// 内容区状态：无 link: 前缀，仅状态字
+static void drawLinkStatus() {
+    const char* text = connectionStatusText();
+    if (strcmp(g_drawn_link_status, text) == 0) {
+        return;
+    }
+    const int y = APP_CONTENT_Y;
+    // 留给右侧槽号徽章
+    const int clear_w = M5Cardputer.Display.width() - 32;
+    M5Cardputer.Display.fillRect(0, y, clear_w, INFO_LINE_H_2X, BLACK);
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(connectionStatusColor(), BLACK);
+    M5Cardputer.Display.setCursor(APP_CONTENT_X, y);
+    M5Cardputer.Display.print(text);
+    strncpy(g_drawn_link_status, text, sizeof(g_drawn_link_status) - 1);
+    g_drawn_link_status[sizeof(g_drawn_link_status) - 1] = '\0';
 }
 
 static void drawEchoOnly() {
@@ -1482,6 +1708,10 @@ static void formatHostsStatusLine(char* out, size_t out_len, uint16_t* color_out
         snprintf(out, out_len, "%s", g_hosts_status);
         return;
     }
+    if (g_pending.active) {
+        snprintf(out, out_len, "connecting...");
+        return;
+    }
     if (g_pairing_open) {
         snprintf(out, out_len, "pair new...");
         return;
@@ -1557,7 +1787,7 @@ static void drawHidKeyboardApp(const bool full_init) {
         drawAppScreenHeaderAccent("Keyboard ", transportName(g_transport), APP_COLOR_LABEL);
     }
 
-    drawInfoLineAt(APP_CONTENT_X, APP_CONTENT_Y, "link", connectionStatusText(), 2);
+    drawLinkStatus();
     g_drawn_slot_num = -2;
     drawSlotBadge();
     g_drawn_echo[0] = '\0';
@@ -1576,10 +1806,14 @@ void enterHidKeyboardApp() {
     g_fn_caps_latched = false;
     g_hosts_key_latched = false;
     g_hosts_status[0] = '\0';
+    g_auth_hint[0] = '\0';
+    g_auth_fail_streak = 0;
+    clearPendingConn();
     g_echo[0] = '\0';
     g_last_label[0] = '\0';
     g_drawn_echo[0] = '\0';
     g_drawn_label[0] = '\0';
+    g_drawn_link_status[0] = '\0';
     clearBleReportQueue();
     // 默认 BLE，不占用烧录口；需要 USB 时再 Fn+u
     applyTransport(g_transport);
@@ -1625,15 +1859,18 @@ void updateHidKeyboardApp() {
         }
         // 状态变化时只局部刷新列表，不全屏 beginAppScreen
         static bool last_hosts_conn = false;
+        static bool last_hosts_pending = false;
         static int last_hosts_slot = -2;
         static int last_prefer_slot = -2;
         static int last_sel_slot = -2;
         static bool last_pairing_open = false;
         static char last_status[sizeof(g_hosts_status)] = "";
-        if (g_ble_connected != last_hosts_conn || g_active_slot != last_hosts_slot ||
-            g_prefer_slot != last_prefer_slot || g_pairing_open != last_pairing_open ||
-            g_sel_slot != last_sel_slot || strcmp(last_status, g_hosts_status) != 0) {
+        if (g_ble_connected != last_hosts_conn || g_pending.active != last_hosts_pending ||
+            g_active_slot != last_hosts_slot || g_prefer_slot != last_prefer_slot ||
+            g_pairing_open != last_pairing_open || g_sel_slot != last_sel_slot ||
+            strcmp(last_status, g_hosts_status) != 0) {
             last_hosts_conn = g_ble_connected;
+            last_hosts_pending = g_pending.active;
             last_hosts_slot = g_active_slot;
             last_prefer_slot = g_prefer_slot;
             last_pairing_open = g_pairing_open;
@@ -1653,6 +1890,11 @@ void updateHidKeyboardApp() {
     }
     if (g_transport == HidTransport::BLE) {
         drainBleReportQueue();
+        // 新配对若一直无 AUTH：超时提示 forget，不误伤已配对槽
+        if (g_pending.active && g_pending.is_new &&
+            (millis() - g_pending.since_ms) > 10000) {
+            handleAuthFailure(g_pending.bda);
+        }
         drawSlotBadge();
         if (g_peer_addr[0] != '\0' || (g_active_slot >= 0 && g_hosts[g_active_slot].used)) {
             drawPeerLine();
@@ -1660,17 +1902,30 @@ void updateHidKeyboardApp() {
     }
 
     static bool last_connected = false;
+    static bool last_pending = false;
     static HidTransport last_transport = HidTransport::BLE;
+    static char last_status[sizeof(g_auth_hint)] = "";
     const bool connected =
         (g_transport == HidTransport::USB) ? g_usb_ready : g_ble_connected;
-    if (connected != last_connected || g_transport != last_transport) {
+    const char* status = connectionStatusText();
+    if (connected != last_connected || g_pending.active != last_pending ||
+        g_transport != last_transport || strcmp(last_status, status) != 0) {
         last_connected = connected;
+        last_pending = g_pending.active;
         last_transport = g_transport;
-        if (g_transport == HidTransport::BLE && !g_ble_connected) {
+        strncpy(last_status, status, sizeof(last_status) - 1);
+        last_status[sizeof(last_status) - 1] = '\0';
+        if (g_transport == HidTransport::BLE && !g_ble_connected && !g_pending.active) {
             clearBleReportQueue();
-            clearPeerInfo();
+            // pending 阶段保留 peer 显示；完全断开再清
+            if (g_auth_hint[0] == '\0') {
+                clearPeerInfo();
+            }
         }
-        drawHidKeyboardApp(false);
+        g_drawn_link_status[0] = '\0';
+        drawLinkStatus();
+        g_drawn_slot_num = -2;
+        drawSlotBadge();
     }
 }
 

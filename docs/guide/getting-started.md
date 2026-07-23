@@ -10,6 +10,13 @@ Sparks 是跑在 [M5Stack Cardputer](https://docs.m5stack.com/en/core/Cardputer)
 
 ## 主菜单
 
+<div class="shot-row">
+
+![menu-page1](/shots/app_menu_page1.png)
+![menu-page2](/shots/app_menu_page2.png)
+
+</div>
+
 | 键 | 短名 | 应用 | 键 | 短名 | 应用 | 键 | 短名 | 应用 |
 |----|------|------|----|------|------|----|------|------|
 | `m` | Mij | [Mijia](/apps/mijia) | `u` | Cfg | [Config](/apps/config) | `w` | WiFi | [WiFi](/apps/wifi) |

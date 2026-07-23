@@ -6,9 +6,31 @@
 
 ## 截图
 
-![cursor-summary](/shots/cursor-summary.png)
-![cursor-chart](/shots/cursor-chart.png)
-![cursor-help](/shots/cursor-help.png)
+**摘要 Summary**
+
+<div class="shot-row">
+
+![cursor-summary](/shots/app_cursor_summary.png)
+
+</div>
+
+**最近记录 Latest**
+
+<div class="shot-row">
+
+![cursor-last](/shots/app_cursor_last.png)
+
+</div>
+
+**日 / 周 / 月图表**
+
+<div class="shot-row">
+
+![cursor-24h](/shots/app_cursor_24h.png)
+![cursor-7d](/shots/app_cursor_7d.png)
+![cursor-30d](/shots/app_cursor_30d.png)
+
+</div>
 
 ## 快捷键
 

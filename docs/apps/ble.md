@@ -6,8 +6,21 @@
 
 ## 截图
 
-![ble-list](/shots/ble-list.png)
-![ble-help](/shots/ble-help.png)
+**待扫描**
+
+<div class="shot-row">
+
+![ble-scan](/shots/app_ble_scan.png)
+
+</div>
+
+**设备列表**
+
+<div class="shot-row">
+
+![ble-list](/shots/app_ble_list.png)
+
+</div>
 
 ## 快捷键
 

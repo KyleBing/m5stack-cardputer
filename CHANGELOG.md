@@ -10,11 +10,15 @@
 
 ### 新增
 
+- **文档截图总览**（`/apps/shots`）：无侧栏宽页平铺全部实拍，图下标注文件名；顶栏 / 功能目录可进
+- **文档实拍截图**：各 App 页替换旧占位图为 `app_*.png` 设备实拍（含 Time Pure、Options 分栏、HID 多屏等）
 - **HID Keyboard 多主机 BLE**：最多保存 5 台已配对主机；`Fn+p` 主机列表切换 / 新配对 / 删除；同时只连一台；BLE 名 `Cardputer KB`
 - **Keyboard 输入区**：右上角 2× 槽位号；peer 行仅显示 MAC
 
 ### 改进
 
+- **Keyboard BLE 配对**：区分新配对 / 已知槽回连的认证时序；单边 bond 时提示 `plz forget on device` 并停广播拒连，避免坏密钥狂连
+- **Sleep 截图热键**：浅睡确认页 `Fn+s` 可截图，不再被 `s`→深睡抢走
 - **Keyboard 命名**：菜单短名 `KB`、标题 `Keyboard`；源码 / 文档 / 截图由 `hid-kb` 统一为 `hid-keyboard`
 - **Keyboard 退出**：BtnGO 退出前清内容区显示 `Exiting.`，再完整 `deinit` 释放 BLE 内存
 - **米家炸锅倒计时**：每秒只刷状态行右侧剩余时间，避免整栏重绘闪烁

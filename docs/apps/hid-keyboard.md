@@ -6,8 +6,32 @@
 
 ## 截图
 
-![hid-keyboard-main](/shots/hid-keyboard-main.png)
-![hid-keyboard-help](/shots/hid-keyboard-help.png)
+**USB / BLE**
+
+<div class="shot-row">
+
+![hid-usb](/shots/app_hidkeyboard_005.png)
+![hid-ble](/shots/app_hidkeyboard_003.png)
+![hid-ble-paired](/shots/app_hidkeyboard_002.png)
+
+</div>
+
+**Hosts 主机列表**
+
+<div class="shot-row">
+
+![hid-hosts-empty](/shots/app_hidkeyboard_001.png)
+![hid-hosts](/shots/app_hidkeyboard_004.png)
+
+</div>
+
+**Help**
+
+<div class="shot-row">
+
+![hid-help](/shots/app_hidkb_001.png)
+
+</div>
 
 ## 快捷键
 

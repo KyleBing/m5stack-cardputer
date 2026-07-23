@@ -1,8 +1,22 @@
 # 功能目录
 
-按主菜单分类浏览。每个 App 文档均包含：**简介与截图预留**、**快捷键**、**使用说明**。
+按主菜单分类浏览。每个 App 文档均包含：**简介与截图**、**快捷键**、**使用说明**。
 
-截图命名：`docs/public/shots/{app}-{子功能}.png`。
+截图命名：`docs/public/shots/app_{app}_{子功能}.png`（实拍自设备 `Fn+s`）。全部实拍见 [截图总览](/apps/shots)（无侧栏宽页）。
+
+## 主菜单
+
+更多说明见 [入门 · 主菜单](/guide/getting-started#主菜单)。
+
+
+
+<div class="shot-row">
+
+![menu-001](/shots/app_menu_page1.png)
+
+![menu-002](/shots/app_menu_page2.png)
+
+</div>
 
 ## 智能家居
 

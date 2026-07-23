@@ -6,9 +6,22 @@
 
 ## 截图
 
-![infrared-tv](/shots/infrared-tv.png)
-![infrared-ac](/shots/infrared-ac.png)
-![infrared-help](/shots/infrared-help.png)
+**TV**
+
+<div class="shot-row">
+
+![infrared-tv](/shots/app_ir_tv.png)
+![infrared-tv-alt](/shots/app_ir_001.png)
+
+</div>
+
+**AC**
+
+<div class="shot-row">
+
+![infrared-ac](/shots/app_ir_ac.png)
+
+</div>
 
 ## 快捷键
 

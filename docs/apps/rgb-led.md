@@ -6,8 +6,11 @@
 
 ## 截图
 
-![rgb-led-main](/shots/rgb-led-main.png)
-![rgb-led-help](/shots/rgb-led-help.png)
+<div class="shot-row">
+
+![rgb-led](/shots/app_led_001.png)
+
+</div>
 
 ## 快捷键
 

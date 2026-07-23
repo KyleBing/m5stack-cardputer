@@ -2,15 +2,15 @@
 
 主菜单按键：`v`
 
-显示固件版本、作者与 Logo 烟花动画。
-
+显示固件版本、作者
 ## 截图
 
-![version-main](/shots/version-main.png)
+<div class="shot-row">
 
-<p align="center">
-  <img src="/assets/logo_60.png" alt="Sparks logo" width="60" height="60" />
-</p>
+![version-main](/shots/app_version.png)
+
+</div>
+
 
 当前文档对应：
 

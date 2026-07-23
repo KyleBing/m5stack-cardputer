@@ -9,9 +9,14 @@
 
 ## 截图
 
-![i2c-in](/shots/i2c-in.png)
-![i2c-ex](/shots/i2c-ex.png)
-![i2c-help](/shots/i2c-help.png)
+**InI2C / ExI2C**
+
+<div class="shot-row">
+
+![i2c-in](/shots/app_ini2c_001.png)
+![i2c-ex](/shots/app_exi2c_001.png)
+
+</div>
 
 ## 快捷键
 

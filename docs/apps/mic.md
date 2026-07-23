@@ -6,8 +6,12 @@
 
 ## 截图
 
-![mic-scope](/shots/mic-scope.png)
-![mic-help](/shots/mic-help.png)
+<div class="shot-row">
+
+![mic-001](/shots/app_mic_001.png)
+![mic-002](/shots/app_mic_002.png)
+
+</div>
 
 ## 快捷键
 
