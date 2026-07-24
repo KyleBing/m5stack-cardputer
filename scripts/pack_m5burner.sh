@@ -57,6 +57,26 @@ if [[ ! -f "$VERSION_H" ]]; then
   exit 1
 fi
 
+# 选一个能跑的 Python（避开 Windows Store stub / 失效的 python3）
+pick_python() {
+  local cand
+  for cand in \
+    "$(command -v python.exe 2>/dev/null || true)" \
+    "$(command -v python3.exe 2>/dev/null || true)" \
+    "$(command -v python 2>/dev/null || true)" \
+    "$(command -v python3 2>/dev/null || true)"
+  do
+    [[ -n "$cand" ]] || continue
+    if "$cand" -c 'print(1)' >/dev/null 2>&1; then
+      echo "$cand"
+      return 0
+    fi
+  done
+  echo "未找到可用的 Python（python/python3）" >&2
+  return 1
+}
+PYTHON_BIN="$(pick_python)"
+
 # 版本/作者等以 include/app_version.h 为准，打包时写入 m5burner.json
 # 用多行 read（兼容 macOS bash 3.2，不用 mapfile）
 {
@@ -65,7 +85,7 @@ fi
   read -r AUTHOR
   read -r EMAIL
   read -r WEBSITE
-} < <(PYTHON_BIN="$(command -v python3 || command -v python)"; "$PYTHON_BIN" - "$VERSION_H" <<'PY'
+} < <("$PYTHON_BIN" - "$VERSION_H" <<'PY'
 import re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
 
@@ -95,7 +115,8 @@ echo "==> 版本来自 app_version.h: ${VERSION} (${UPDATE_TIME}) by ${AUTHOR}"
 # 发布包用 example，绝不带入本地测试 config.json
 CFG_DATA="${ROOT}/data/config.json"
 CFG_EXAMPLE="${ROOT}/config.example.json"
-CFG_BAK="${ROOT}/data/config.json.packbak"
+# 备份必须在 data/ 外，否则 buildfs 会把 packbak 打进发布包
+CFG_BAK="${ROOT}/.pack_config.json.bak"
 CFG_HAD_LOCAL=0
 
 restore_local_config() {
@@ -151,7 +172,6 @@ echo "==> 组装 M5Burner 目录"
 rm -rf "$OUT_DIR"
 mkdir -p "$FW_DIR"
 # 模板 + app_version.h 字段 → 发布用 m5burner.json
-PYTHON_BIN="$(command -v python3 || command -v python)"
 "$PYTHON_BIN" - "$META_SRC" "${OUT_DIR}/m5burner.json" \
   "$VERSION" "$UPDATE_TIME" "$AUTHOR" "$EMAIL" "$WEBSITE" <<'PY'
 import json, sys
@@ -186,17 +206,40 @@ rm -f "${DIST}/${ZIP_NAME}"
   fi
 )
 
-# 找 esptool：PATH → PlatformIO tool-esptoolpy
+# 找能 import serial 的 Python（裸 python3 / Windows Store stub 常缺 pyserial）
+pick_esptool_python() {
+  local cand
+  for cand in \
+    "$(command -v python 2>/dev/null || true)" \
+    "$(command -v python3 2>/dev/null || true)" \
+    "$(command -v python.exe 2>/dev/null || true)" \
+    "$(command -v python3.exe 2>/dev/null || true)" \
+    "${HOME}/.platformio/penv/Scripts/python.exe" \
+    "${HOME}/.platformio/penv/bin/python" \
+    "${USERPROFILE:-}/.platformio/penv/Scripts/python.exe"
+  do
+    [[ -n "$cand" ]] || continue
+    if "$cand" -c 'import serial' >/dev/null 2>&1; then
+      echo "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 找 esptool：PATH → PlatformIO tool-esptoolpy（用带 pyserial 的 Python 调用）
 ESPTOOL=()
 if command -v esptool.py >/dev/null 2>&1; then
   ESPTOOL=(esptool.py)
 elif command -v esptool >/dev/null 2>&1; then
   ESPTOOL=(esptool)
-elif [[ -f "${HOME}/.platformio/packages/tool-esptoolpy/esptool.py" ]]; then
-  ESPTOOL=(python3 "${HOME}/.platformio/packages/tool-esptoolpy/esptool.py")
-elif [[ -x "${HOME}/.platformio/penv/bin/python" ]]; then
-  # 部分环境用 penv 的 python 才能 import esptool
-  ESPTOOL=("${HOME}/.platformio/penv/bin/python" -m esptool)
+else
+  ESPTOOL_PY="$(pick_esptool_python || true)"
+  if [[ -f "${HOME}/.platformio/packages/tool-esptoolpy/esptool.py" && -n "$ESPTOOL_PY" ]]; then
+    ESPTOOL=("$ESPTOOL_PY" "${HOME}/.platformio/packages/tool-esptoolpy/esptool.py")
+  elif [[ -n "$ESPTOOL_PY" ]] && "$ESPTOOL_PY" -c "import esptool" >/dev/null 2>&1; then
+    ESPTOOL=("$ESPTOOL_PY" -m esptool)
+  fi
 fi
 
 MERGED="${DIST}/sparks_merged.bin"

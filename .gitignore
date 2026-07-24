@@ -10,6 +10,7 @@ docs/.vitepress/dist/
 .idea/
 data/config.json
 data/config.json.packbak
+.pack_config.json.bak
 data/img/
 mijia-devices.json
 # clangd / IDE 编译数据库（本地生成，勿提交）
