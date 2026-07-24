@@ -1,6 +1,8 @@
 
 # <img src="/design/logo_no_padding.png" width="50px"> Sparks
 
+**中文** | [English](./README.en.md)
+
 为 Cardputer-ADV 制作的个人固件，主要功能是米家设备控制、cursor 信息查看。
 
 _该固件内容为全英文，英文缩写比较多，所以需要有良好的英语基础才能比较方便的使用。_
