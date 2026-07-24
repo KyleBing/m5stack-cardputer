@@ -268,11 +268,9 @@ void drawIconBattery(const int x, const int y, const int level, const bool charg
     const int filled = constrain((level + 19) / 20, 0, BATTERY_SEGMENTS);
     for (int i = 0; i < BATTERY_SEGMENTS; i++) {
         const int sx = seg_x0 + i * (BATTERY_SEG_W + BATTERY_SEG_GAP);
-        // 从远离正极一侧开始亮（正极在左 → 从右往左填）
+        // 从远离正极一侧开始亮（正极在左 → 从右往左填）；无电格子不画内框
         if (i >= BATTERY_SEGMENTS - filled) {
             M5Cardputer.Display.fillRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, accent);
-        } else {
-            M5Cardputer.Display.drawRect(sx, seg_y, BATTERY_SEG_W, BATTERY_SEG_H, DARKGREY);
         }
     }
 }
