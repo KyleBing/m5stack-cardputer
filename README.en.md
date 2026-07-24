@@ -9,7 +9,7 @@ _The firmware UI is entirely in English, with many abbreviations — a solid Eng
 
 <img alt="2026-07-17  cardputer adv-24-2000x2000" src="https://github.com/user-attachments/assets/2e922a2a-303a-48e4-aa7e-3d736752aa22" />
 
-
+<img alt="screenshots" src="https://github.com/user-attachments/assets/ab6fb8e1-0ffd-47ab-9a44-d97fbf7b8de9" />
 
 ## 1. Features
 
